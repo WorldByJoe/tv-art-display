@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slime Network</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; }
+  canvas { display:block; width:100vw; height:100vh; image-rendering:auto; }
+  * { cursor:none; }
+  #info { position:fixed; left:2vw; bottom:3vh; z-index:10; display:none;
+    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,Menlo,monospace;
+    color:#dfe6ee; background:rgba(0,0,0,.6); padding:.7em 1em; border-radius:.4em;
+    border:1px solid rgba(255,255,255,.15); white-space:pre; }
+  body.showinfo #info { display:block; }
+  #title { position:fixed; left:0; right:0; top:5vh; z-index:9; text-align:center;
+    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out; }
+  #title.show { opacity:1; }
+  #title .name { font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.22em; text-transform:uppercase; color:rgba(226,236,248,.85); }
+  #title .blurb { margin-top:.9em; font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.06em; color:rgba(190,205,225,.55); }
+
+  /* ---- persistent caption ----------------------------------------------
+     Stays for the whole run, unlike the title card which dissolves. Two
+     lines: what this is, and the settings that produced this version. */
+  #caption {
+    position:fixed; left:0; right:0; bottom:var(--cap-bottom, 2.2vh);
+    z-index:8; text-align:center; pointer-events:none; padding:0 4vw;
+  }
+  #caption .what {
+    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.055em; color:rgba(206,220,240,.66);
+  }
+  #caption .params {
+    margin-top:.45em;
+    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
+    letter-spacing:.02em; color:rgba(150,172,205,.44);
+  }
+  :root { --cap-bottom: 2.4vh; }
+
+  /* ---- scrim behind the caption ----------------------------------------
+     The caption used to sit directly on the artwork. On a black field that is
+     fine; over a lit basemap, a bright mosaic or a pale plume it becomes
+     unreadable exactly when there is something worth reading it about. A soft
+     upward fade keeps the text legible without drawing a visible box. */
+  #caption {
+    background: linear-gradient(to top,
+                rgba(3,5,10,0.88) 0%, rgba(3,5,10,0.70) 55%, rgba(3,5,10,0) 100%);
+    padding-top: 1.6em; padding-bottom: 0.7em;
+  }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="title"><div class="name"></div><div class="blurb"></div></div>
+<div id="caption"><div class="what"></div><div class="params"></div></div>
+<div id="info"></div>
+<script>
+/* ---- rotation navigation (remote D-pad) --------------------------------
+   Right steps to the next piece in the wall's rotation, left to the previous
+   one. The ring is listed explicitly rather than derived from nextPage,
+   because nextPage only points forwards - there is no way to walk it
+   backwards. Keep this list in step with the nextPage chain. */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+/* ---- caption -----------------------------------------------------------
+   setCaption(what, params) writes the two persistent lines at the bottom of
+   the screen. Called whenever a new scenario starts. */
+const capWhat   = document.querySelector('#caption .what');
+const capParams = document.querySelector('#caption .params');
+function setCaption(what, params) {
+  if (capWhat)   capWhat.textContent   = what || '';
+  if (capParams) capParams.textContent = params || '';
+}
+
+/* =======================================================================
+   Physarum transport networks.
+
+   Every agent follows three rules and nothing else:
+     1. sniff the trail map ahead-left, ahead, ahead-right
+     2. turn toward whichever smells strongest
+     3. step forward and deposit a little trail of its own
+
+   The trail map blurs and decays each frame. That is the whole model - there
+   is no notion of a network anywhere in the code - yet branching transport
+   networks appear, compete, and continuously reorganise. It is the same
+   question as the tree work (why do branching networks look like this?) asked
+   from transport efficiency instead of carbon.
+
+   Named for the slime mould Physarum polycephalum, which solves mazes and
+   reproduces rail maps with no nervous system at all.
+   ======================================================================= */
+
+const CONFIG = {
+  targetCells: 620000,   // grid budget; the blur is the cost, so cap area not width
+  agentsPerCell:  0.22,  // population relative to grid area
+  holdMs:       48000,   // how long one species runs before the next
+  speciesPerTurn:   2,   // species shown before handing the screen on
+  fadeMs:        1400,
+  nextPage: '' /* standalone: nowhere to hand on to; start again */
+};
+const PINNED = /[?&]pin\b/.test(location.search);
+
+/* Species differ ONLY in sensing geometry and chemistry, never in code path.
+   Small changes here produce dramatically different morphologies, which is the
+   point worth showing. */
+const SPECIES = [
+  /* The single most important relationship here is TURN vs SENSOR ANGLE.
+     With turn < sensorAng an agent cannot steer sharply enough to leave a
+     trail it has joined, so every filament merges into a handful of thick
+     smooth mega-curves and no network forms. Jones's original uses a rotation
+     angle about twice the sensor angle, which is what lets filaments split
+     as readily as they merge. */
+  { name: 'Veins',      blurb: 'Sense far ahead, turn hard — long highways with sparse junctions',
+    sensorAng: 0.39, sensorDist: 9,  turn: 0.79, speed: 1.00, deposit: 1.00, decay: 0.920 },
+  { name: 'Lace',       blurb: 'Sense close, turn harder — a fine reticulated mesh',
+    sensorAng: 0.72, sensorDist: 5,  turn: 1.40, speed: 0.90, deposit: 1.00, decay: 0.900 },
+  { name: 'Roots',      blurb: 'Narrow sensors, slow decay — branches that persist and thicken',
+    sensorAng: 0.30, sensorDist: 13, turn: 0.62, speed: 1.10, deposit: 1.10, decay: 0.950 },
+  { name: 'Turbulence', blurb: 'Twitchy sensors, fast decay — restless filaments that never settle',
+    sensorAng: 0.22, sensorDist: 7,  turn: 1.60, speed: 1.35, deposit: 0.90, decay: 0.880 }
+];
+
+/* Palettes: trail strength -> colour. Deliberately dark at the bottom so the
+   empty field reads as black on a TV rather than as grey haze. */
+const PALETTES = [
+  [[0,0,0],[8,20,40],[10,80,120],[40,180,200],[190,245,255],[255,255,255]],
+  [[0,0,0],[30,8,40],[110,20,70],[220,70,60],[255,180,60],[255,250,220]],
+  [[0,0,0],[6,26,14],[20,90,45],[90,180,70],[210,235,120],[255,255,235]],
+  [[0,0,0],[18,14,44],[70,40,130],[150,80,200],[230,170,240],[255,255,255]]
+];
+function ramp(pal, t) {
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const x = t*(pal.length-1), i = Math.min(pal.length-2, Math.floor(x)), f = x-i;
+  const a = pal[i], b = pal[i+1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+}
+
+const canvas = document.getElementById('cv');
+const ctx = canvas.getContext('2d', { alpha:false });
+const titleEl = document.getElementById('title');
+const nameEl = titleEl.querySelector('.name');
+const blurbEl = titleEl.querySelector('.blurb');
+const infoEl = document.getElementById('info');
+
+let GW=0, GH=0;                 // grid dimensions
+let trail=null, next=null;      // trail map and blur scratch
+let img=null, buf=null, buf32=null;
+let ax=null, ay=null, ah=null;  // agent x, y, heading
+let nAgents=0;
+let species=null, palette=null, speciesIndex=-1, startedAt=0;
+let lut=null;                   // trail -> packed colour lookup
+let fps=0, lastFrame=performance.now(), paused=false, handingOff=false;
+
+function rnd() { return Math.random(); }
+
+function sizeGrid() {
+  /* A VIEWPORT WITH NO SIZE. A browser that lays this page out before the
+     window has been given one reports innerWidth and innerHeight as 0, and
+     0/0 is NaN while anything/0 is Infinity. Either reaches createImageData
+     as "not a long", the exception kills the script BEFORE the animation loop
+     has been scheduled, and the page is a permanent black rectangle that the
+     resize afterwards cannot rescue. Fall back to a plain 16:9 and let that
+     resize redo the grid properly. */
+  const aspect = (innerWidth || 1920)/(innerHeight || 1080);
+  GH = Math.max(180, Math.round(Math.sqrt(CONFIG.targetCells/aspect)));
+  GW = Math.round(GH*aspect);
+  canvas.width = GW; canvas.height = GH;   // CSS scales it up to the panel
+  trail = new Float32Array(GW*GH);
+  next  = new Float32Array(GW*GH);
+  img = ctx.createImageData(GW, GH);
+  buf = img.data;
+  buf32 = new Uint32Array(buf.buffer);
+}
+
+/* A 256-entry lookup turns the per-pixel colour mapping into one array read.
+   Computing the ramp per pixel would cost more than the simulation. */
+function buildLut(pal) {
+  lut = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const c = ramp(pal, i/255);
+    lut[i] = (255<<24) | (Math.round(c[2])<<16) | (Math.round(c[1])<<8) | Math.round(c[0]);
+  }
+}
+
+function seedAgents() {
+  nAgents = Math.round(GW*GH*CONFIG.agentsPerCell);
+  ax = new Float32Array(nAgents);
+  ay = new Float32Array(nAgents);
+  ah = new Float32Array(nAgents);
+  /* Scatter over the WHOLE field with random headings. Seeding a disc instead
+     collapses everything into one thick ring: with every agent starting in the
+     same place facing outward they reinforce a single trail before any
+     competing structure can form. Uniform noise lets many filaments start
+     independently and then find each other, which is where the network
+     actually comes from. */
+  for (let i = 0; i < nAgents; i++) {
+    ax[i] = rnd()*GW;
+    ay[i] = rnd()*GH;
+    ah[i] = rnd()*Math.PI*2;
+  }
+  trail.fill(0);
+}
+
+function newSpecies() {
+  speciesIndex++;
+  species = SPECIES[Math.floor(Math.random()*SPECIES.length)];
+  palette = PALETTES[Math.floor(Math.random()*PALETTES.length)];
+  buildLut(palette);
+  seedAgents();
+  startedAt = performance.now();
+  nameEl.textContent = species.name;
+  blurbEl.textContent = species.blurb;
+  titleEl.classList.add('show');
+  setTimeout(() => titleEl.classList.remove('show'), 9000);
+  setCaption(
+    'Each dot follows three rules: sniff ahead-left, ahead and ahead-right; turn toward the strongest trail; step forward and deposit a little trail of its own. Nothing in the model knows what a network is.',
+    `sensor ${species.sensorAng.toFixed(2)} rad at ${species.sensorDist} px  ·  turn ${species.turn.toFixed(2)} rad  ·  speed ${species.speed.toFixed(2)}  ·  deposit ${species.deposit.toFixed(2)}  ·  decay ${species.decay}  ·  ${nAgents.toLocaleString()} agents on ${GW}x${GH}`);
+}
+
+/* Bilinear-free point sample: agents are dense enough that nearest-neighbour
+   sensing is indistinguishable and about three times cheaper. */
+function sense(x, y) {
+  let ix = x|0, iy = y|0;
+  if (ix < 0) ix += GW; else if (ix >= GW) ix -= GW;
+  if (iy < 0) iy += GH; else if (iy >= GH) iy -= GH;
+  return trail[iy*GW + ix];
+}
+
+function stepAgents() {
+  const sa = species.sensorAng, sd = species.sensorDist;
+  const turn = species.turn, sp = species.speed, dep = species.deposit;
+  for (let i = 0; i < nAgents; i++) {
+    const h = ah[i], x = ax[i], y = ay[i];
+    const fC = sense(x + Math.cos(h)*sd,      y + Math.sin(h)*sd);
+    const fL = sense(x + Math.cos(h-sa)*sd,   y + Math.sin(h-sa)*sd);
+    const fR = sense(x + Math.cos(h+sa)*sd,   y + Math.sin(h+sa)*sd);
+
+    let nh = h;
+    if (fC > fL && fC > fR)      { /* straight on */ }
+    else if (fL > fR)            { nh -= turn*(0.5 + rnd()*0.5); }
+    else if (fR > fL)            { nh += turn*(0.5 + rnd()*0.5); }
+    else                         { nh += (rnd()-0.5)*turn; }
+
+    let nx = x + Math.cos(nh)*sp;
+    let ny = y + Math.sin(nh)*sp;
+    // Wrap: a bounded box would pile agents along the walls and the network
+    // would grow a rectangular frame that has nothing to do with the model.
+    if (nx < 0) nx += GW; else if (nx >= GW) nx -= GW;
+    if (ny < 0) ny += GH; else if (ny >= GH) ny -= GH;
+
+    ax[i] = nx; ay[i] = ny; ah[i] = nh;
+    const idx = (ny|0)*GW + (nx|0);
+    trail[idx] += dep;
+  }
+}
+
+/* Separable 3-wide box blur plus exponential decay, done in one pass per axis.
+   This is the expensive step, which is why the grid is budgeted by AREA. */
+function diffuseDecay() {
+  const dk = species.decay;
+  // horizontal
+  for (let y = 0; y < GH; y++) {
+    const row = y*GW;
+    let prev = trail[row + GW - 1];
+    let cur  = trail[row];
+    for (let x = 0; x < GW; x++) {
+      const nxt = trail[row + (x+1 === GW ? 0 : x+1)];
+      next[row + x] = (prev + cur + nxt)*0.3333333;
+      prev = cur; cur = nxt;
+    }
+  }
+  // vertical + decay
+  for (let x = 0; x < GW; x++) {
+    let prev = next[(GH-1)*GW + x];
+    let cur  = next[x];
+    for (let y = 0; y < GH; y++) {
+      const yn = (y+1 === GH ? 0 : y+1);
+      const nxt = next[yn*GW + x];
+      trail[y*GW + x] = (prev + cur + nxt)*0.3333333*dk;
+      prev = cur; cur = nxt;
+    }
+  }
+}
+
+function render() {
+  const n = GW*GH;
+  for (let i = 0; i < n; i++) {
+    /* Square-root mapping, not linear. A busy trunk carries perhaps forty
+       times the trail of the faint web connecting it to its neighbours, so a
+       linear ramp saturates the trunks to flat white and pushes the web below
+       the first visible step - which makes a connected network look like a
+       field of unrelated worms. The sqrt lifts the low end where the
+       structure actually lives. */
+    let v = Math.sqrt(trail[i]*0.055);
+    if (v > 1) v = 1;
+    buf32[i] = lut[(v*255)|0];
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function updateInfo() {
+  infoEl.textContent =
+    `species   ${species.name}\n` +
+    `grid      ${GW} x ${GH}\n` +
+    `agents    ${nAgents.toLocaleString()}\n` +
+    `sensor    ${species.sensorAng.toFixed(2)} rad @ ${species.sensorDist}px\n` +
+    `decay     ${species.decay}\n` +
+    `elapsed   ${((performance.now()-startedAt)/1000).toFixed(0)}s\n` +
+    `fps       ${fps.toFixed(0)}${paused ? '  [PAUSED]' : ''}`;
+}
+
+function handOff() {
+  if (handingOff) return;
+  handingOff = true;
+  document.body.style.transition = `opacity ${CONFIG.fadeMs}ms ease-in-out`;
+  document.body.style.opacity = '0';
+  /* An EMPTY nextPage means there is nowhere to hand on to - which is what
+     build_github.py leaves behind when it cuts this page out of the wall's
+     rotation for publishing. Start again instead. */
+  setTimeout(() => { if (CONFIG.nextPage) location.href = CONFIG.nextPage;
+                     else location.reload(); }, CONFIG.fadeMs);
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = now - lastFrame; lastFrame = now;
+  fps = fps ? fps*0.9 + (1000/dt)*0.1 : 1000/dt;
+  if (paused || handingOff) return;
+
+  if (now - startedAt > CONFIG.holdMs) {
+    if (!PINNED && speciesIndex + 1 >= CONFIG.speciesPerTurn) { handOff(); return; }
+    newSpecies();
+  }
+  stepAgents();
+  diffuseDecay();
+  render();
+  if (document.body.classList.contains('showinfo')) updateInfo();
+}
+
+addEventListener('resize', () => { sizeGrid(); buildLut(palette); seedAgents(); });
+addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': newSpecies(); break;
+    case 'p': case 'P': case ' ': paused = !paused; updateInfo(); break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      if (/^[0-9]$/.test(e.key)) {
+        const score = e.key === '0' ? 10 : parseInt(e.key, 10);
+        console.log('[physarum] RATING STUB - score', score, 'species', species && species.name);
+      }
+  }
+});
+
+sizeGrid();
+newSpecies();
+requestAnimationFrame(frame);
+</script>
+<script src="nav.js"></script>
+</body>
+</html>

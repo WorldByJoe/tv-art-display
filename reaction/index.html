@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turing Patterns</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; }
+  canvas { display:block; width:100vw; height:100vh; }
+  * { cursor:none; }
+  #info { position:fixed; left:2vw; bottom:3vh; z-index:10; display:none;
+    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,Menlo,monospace;
+    color:#dfe6ee; background:rgba(0,0,0,.6); padding:.7em 1em; border-radius:.4em;
+    border:1px solid rgba(255,255,255,.15); white-space:pre; }
+  body.showinfo #info { display:block; }
+  #title { position:fixed; left:0; right:0; top:5vh; z-index:9; text-align:center;
+    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out; }
+  #title.show { opacity:1; }
+  #title .name { font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.22em; text-transform:uppercase; color:rgba(226,236,248,.88); }
+  #title .blurb { margin-top:.9em; font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.06em; color:rgba(190,205,225,.58); }
+
+  /* ---- persistent caption ----------------------------------------------
+     Stays for the whole run, unlike the title card which dissolves. Two
+     lines: what this is, and the settings that produced this version. */
+  #caption {
+    position:fixed; left:0; right:0; bottom:var(--cap-bottom, 2.2vh);
+    z-index:8; text-align:center; pointer-events:none; padding:0 4vw;
+  }
+  #caption .what {
+    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.055em; color:rgba(206,220,240,.66);
+  }
+  #caption .params {
+    margin-top:.45em;
+    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
+    letter-spacing:.02em; color:rgba(150,172,205,.44);
+  }
+  :root { --cap-bottom: 2.4vh; }
+
+  /* ---- scrim behind the caption ----------------------------------------
+     The caption used to sit directly on the artwork. On a black field that is
+     fine; over a lit basemap, a bright mosaic or a pale plume it becomes
+     unreadable exactly when there is something worth reading it about. A soft
+     upward fade keeps the text legible without drawing a visible box. */
+  #caption {
+    background: linear-gradient(to top,
+                rgba(3,5,10,0.88) 0%, rgba(3,5,10,0.70) 55%, rgba(3,5,10,0) 100%);
+    padding-top: 1.6em; padding-bottom: 0.7em;
+  }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="title"><div class="name"></div><div class="blurb"></div></div>
+<div id="caption"><div class="what"></div><div class="params"></div></div>
+<div id="info"></div>
+<script>
+/* ---- rotation navigation (remote D-pad) --------------------------------
+   Right steps to the next piece in the wall's rotation, left to the previous
+   one. The ring is listed explicitly rather than derived from nextPage,
+   because nextPage only points forwards - there is no way to walk it
+   backwards. Keep this list in step with the nextPage chain. */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+/* ---- caption -----------------------------------------------------------
+   setCaption(what, params) writes the two persistent lines at the bottom of
+   the screen. Called whenever a new scenario starts. */
+const capWhat   = document.querySelector('#caption .what');
+const capParams = document.querySelector('#caption .params');
+function setCaption(what, params) {
+  if (capWhat)   capWhat.textContent   = what || '';
+  if (capParams) capParams.textContent = params || '';
+}
+
+/* =======================================================================
+   Gray-Scott reaction-diffusion: Turing's answer to how a leopard gets
+   its spots.
+
+   Two chemicals on a grid. U is fed in from outside; V converts U into more
+   of itself and is removed. Both diffuse, but U diffuses TWICE AS FAST as V.
+
+     dU/dt = Du*lap(U) - U*V^2 + F*(1 - U)
+     dV/dt = Dv*lap(V) + U*V^2 - (F + k)*V
+
+   The counter-intuitive part, and Turing's insight in 1952, is that
+   DIFFUSION - the process that smooths everything out - is what creates the
+   pattern. A local patch of V eats U and grows; it also depletes U in a ring
+   around itself faster than V can spread there, so the patch cannot merge
+   with its neighbours. Short-range activation, long-range inhibition. The
+   spacing you see is set by the ratio of the two diffusion rates.
+
+   Every pattern below comes from the same four lines above. Only F (feed) and
+   k (kill) differ - a two-number parameter plane that contains spots,
+   stripes, mazes, and things that divide like cells.
+   ======================================================================= */
+
+const CONFIG = {
+  targetCells: 125000,   // grid budget; upscaled to the panel by CSS
+  iters:           22,   // solver steps per rendered frame
+  /* Du/Dv must be ~1.0/0.5 against F,k of order 0.05, not 0.16/0.08.
+     The pattern's length scale goes as sqrt(Dv/F): at Dv=0.08 that is about
+     one grid cell, so structures cannot spread and every seed collapses to an
+     isolated speck. dt is then bounded by stability - this stencil's extreme
+     eigenvalue is -2, so explicit Euler needs dt*Du <= 1. */
+  Du:             1.0,
+  Dv:             0.5,
+  dt:             1.0,
+  holdMs:       46000,   // per pattern
+  patternsPerTurn:  2,
+  fadeMs:        1400,
+  nextPage: '' /* standalone: nowhere to hand on to; start again */
+};
+const PINNED = /[?&]pin\b/.test(location.search);
+
+/* The (F, k) plane, sampled ON PURPOSE rather than by habit.
+
+   The six presets this replaces were all real, but five of the six sat at a
+   characteristic feature size of 6 to 9 grid cells. Feature SIZE is what the
+   eye picks up first from across a room - far more than topology - so a maze,
+   a coral and a field of worms at the same scale read as the same picture
+   with the lines moved around. That is why they all looked alike.
+
+   The living region is much wider than that. Sweeping 289 points of the plane
+   with the exact solver below (4000 steps, then a fine pass over the low-F
+   corner) found feature scales from 6 to 61 cells, and a whole family near
+   F=0.02 whose ACTIVITY - how much the field still changes per step once
+   settled - runs 0.10 against 0.003 to 0.02 for everything above. Those are
+   soft-edged, restless, cloudy things that look nothing like the crisp
+   lattices, and none of the old presets went anywhere near them.
+
+   Every entry below was run on FOUR seeds and kept only if its worst seed
+   stayed alive and structured; `scale` and `act` are the measured medians.
+   `band` is what the selector stratifies on, so two patterns in a row cannot
+   both be fine-grained.
+
+   Mitosis was dropped from this list after the fact. On paper it is a distinct
+   regime - blobs that grow and split - but measured against Spots at the
+   length the wall actually shows it, the two are the same picture: spectral
+   cosine 0.98 to 0.998 and coverage within 0.03 of each other at EVERY point
+   through the hold, not merely at the end. The splitting never becomes
+   something a viewer could tell apart from spots sitting still. Pores replaces
+   it, chosen as the candidate least like anything already here (worst
+   similarity 0.57 against the whole set, where Spots/Mitosis scored 0.98), and
+   it brings a polarity nothing else had: dark features on a pale ground. */
+const PATTERNS = [
+  { name:'Maze',     F:0.0290, k:0.0570, band:'fine',   scale:7,  blurb:'Stripes that wander, join and dead-end into a labyrinth' },
+  { name:'Spots',    F:0.0350, k:0.0645, band:'fine',   scale:7,  blurb:'Isolated blobs that repel each other and space themselves evenly' },
+  { name:'Pores',    F:0.0240, k:0.0520, band:'mid',    scale:8,  blurb:'A pale field opening into dark pits, spaced as evenly as spots but inside out' },
+  { name:'Solitons', F:0.0300, k:0.0620, band:'fine',   scale:7,  blurb:'Travelling pulses that survive collisions and pass through each other' },
+  { name:'Worms',    F:0.0800, k:0.0600, band:'fine',   scale:8,  blurb:'Restless filaments that lengthen, writhe and reconnect' },
+  { name:'Cells',    F:0.0750, k:0.0600, band:'mid',    scale:8,  blurb:'Thick walls closing into a froth of rounded compartments' },
+  { name:'Foam',     F:0.0900, k:0.0570, band:'mid',    scale:10, blurb:'A few large chambers whose walls thin, meet and rearrange' },
+  { name:'Bacilli',  F:0.0850, k:0.0600, band:'mid',    scale:20, blurb:'Short rods that grow end to end and drift apart on an empty field' },
+  { name:'Flecks',   F:0.0750, k:0.0630, band:'coarse', scale:30, blurb:'Sparse dashes, scattered and slow, with darkness between them' },
+  { name:'Plankton', F:0.0180, k:0.0530, band:'cloud',  scale:10, blurb:'A soft-edged swarm, forever dividing and drifting apart' },
+  { name:'Drift',    F:0.0200, k:0.0500, band:'cloud',  scale:22, blurb:'Blurred shoals that swell, merge and pull away again' },
+  { name:'Bloom',    F:0.0180, k:0.0470, band:'cloud',  scale:26, blurb:'Broad soft blooms opening into one another' },
+  { name:'Nebula',   F:0.0160, k:0.0440, band:'cloud',  scale:50, blurb:'Great slow rings that swell, collide and swallow each other' }
+];
+
+/* Pick something UNLIKE the last few. A viewer sees only two patterns per
+   visit, so leaving the choice to chance means seeing two fine-grained mazes
+   and concluding, fairly, that it always looks the same. Recent names are kept
+   across visits so the next one differs from what was on screen last night. */
+const RECENT_KEY = 'reaction:recent';
+function recentList(){
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch(e) { return []; }
+}
+function pushRecent(name){
+  try {
+    const r = recentList(); r.push(name);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(r.slice(-5)));
+  } catch(e) { /* private mode: variety within the session still works */ }
+}
+function pickPattern(){
+  const recent = recentList();
+  const lastBand = pattern ? pattern.band : null;
+  // first choice: a band we did not just show, and a name we have not shown lately
+  let pool = PATTERNS.filter(p => p.band !== lastBand && !recent.includes(p.name));
+  if (!pool.length) pool = PATTERNS.filter(p => p.band !== lastBand);
+  if (!pool.length) pool = PATTERNS.filter(p => !recent.includes(p.name));
+  if (!pool.length) pool = PATTERNS;
+  const p = pool[Math.floor(Math.random()*pool.length)];
+  pushRecent(p.name);
+  return p;
+}
+
+const PALETTES = [
+  [[3,4,10],[12,30,70],[20,110,150],[70,200,190],[200,250,240],[255,255,255]],
+  [[6,3,6],[50,10,40],[140,25,60],[230,90,50],[250,190,90],[255,250,230]],
+  [[2,6,4],[10,40,25],[25,105,55],[110,190,80],[215,240,140],[255,255,240]],
+  [[6,4,14],[35,20,70],[95,45,150],[170,95,215],[235,180,245],[255,255,255]]
+];
+function ramp(pal, t) {
+  t = t<0?0:t>1?1:t;
+  const x=t*(pal.length-1), i=Math.min(pal.length-2, Math.floor(x)), f=x-i;
+  const a=pal[i], b=pal[i+1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+}
+
+const canvas=document.getElementById('cv');
+const ctx=canvas.getContext('2d',{alpha:false});
+const titleEl=document.getElementById('title');
+const nameEl=titleEl.querySelector('.name');
+const blurbEl=titleEl.querySelector('.blurb');
+const infoEl=document.getElementById('info');
+
+let GW=0,GH=0,U=null,V=null,U2=null,V2=null,img=null,buf32=null,lut=null;
+let pattern=null, patternIndex=-1, startedAt=0, ticks=0, lastPal=0;
+let fps=0,lastFrame=performance.now(),paused=false,handingOff=false;
+
+function sizeGrid(){
+  /* A VIEWPORT WITH NO SIZE. A browser that lays this page out before the
+     window has been given one reports innerWidth and innerHeight as 0, and
+     0/0 is NaN while anything/0 is Infinity. Either reaches createImageData
+     as "not a long", the exception kills the script BEFORE the animation loop
+     has been scheduled, and the page is a permanent black rectangle that the
+     resize afterwards cannot rescue. Fall back to a plain 16:9 and let that
+     resize redo the grid properly. */
+  const aspect=(innerWidth||1920)/(innerHeight||1080);
+  GH=Math.max(150,Math.round(Math.sqrt(CONFIG.targetCells/aspect)));
+  GW=Math.round(GH*aspect);
+  canvas.width=GW; canvas.height=GH;
+  const n=GW*GH;
+  U=new Float32Array(n); V=new Float32Array(n);
+  U2=new Float32Array(n); V2=new Float32Array(n);
+  img=ctx.createImageData(GW,GH);
+  buf32=new Uint32Array(img.data.buffer);
+}
+
+function buildLut(pal){
+  lut=new Uint32Array(256);
+  for(let i=0;i<256;i++){
+    const c=ramp(pal,i/255);
+    lut[i]=(255<<24)|(Math.round(c[2])<<16)|(Math.round(c[1])<<8)|Math.round(c[0]);
+  }
+}
+
+function seed(){
+  U.fill(1); V.fill(0);
+  /* Scatter seeds of V, at a density set by the AREA of the grid rather than a
+     fixed count.
+
+     A few dozen discs was tuned on some smaller grid and left as an absolute
+     number. At 4K this field is 471x265 - about 125,000 cells - where 35 discs
+     seed barely 2% of it, against the ~16% they cover on a 128x128 test grid.
+     Patterns that spread and fill on their own, like Maze and Foam, do not
+     care. The sparse regimes never recover: measured on this grid, Flecks
+     reached 5% of the field alive from a fixed count and 24% when the seeding
+     was scaled to area, and Bacilli 13% against 37%. They were not dying, they
+     were simply never sown. */
+  const COVER = 0.16;                       // fraction of the field seeded
+  const r0 = 3, r1 = 8, rMid = (r0+r1)/2;
+  const blobs = Math.max(8, Math.round(COVER*GW*GH/(Math.PI*rMid*rMid) * (0.85+Math.random()*0.3)));
+  for(let b=0;b<blobs;b++){
+    const cx=Math.random()*GW, cy=Math.random()*GH, r=r0+Math.random()*(r1-r0);
+    for(let y=Math.max(0,cy-r|0); y<Math.min(GH,cy+r); y++){
+      for(let x=Math.max(0,cx-r|0); x<Math.min(GW,cx+r); x++){
+        const dx=x-cx, dy=y-cy;
+        /* Canonical seeding: leave U at 1 and set V to 1 inside the blob.
+           Seeding V=0.25 with U=0.5 puts the patch almost exactly on the
+           break-even between growth (U*V^2) and loss ((F+k)*V), so the moment
+           diffusion thins it, every seed dies and the screen goes black. */
+        if(dx*dx+dy*dy<r*r){ const i=y*GW+x; V[i]=1.0; }
+      }
+    }
+  }
+}
+
+function newPattern(){
+  patternIndex++;
+  pattern=pickPattern();
+  /* Palette avoids an immediate repeat for the same reason the pattern does:
+     two greens in a row read as one long green piece. */
+  lastPal = (lastPal + 1 + Math.floor(Math.random()*(PALETTES.length-1))) % PALETTES.length;
+  buildLut(PALETTES[lastPal]);
+  seed(); ticks=0; startedAt=performance.now();
+  nameEl.textContent=pattern.name;
+  blurbEl.textContent=pattern.blurb;
+  titleEl.classList.add('show');
+  setTimeout(()=>titleEl.classList.remove('show'),9000);
+  setCaption(
+    'Two chemicals on a grid. U is fed in, V turns U into more of itself, and both spread — but U spreads twice as fast. Diffusion, the process that smooths things out, is what builds the pattern. Turing predicted this in 1952.',
+    `feed F ${pattern.F.toFixed(4)}  ·  kill k ${pattern.k.toFixed(4)}  ·  Du ${CONFIG.Du}  ·  Dv ${CONFIG.Dv}  ·  dt ${CONFIG.dt}  ·  ${CONFIG.iters} steps/frame on ${GW}x${GH}`);
+}
+
+/* One solver step. The Laplacian is the standard 9-point stencil (0.05 on
+   diagonals, 0.2 on edges, -1 centre) which is noticeably less grid-aligned
+   than the 5-point version - with 5-point, stripes visibly prefer to run
+   along the axes, which looks like an artefact because it is one. */
+function step(){
+  const F=pattern.F, k=pattern.k, Du=CONFIG.Du, Dv=CONFIG.Dv, dt=CONFIG.dt;
+  for(let y=0;y<GH;y++){
+    const ym=((y-1+GH)%GH)*GW, y0=y*GW, yp=((y+1)%GH)*GW;
+    for(let x=0;x<GW;x++){
+      const xm=(x-1+GW)%GW, xp=(x+1)%GW;
+      const i=y0+x;
+      const u=U[i], v=V[i];
+      const lu = 0.05*(U[ym+xm]+U[ym+xp]+U[yp+xm]+U[yp+xp])
+               + 0.20*(U[ym+x]+U[yp+x]+U[y0+xm]+U[y0+xp]) - u;
+      const lv = 0.05*(V[ym+xm]+V[ym+xp]+V[yp+xm]+V[yp+xp])
+               + 0.20*(V[ym+x]+V[yp+x]+V[y0+xm]+V[y0+xp]) - v;
+      const uvv = u*v*v;
+      let nu = u + (Du*lu - uvv + F*(1-u))*dt;
+      let nv = v + (Dv*lv + uvv - (F+k)*v)*dt;
+      U2[i] = nu<0?0:nu>1?1:nu;
+      V2[i] = nv<0?0:nv>1?1:nv;
+    }
+  }
+  let t;
+  t=U; U=U2; U2=t;
+  t=V; V=V2; V2=t;
+  ticks++;
+}
+
+function render(){
+  const n=GW*GH;
+  for(let i=0;i<n;i++){
+    /* V tops out near 0.45 and averages under 0.01, so a linear stretch
+       clips every active region to flat white and floors the gradients
+       between them to black - which renders a filled, structured field as
+       bare outlines. Normalise to the actual ceiling and lift the low end. */
+    let v=V[i]*2.6;
+    if(v>1) v=1;
+    v=Math.pow(v,0.62);
+    buf32[i]=lut[(v*255)|0];
+  }
+  ctx.putImageData(img,0,0);
+}
+
+function updateInfo(){
+  infoEl.textContent =
+    `pattern   ${pattern.name}\n` +
+    `feed F    ${pattern.F.toFixed(4)}\n` +
+    `kill k    ${pattern.k.toFixed(4)}\n` +
+    `grid      ${GW} x ${GH}\n` +
+    `steps     ${ticks}  (${CONFIG.iters}/frame)\n` +
+    `elapsed   ${((performance.now()-startedAt)/1000).toFixed(0)}s\n` +
+    `fps       ${fps.toFixed(0)}${paused?'  [PAUSED]':''}`;
+}
+
+function handOff(){
+  if(handingOff) return;
+  handingOff=true;
+  document.body.style.transition=`opacity ${CONFIG.fadeMs}ms ease-in-out`;
+  document.body.style.opacity='0';
+  /* An EMPTY nextPage means there is nowhere to hand on to - which is what
+     build_github.py leaves behind when it cuts this page out of the wall's
+     rotation for publishing. Start again instead. */
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=CONFIG.nextPage;
+                   else location.reload(); },CONFIG.fadeMs);
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt=now-lastFrame; lastFrame=now;
+  fps=fps?fps*0.9+(1000/dt)*0.1:1000/dt;
+  if(paused||handingOff) return;
+  if(now-startedAt>CONFIG.holdMs){
+    if(!PINNED && patternIndex+1>=CONFIG.patternsPerTurn){ handOff(); return; }
+    newPattern();
+  }
+  for(let s=0;s<CONFIG.iters;s++) step();
+  render();
+  if(document.body.classList.contains('showinfo')) updateInfo();
+}
+
+addEventListener('resize',()=>{ sizeGrid(); seed(); });
+addEventListener('keydown',(e)=>{
+  switch(e.key){
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': newPattern(); break;
+    case 'p': case 'P': case ' ': paused=!paused; updateInfo(); break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      if(/^[0-9]$/.test(e.key)){
+        const score=e.key==='0'?10:parseInt(e.key,10);
+        console.log('[reaction] RATING STUB - score',score,'pattern',pattern&&pattern.name);
+      }
+  }
+});
+
+sizeGrid();
+newPattern();
+requestAnimationFrame(frame);
+</script>
+<script src="nav.js"></script>
+</body>
+</html>

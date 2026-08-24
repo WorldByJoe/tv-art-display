@@ -169,7 +169,7 @@ const CONFIG = {
   cleanWeight: 0.35,        // strength of a clean sample, before p_hit scaling
   actsPerTurn:     2,
   fadeMs:       1400,
-  nextPage: ''            // standalone: finish by starting again
+  nextPage: '' /* standalone: nowhere to hand on to; start again */
 };
 const PINNED=/[?&]pin\b/.test(location.search);
 
@@ -307,7 +307,14 @@ let fps=0,lastFrame=performance.now(),paused=false,handingOff=false;
 
 function resize(){
   DPR=Math.min(devicePixelRatio||1,2);
-  W=Math.floor(innerWidth*DPR); H=Math.floor(innerHeight*DPR);
+  /* A VIEWPORT WITH NO SIZE. A browser that lays this page out before the
+     window has been given one reports innerWidth and innerHeight as 0. The
+     evidence grid then comes out zero cells wide, createImageData throws
+     "source width is zero", and because this runs at the top of the script
+     the exception kills the page before the animation loop is ever
+     scheduled - so the resize that follows has nothing left to fix. Fall
+     back to a plain 16:9 and let that resize redo it properly. */
+  W=Math.floor((innerWidth||1920)*DPR); H=Math.floor((innerHeight||1080)*DPR);
   canvas.width=W; canvas.height=H;
   // mPerPx is set by projectHood(), from the neighbourhood's real extent
   const cs=CONFIG.cellPx*DPR;

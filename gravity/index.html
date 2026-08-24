@@ -1,0 +1,1192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accretion</title>
+<style>
+  /* Self-contained on purpose: no external files, fonts or libraries, so this
+     works as a file:// page on the Pi kiosk AND as a single drop-in file on
+     GitHub Pages. */
+  html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; }
+  canvas { display:block; width:100vw; height:100vh; }
+  * { cursor:none; }
+
+  #info {
+    position:fixed; left:2vw; bottom:9vh; z-index:10; display:none;
+    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,"SF Mono",Menlo,monospace;
+    color:#dfe6ee; background:rgba(0,0,0,.6); padding:.7em 1em;
+    border-radius:.4em; border:1px solid rgba(255,255,255,.15); white-space:pre;
+  }
+  body.showinfo #info { display:block; }
+
+  /* Scenario name and one line of explanation, faded in at the start of each
+     run. On a wall display this is the one piece of text worth showing: it
+     says what you are looking at without turning the screen into a dashboard. */
+  #title {
+    position:fixed; left:0; right:0; top:5vh; z-index:9; text-align:center;
+    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out;
+  }
+  #title.show { opacity:1; }
+  #title .name {
+    font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.22em; text-transform:uppercase; color:rgba(226,236,248,.85);
+  }
+  #title .blurb {
+    margin-top:.9em;
+    font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.06em; color:rgba(190,205,225,.55);
+  }
+
+  /* ---- persistent caption ----------------------------------------------
+     Stays for the whole run, unlike the title card which dissolves. Two
+     lines: what this is, and the settings that produced this version. */
+  #caption {
+    position:fixed; left:0; right:0; bottom:var(--cap-bottom, 2.2vh);
+    z-index:8; text-align:center; pointer-events:none; padding:0 4vw;
+  }
+  #caption .what {
+    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.055em; color:rgba(206,220,240,.66);
+  }
+  #caption .params {
+    margin-top:.45em;
+    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
+    letter-spacing:.02em; color:rgba(150,172,205,.44);
+  }
+  /* Clear of the mass bar's LABELS, not just the bar. At 12vh the caption's
+     bottom edge sat at 88% of screen height while "N bodies" / "N mergers"
+     start at 87%, so the scrim clipped the tops of both - 11px at 1080p and
+     21px at 4K. The bar rectangle itself was never the thing being hit. */
+  :root { --cap-bottom: 15vh; }
+
+  /* ---- scrim behind the caption ----------------------------------------
+     The caption used to sit directly on the artwork. On a black field that is
+     fine; over a lit basemap, a bright mosaic or a pale plume it becomes
+     unreadable exactly when there is something worth reading it about. A soft
+     upward fade keeps the text legible without drawing a visible box. */
+  #caption {
+    background: linear-gradient(to top,
+                rgba(3,5,10,0.88) 0%, rgba(3,5,10,0.70) 55%, rgba(3,5,10,0) 100%);
+    padding-top: 1.6em; padding-bottom: 0.7em;
+  }
+</style>
+</head>
+<body>
+<canvas id="sky"></canvas>
+<div id="title"><div class="name"></div><div class="blurb"></div></div>
+<div id="caption"><div class="what"></div><div class="params"></div></div>
+<div id="info"></div>
+
+<script>
+/* ---- rotation navigation (remote D-pad) --------------------------------
+   Right steps to the next piece in the wall's rotation, left to the previous
+   one. The ring is listed explicitly rather than derived from nextPage,
+   because nextPage only points forwards - there is no way to walk it
+   backwards. Keep this list in step with the nextPage chain. */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+/* ---- caption -----------------------------------------------------------
+   setCaption(what, params) writes the two persistent lines at the bottom of
+   the screen. Called whenever a new scenario starts. */
+const capWhat   = document.querySelector('#caption .what');
+const capParams = document.querySelector('#caption .params');
+function setCaption(what, params) {
+  if (capWhat)   capWhat.textContent   = what || '';
+  if (capParams) capParams.textContent = params || '';
+}
+
+/* =======================================================================
+   Gravitational accretion - a JavaScript descendant of Joe's MATLAB
+   nBodyGUI.m, rebuilt so each scenario actually produces the structure its
+   name promises.
+
+   WHY THE ORIGINAL SCENARIOS DID NOT MATCH THEIR NAMES
+   ----------------------------------------------------
+   All five shared ONE initial-condition generator - an isotropic Gaussian
+   blob with solid-body rotation plus noise - and differed only in eight
+   numbers fed to it. No choice of those numbers can build a binary, a disk,
+   or an Oort halo. Two specific problems:
+
+     1. vel = cross(omega, pos) gives every body the SAME ANGULAR velocity.
+        That is a turntable, not an orbit. Real orbital motion goes as
+        v ~ sqrt(G*M_enc/r), so inner material must sweep round far faster.
+        With solid-body rotation the inner material is under-supported and
+        falls straight in while the outer is over-supported and flies out -
+        which is exactly the blob-plus-escapers behaviour that resulted.
+
+     2. The cloud started spherical (z scatter = x,y scatter). A disk must
+        either begin flat or dissipate its way there, and merging is the only
+        dissipation available - far too rare early on to flatten anything.
+
+   So each scenario below builds its own initial conditions.
+
+   Physics retained from nBody.m: direct O(N^2) gravity with Plummer
+   softening, symplectic Euler, perfectly inelastic merging conserving mass
+   and momentum, centre-of-mass re-centring.
+   ======================================================================= */
+
+const CONFIG = {
+  /* Pacing. A run ends when the system SETTLES, not on a clock: if bodies are
+     still colliding, the story is not over. */
+  settleSteps:    6000,   // steps without a merge before we call it settled
+  minSteps:       4000,   // never declare victory before this
+
+  /* The late phase is SLOW, not finished - encounters keep happening, just
+     further apart. Waiting it out in real time would be tedious, so once
+     merging goes quiet the simulation fast-forwards: every `boostAfter` quiet
+     steps buys another multiple of physics per rendered frame, up to
+     `maxBoost`. A single merge resets the clock and drops straight back to
+     real time, so anything actually happening is shown at watchable speed. */
+  boostAfter:      600,   // quiet steps per extra speed multiple
+  maxBoost:          8,   // ceiling on the fast-forward
+  maxSteps:     140000,   // hard ceiling so a pathological run cannot hang
+  holdMs:        30000,   // keep a settled system on screen this long
+  minBodies:         2,
+
+  /* COLLISION radius and DRAWN radius are deliberately separate numbers.
+     Tie them together and you cannot fix one without breaking the other: a
+     collision radius large enough to look good made accretion so fast that
+     226 of 250 bodies merged inside 15 seconds, and shrinking it to slow
+     that down turned every body into a speck. */
+  collideScaling: 0.24,   // collision radius = mass^(1/3) * this * density
+  drawScaling:    0.42,   // drawn radius = mass^(1/3) * this  (density-independent)
+  markerGain:     1.35,   // on-screen disc radius per drawn radius unit
+  trail:          0.34,   // 0 = infinite smear, 1 = hard clear
+  camRate:       0.035,   // camera orbit, radians/second
+  camTilt:        0.40,   // camera elevation, radians
+  viewMax:         150,   // zoom ceiling: escapers leave frame, nothing shrinks
+  /* Both PER FRAME, deliberately - see recentre() and the frame loop. zoomEase
+     is how eagerly the view chases its target; zoomMaxRate is the hard ceiling
+     on how fast the picture may scale, and is what stops the fast-forward from
+     turning the zoom into a lurch. At 1.2% a frame the view can cross its
+     whole range, 10 to 150, in about six seconds. */
+  flashMs:        750,   // how long a collision flash lingers, in wall time
+  zoomEase:      0.020,
+  zoomMaxRate:   0.012,
+
+  barHeight:      0.052,  // mass bar height as a fraction of screen height
+  runsPerTurn:        2,  // runs before handing the screen to the surname river
+  nextPage: '' /* standalone: nowhere to hand on to; start again */
+};
+const PINNED = /[?&]pin\b/.test(location.search);
+
+/* ---------------- seeded randomness ---------------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function makeGaussian(rng) {
+  let spare = null;
+  return function () {
+    if (spare !== null) { const s = spare; spare = null; return s; }
+    let u, v, s;
+    do { u = rng()*2-1; v = rng()*2-1; s = u*u + v*v; } while (s === 0 || s >= 1);
+    const f = Math.sqrt(-2*Math.log(s)/s);
+    spare = v*f; return u*f;
+  };
+}
+/* Cheap deterministic hash -> [0,1), used for the boulder silhouettes so a
+   body's shape is stable frame to frame without storing anything. */
+function hash01(a, b) {
+  let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b ^ 0xc2b2ae35, 0x27d4eb2f);
+  h = Math.imul(h ^ (h >>> 15), 0x2545f491);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/* ---------------- turbo colormap ----------------
+   Jet's perceptual problems without jet's ugliness: blue -> cyan -> green ->
+   yellow -> red, monotonically increasing in brightness-ish. Red is reserved
+   for bodies at escape velocity (see speedColour). */
+const TURBO = [
+  [ 48, 18, 59], [ 65, 69,171], [ 57,126,226], [ 32,175,222], [ 26,214,192],
+  [ 65,234,138], [138,247, 76], [193,244, 44], [230,219, 40], [251,173, 45],
+  [246,120, 27], [225, 71, 12], [187, 34,  4], [122,  4,  3]
+];
+function turbo(t) {
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const x = t * (TURBO.length - 1);
+  const i = Math.min(TURBO.length - 2, Math.floor(x));
+  const f = x - i, a = TURBO[i], b = TURBO[i+1];
+  return [
+    Math.round(a[0] + (b[0]-a[0])*f),
+    Math.round(a[1] + (b[1]-a[1])*f),
+    Math.round(a[2] + (b[2]-a[2])*f)
+  ];
+}
+const rgb  = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+/* =======================================================================
+   SCENARIOS
+   Each one builds its own initial conditions. `S` is the simulation with its
+   arrays already allocated; scenarios fill them in.
+   ======================================================================= */
+
+/* Place a body on a circular orbit of radius r about mass Mc at the origin,
+   in a plane tilted by `inc`. speedFactor < 1 makes the orbit eccentric
+   (the body falls inward from apoapsis), which is how you seed a scattering
+   population rather than a tidy ring. */
+function orbit(S, i, m, r, Mc, G, rng, gauss, opts) {
+  opts = opts || {};
+  const th = rng() * Math.PI * 2;
+  const inc = (opts.inc || 0) * gauss();
+  const c = Math.cos(th), s = Math.sin(th);
+  const x = r*c, y = r*s, z = r*inc;
+  const vC = Math.sqrt(G*Mc/r) * (opts.speedFactor !== undefined ? opts.speedFactor : 1);
+  const jitter = opts.jitter || 0;
+  S.set(i, m,
+        x, y, z,
+        -vC*s*(1+jitter*gauss()), vC*c*(1+jitter*gauss()), vC*inc*0.3*gauss());
+}
+
+const SCENARIOS = [
+  {
+    name: 'Protoplanetary Disk',
+    /* keRef - the MEDIAN kinetic energy a merger destroys in this scenario,
+       measured by logging every collision over several seeds and taking the
+       middle one. It sets the brightness scale for the collision flash.
+
+       It has to be per scenario and it has to be frozen. Per scenario because
+       the medians run from 0.9 in the Tidal Encounter to about 40 in the
+       Cluster Collision - thirty-fold - so one shared constant would leave one
+       run with no visible flashes and white out another. Frozen because a
+       running average of the collisions seen SO FAR climbs steadily as a run
+       proceeds, which would draw the same collision ten to fifty times
+       brighter early than late: the picture would stop being comparable with
+       itself.
+
+       These are measurements, not dials. Across seeds within a scenario the
+       median repeats to within 1.1-1.4x, which is what makes it a property of
+       the scenario worth storing. And because the flash is logarithmic, even
+       being a factor of two out moves the drawn brightness by about a tenth. */
+    keRef: 4.2,
+    blurb: 'A young star’s debris ring, orbiting at Keplerian speed, clumping into planets',
+    N: 240, G: 1.5, soft: 0.30, dt: 0.055, spf: 2,
+    init(S, rng, gauss) {
+      const G = this.G, Mstar = 520;
+      S.set(0, Mstar, 0,0,0, 0,0,0, 0.22);        // the star: dense, small target
+      for (let i = 1; i < this.N; i++) {
+        // sqrt sampling spreads bodies evenly over AREA rather than radius,
+        // so the ring does not pile up at its inner edge
+        const r = 9 + 34*Math.sqrt(rng());
+        orbit(S, i, Math.exp(gauss()*0.7)*0.55, r, Mstar, G, rng, gauss,
+              { inc: 0.018, jitter: 0.012 });
+      }
+    }
+  },
+  {
+    name: 'Binary Dance',
+    keRef: 2.9,
+    blurb: 'Two stars locked in mutual orbit, stirring the cloud that surrounds them',
+    N: 200, G: 1.5, soft: 0.30, dt: 0.045, spf: 2,
+    init(S, rng, gauss) {
+      const G = this.G, M1 = 340, M2 = 260, d = 16, Mt = M1 + M2;
+      // Each star orbits the shared centre of mass; their speeds are in
+      // inverse proportion to their masses, which is what keeps the COM still.
+      const vOrb = Math.sqrt(G*Mt/d);
+      S.set(0, M1, -d*M2/Mt, 0, 0, 0, -vOrb*M2/Mt, 0, 0.22);
+      S.set(1, M2,  d*M1/Mt, 0, 0, 0,  vOrb*M1/Mt, 0, 0.22);
+      for (let i = 2; i < this.N; i++) {
+        // A circumbinary cloud must start well outside the pair, or the binary
+        // simply ejects everything in the first few orbits.
+        const r = d*2.4 + d*3.4*Math.sqrt(rng());
+        orbit(S, i, Math.exp(gauss()*0.7)*0.5, r, Mt, G, rng, gauss,
+              { inc: 0.05, jitter: 0.02 });
+      }
+    }
+  },
+  {
+    name: 'Cluster Collision',
+    keRef: 40,
+    blurb: 'Two star clusters fall together and merge, flinging out tidal debris',
+    N: 230, G: 1.4, soft: 0.28, dt: 0.05, spf: 2,
+    init(S, rng, gauss) {
+      const half = Math.floor(this.N/2);
+      const build = (i0, i1, cx, cy, vx, vy, spin) => {
+        for (let i = i0; i < i1; i++) {
+          const x = cx + gauss()*6.5, y = cy + gauss()*6.5, z = gauss()*5.0;
+          const dx = x - cx, dy = y - cy;
+          S.set(i, Math.exp(gauss()*0.9)*1.1,
+                x, y, z,
+                vx - spin*dy + gauss()*0.35,
+                vy + spin*dx + gauss()*0.35,
+                gauss()*0.35);
+        }
+      };
+      // Offset in y gives a non-zero impact parameter, so they swing past each
+      // other before merging instead of colliding head-on and just stopping.
+      build(0,       half,   -34,  -7,  2.9,  0.25,  0.10);
+      build(half, this.N,     32,   7, -2.9, -0.25, -0.10);
+    }
+  },
+  {
+    name: 'Oort Scattering',
+    keRef: 24,
+    blurb: 'Giant planets slingshot icy debris into a vast, still-bound halo',
+    N: 250, G: 1.5, soft: 0.28, dt: 0.05, spf: 2,
+    init(S, rng, gauss) {
+      const G = this.G, Mstar = 620;
+      S.set(0, Mstar, 0,0,0, 0,0,0, 0.20);
+      // Four giants on circular orbits: these are the scattering engine.
+      const giants = [[34, 11], [52, 17], [40, 25], [26, 35]];
+      giants.forEach((g, k) => orbit(S, k+1, g[0], g[1], Mstar, G, rng, gauss, { inc: 0.01 }));
+      // Planetesimals launched on ECCENTRIC orbits that cross the giants'
+      // paths. Crossing orbits are the whole point - a tidy ring never gets
+      // scattered, and scattering is what builds the halo.
+      for (let i = giants.length + 1; i < this.N; i++) {
+        const r = 9 + 28*rng();
+        orbit(S, i, Math.exp(gauss()*0.6)*0.28, r, Mstar, G, rng, gauss,
+              { inc: 0.07, speedFactor: 0.76 + 0.22*rng(), jitter: 0.03 });
+      }
+    }
+  },
+  {
+    name: 'Tidal Encounter',
+    keRef: 0.9,
+    blurb: 'Two disk galaxies graze past each other and draw out long tidal tails',
+    N: 240, G: 1.5, soft: 0.30, dt: 0.05, spf: 2,
+    init(S, rng, gauss) {
+      const G = this.G, Mc = 300;
+      const disk = (i0, i1, cx, cy, vx, vy, sense) => {
+        S.set(i0, Mc, cx, cy, 0, vx, vy, 0, 0.22);
+        for (let i = i0+1; i < i1; i++) {
+          const r = 4.5 + 11*Math.sqrt(rng());
+          const th = rng()*Math.PI*2, c = Math.cos(th), s = Math.sin(th);
+          const v = Math.sqrt(G*Mc/r) * sense;
+          S.set(i, Math.exp(gauss()*0.5)*0.30,
+                cx + r*c, cy + r*s, gauss()*0.35*r*0.08,
+                vx - v*s, vy + v*c, 0);
+        }
+      };
+      const half = Math.floor(this.N/2);
+      // A grazing pass: closing slowly, offset in y. Prograde vs retrograde
+      // spin is deliberate - the prograde disk throws a far longer tail.
+      disk(0,     half,   -30, -11,  1.9,  0.30,  1);
+      disk(half, this.N,   30,  11, -1.9, -0.30, -1);
+    }
+  }
+];
+
+/* ======================= the simulation ======================= */
+class Sim {
+  constructor(scenario, seed) {
+    this.s = scenario;
+    this.seed = seed;
+    const N = scenario.N;
+    this.n = N; this.alive = N;
+    this.steps = 0; this.merges = 0; this.escaped = 0; this.lastMerge = 0;
+    this.shed = 0;                      // angular momentum lost to spin-up breakup
+    this.settled = false; this.settledAt = 0;
+
+    this.x = new Float64Array(N); this.y = new Float64Array(N); this.z = new Float64Array(N);
+    this.vx = new Float64Array(N); this.vy = new Float64Array(N); this.vz = new Float64Array(N);
+    this.m = new Float64Array(N); this.r = new Float64Array(N);
+    this.rDraw = new Float64Array(N);
+    this.active = new Uint8Array(N);
+    this.salt = new Int32Array(N);      // bumped on merge so a shape changes when it grows
+
+    /* SPIN, as physics rather than decoration.
+
+       This used to be one random number per body, fixed at birth and never
+       touched again - the bodies turned, but nothing about the turning meant
+       anything. Worse, the merge threw the pair's orbital angular momentum
+       away entirely: two bodies swinging past each other and sticking produced
+       a product with no memory of that swing, so total angular momentum was
+       not conserved at all.
+
+       Now each body carries a spin angular-momentum VECTOR, and a merge adds
+       the parents' spins to the orbital angular momentum of the pair about
+       their common centre of mass. Bodies start with none: a pristine body sits
+       still and everything that turns, turns because of a collision it had.
+       `ang` is the drawn angle, integrated frame by frame rather than
+       recomputed as rate*time - see the draw loop for why that matters. */
+    this.lx = new Float64Array(N); this.ly = new Float64Array(N); this.lz = new Float64Array(N);
+    /* Per body: how much kinetic energy its last merger destroyed, and when.
+       The flash is drawn from these and fades out on its own. */
+    this.flashE = new Float64Array(N); this.flashT = new Float64Array(N);
+    /* SHAPE, read off the collision that made it.
+
+       Two bodies that stick together do not become a sphere, they become a
+       contact binary: two touching spheres of radius Rb and Rs make a figure
+       Rb+Rs long and Rb wide. That half-length is kept in aW, and the body is
+       drawn as the volume-preserving prolate spheroid a = max(aW, R),
+       b = sqrt(R^3/a). An equal-mass merger comes out at an axis ratio of
+       exactly 2, a speck landing on a planet at 1, and nothing was tuned to
+       make either happen.
+
+       WHY BOTHER, when the lumpy outline already turns: because the outline is
+       the WORST possible carrier of orientation. A feature that repeats m
+       times per turn stops reading above pi/m of turn per frame, so the
+       14-lobe relief dies at 12.8 degrees while a 2-fold elongation survives
+       to 90 - seven times faster. It also shows the spin component ACROSS the
+       line of sight, which a rotating lumpy disc cannot: the long axis swings
+       in and out of the screen and the body visibly lengthens and shortens.
+
+       No decay rule is needed. aW only grows, R grows with every accretion, so
+       a body that goes on to eat several times its own mass in specks becomes
+       round again on its own. */
+    this.ex = new Float64Array(N); this.ey = new Float64Array(N); this.ez = new Float64Array(N);
+    this.aW = new Float64Array(N);      // longest contact half-length in its history
+    this.keLog = [];                    // every dKE this run, for calibration
+    this.ang = new Float64Array(N);
+    this.t = 0;                         // simulation time, for integrating `ang`
+
+    const rng = mulberry32(seed), gauss = makeGaussian(rng);
+    /* The N discarded draws keep the seed stream aligned. The old code drew a
+       random birth spin here, N times, BEFORE scenario.init() ran. Removing
+       that draw shifted every later value, so a recorded seed no longer
+       reproduced its own initial conditions - and the rating stub logs seeds
+       precisely so a run can be called back. The spin it fed is gone; the
+       draws stay. */
+    for (let i = 0; i < N; i++) { this.active[i] = 1; rng(); }
+    scenario.init(this, rng, gauss);
+
+    this.totalMass = 0;
+    for (let i = 0; i < N; i++) if (this.active[i]) this.totalMass += this.m[i];
+
+    this.viewRadius = 40; this.viewTarget = 40;
+    this.recentre();
+  }
+
+  set(i, m, x, y, z, vx, vy, vz, density) {
+    this.m[i] = m;
+    this.dens = this.dens || new Float64Array(this.n);
+    this.dens[i] = density || 1;
+    // Collision radius carries the density: stars and giant planets are far
+    // denser than rubble piles, so they present a much smaller target. Without
+    // this the central mass grows a huge cross-section and eats everything
+    // that comes near it.
+    this.r[i] = Math.cbrt(m) * CONFIG.collideScaling * this.dens[i];
+    // Drawn radius ignores density, so a star still LOOKS like a star.
+    this.rDraw[i] = Math.cbrt(m) * CONFIG.drawScaling;
+    // never collided: a sphere, and the stored axis is unused
+    this.aW[i] = 0; this.ex[i] = 1; this.ey[i] = 0; this.ez[i] = 0;
+    this.x[i] = x; this.y[i] = y; this.z[i] = z;
+    this.vx[i] = vx; this.vy[i] = vy; this.vz[i] = vz;
+  }
+
+  step() {
+    const { G, soft, dt } = this.s;
+    const n = this.n, soft2 = soft*soft;
+    const x=this.x, y=this.y, z=this.z, vx=this.vx, vy=this.vy, vz=this.vz;
+    const m=this.m, r=this.r, active=this.active;
+    if (this.alive < 2) return;
+
+    const ax = new Float64Array(n), ay = new Float64Array(n), az = new Float64Array(n);
+    const pairs = [];
+    for (let i = 0; i < n; i++) {
+      if (!active[i]) continue;
+      for (let j = i+1; j < n; j++) {
+        if (!active[j]) continue;
+        const dx = x[j]-x[i], dy = y[j]-y[i], dz = z[j]-z[i];
+        const d2 = dx*dx + dy*dy + dz*dz;
+        const inv = 1/Math.pow(d2 + soft2, 1.5);
+        const gi = G*m[j]*inv, gj = G*m[i]*inv;
+        ax[i] += dx*gi; ay[i] += dy*gi; az[i] += dz*gi;
+        ax[j] -= dx*gj; ay[j] -= dy*gj; az[j] -= dz*gj;
+        const rs = r[i] + r[j];
+        if (d2 < rs*rs) pairs.push(i, j);
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      if (!active[i]) continue;
+      vx[i] += ax[i]*dt; vy[i] += ay[i]*dt; vz[i] += az[i]*dt;
+      x[i] += vx[i]*dt;  y[i] += vy[i]*dt;  z[i] += vz[i]*dt;
+    }
+    for (let k = 0; k < pairs.length; k += 2) {
+      const i = pairs[k], j = pairs[k+1];
+      if (!active[i] || !active[j]) continue;
+      const mi = m[i], mj = m[j], mt = mi + mj;
+
+      /* Angular momentum, BEFORE anything below overwrites v then x.
+
+         About any fixed origin the pair carries mi*ri x vi + mj*rj x vj; the
+         merged body carries mt*R x V plus whatever it now spins with. The
+         difference between those is the pair's orbital angular momentum about
+         their own centre of mass, and it reduces exactly to the reduced-mass
+         form below - so an off-centre hit spins the product up and a dead-on
+         hit does not. Checked numerically: with this term the total is
+         conserved to machine precision, and without it a single grazing merge
+         can lose an arbitrary amount. */
+      const mu = mi*mj/mt;
+      const rdx = x[j]-x[i], rdy = y[j]-y[i], rdz = z[j]-z[i];
+      const vdx = vx[j]-vx[i], vdy = vy[j]-vy[i], vdz = vz[j]-vz[i];
+      /* THE ENERGY THIS COLLISION DESTROYS.
+
+         A perfectly inelastic merger conserves momentum but not kinetic
+         energy, and the difference is what a real impact turns into light and
+         heat. In the centre-of-mass frame it has a clean closed form: the pair
+         has 0.5*mu*|v_rel|^2 of kinetic energy about their common centre, the
+         merged body has none, so all of it goes. Nothing else in the frame
+         needs to be known - not the masses separately, not the geometry. */
+      /* The contact figure this collision made. Half-length is the sum of the
+         two drawn radii - the two spheres at the moment they touched - and the
+         long axis is the line between their centres, which is the direction
+         they came together on. Kept only if it is longer than anything this
+         body has been before. */
+      const rdN = Math.hypot(rdx, rdy, rdz);
+      if (rdN > 0) {
+        const contact = this.rDraw[i] + this.rDraw[j];
+        if (contact > this.aW[i]) {
+          this.aW[i] = contact;
+          this.ex[i] = rdx/rdN; this.ey[i] = rdy/rdN; this.ez[i] = rdz/rdN;
+        }
+      }
+
+      const dKE = 0.5*mu*(vdx*vdx + vdy*vdy + vdz*vdz);
+      this.flashE[i] = dKE;
+      /* Wall time, not simulation steps. The BRIGHTNESS is physics - it is the
+         energy the collision destroyed - but how long the flash lingers is a
+         signal to the viewer, not a modelled cooling curve. Tied to simulation
+         time it would vanish in a blink under fast-forward, where sixteen steps
+         pass per frame: the very moments worth noticing are the ones that would
+         become invisible. */
+      this.flashT[i] = performance.now();
+      /* Kept so the reference above stays checkable against the run actually
+         on screen - the 'i' panel prints the median beside keRef. Capped: a
+         pathological run must not grow an unbounded array. */
+      if (this.keLog.length < 4000) this.keLog.push(dKE);
+
+      this.lx[i] += this.lx[j] + mu*(rdy*vdz - rdz*vdy);
+      this.ly[i] += this.ly[j] + mu*(rdz*vdx - rdx*vdz);
+      this.lz[i] += this.lz[j] + mu*(rdx*vdy - rdy*vdx);
+      this.lx[j] = this.ly[j] = this.lz[j] = 0;
+
+      vx[i] = (vx[i]*mi + vx[j]*mj)/mt;
+      vy[i] = (vy[i]*mi + vy[j]*mj)/mt;
+      vz[i] = (vz[i]*mi + vz[j]*mj)/mt;
+      x[i] = (x[i]*mi + x[j]*mj)/mt;
+      y[i] = (y[i]*mi + y[j]*mj)/mt;
+      z[i] = (z[i]*mi + z[j]*mj)/mt;
+      m[i] = mt;
+      r[i] = Math.cbrt(mt)*CONFIG.collideScaling*this.dens[i];
+      this.rDraw[i] = Math.cbrt(mt)*CONFIG.drawScaling;
+
+      /* A cohesionless rubble pile cannot hold together above the spin at
+         which its equator goes into orbit, w_crit = sqrt(GM/R^3): past that it
+         sheds material until it is back under the limit. We do not model the
+         shed debris, so the excess angular momentum simply leaves - the one
+         place in this simulation where L is not conserved, and it is a real
+         physical loss channel rather than a bookkeeping slip. Measured over
+         five scenarios and three seeds each it fires on 0 to 7.2% of mergers
+         and removes 0 to 5.7% of the spin angular momentum created, median
+         0.2% - under half a per cent of the system's total L. */
+      const Ic = 0.4*mt*this.rDraw[i]*this.rDraw[i];
+      const Lc = Math.hypot(this.lx[i], this.ly[i], this.lz[i]);
+      const wc = Math.sqrt(G*mt/(this.rDraw[i]*this.rDraw[i]*this.rDraw[i]));
+      if (Lc > Ic*wc && Lc > 0) {
+        const f = Ic*wc/Lc;
+        this.lx[i] *= f; this.ly[i] *= f; this.lz[i] *= f;
+        this.shed += Lc - Ic*wc;
+      }
+      this.salt[i]++;                       // a merged body is a new aggregate
+      this.settled = false;                 // collisions resumed: not finished after all
+      active[j] = 0; m[j] = 0;
+      this.alive--; this.merges++; this.lastMerge = this.steps;
+    }
+    this.steps++;
+    this.t += dt;
+    this.recentre();
+
+    /* Settled = nothing has collided for a good long while. If bodies are
+       still merging, the story is not finished. */
+    if (!this.settled &&
+        this.steps > CONFIG.minSteps &&
+        (this.steps - this.lastMerge > CONFIG.settleSteps ||
+         this.alive <= CONFIG.minBodies ||
+         this.steps > CONFIG.maxSteps)) {
+      this.settled = true; this.settledAt = performance.now();
+    }
+  }
+
+  /* WHERE TO POINT THE CAMERA.
+
+     Not at the centre of mass of everything. Total momentum is conserved, so
+     that point sits still while every escaper that leaves pushes the surviving
+     system the other way - the camera stayed put and the thing worth watching
+     walked off the side of the screen, measured at 2.1 view radii out with the
+     zoom already pinned at its ceiling.
+
+     Nor at the centre of mass of everything still bound, which sounds right
+     and is worse. When a run fragments into two clumps that are flying apart -
+     Cluster Collision does it every time - neither clump is bound to the
+     whole, so "the bound set" is ill defined and the dominant body itself
+     flickered in and out of it. The centre snapped back and forth between the
+     two, and the heaviest body ended up 4.3 view radii away.
+
+     So: find the heaviest body and follow the CLUMP AROUND IT. A body belongs
+     to that clump if it cannot escape the mass lying interior to it,
+     0.5 v^2 <= G M(<r) / r, measured in the heaviest body's rest frame. That
+     test works at both ends of the run: early on M(<r) is the whole cluster
+     and everything qualifies, so this is just the centre of mass; late on
+     M(<r) is essentially the dominant body and only its real companions
+     qualify. It is stable across a binary too - both stars are bound to each
+     other, so the clump is the pair and the centre is their barycentre no
+     matter which of them is momentarily heavier.
+
+     The shift moves POSITIONS ONLY, never velocities: a change of coordinate
+     origin, which gravity cannot see because forces depend on differences. */
+  recentre() {
+    const n = this.n, active = this.active, m = this.m;
+    let mt = 0;
+    for (let i = 0; i < n; i++) if (active[i]) mt += m[i];
+    if (mt <= 0) return;
+    this.boundMass = mt;               // total ACTIVE mass: the mass bar's denominator
+
+    // the anchor: heaviest body wins, ties broken by index so it cannot flutter
+    let h = -1, hm = -1;
+    for (let i = 0; i < n; i++) {
+      if (!active[i]) continue;
+      if (m[i] > hm) { hm = m[i]; h = i; }
+    }
+    if (h < 0) return;
+
+    // everything ordered by distance from the anchor, so M(<r) can accumulate
+    const byH = [];
+    for (let i = 0; i < n; i++) {
+      if (!active[i]) continue;
+      byH.push([Math.hypot(this.x[i]-this.x[h], this.y[i]-this.y[h], this.z[i]-this.z[h]), i]);
+    }
+    byH.sort((a, b) => a[0] - b[0]);
+
+    /* Reused, not reallocated: recentre() runs on every step of every frame.
+       Two buffers, because membership is HYSTERETIC - a body already in the
+       clump has to be a third again over the escape speed before it is let go.
+       Without that, bodies sitting near the threshold cross it back and forth
+       every few steps, and since each one entering or leaving moves the
+       centroid, the whole field jumped with them: measured at up to 106 px in
+       a single step at 4K, on a tenth of all steps. */
+    const prev = this._clump  || (this._clump  = new Uint8Array(n));
+    const cur  = this._clump2 || (this._clump2 = new Uint8Array(n));
+    cur.fill(0);
+    let M = 0, bm = 0, bx = 0, by = 0, bz = 0;
+    for (const [rr, i] of byH) {
+      M += m[i];
+      const dvx = this.vx[i]-this.vx[h], dvy = this.vy[i]-this.vy[h], dvz = this.vz[i]-this.vz[h];
+      const v2 = dvx*dvx + dvy*dvy + dvz*dvz;
+      const keep = prev[i] ? 1.35 : 1.0;                   // harder to leave than to join
+      if (rr > 0 && 0.5*v2 > keep*this.s.G*M/rr) continue; // escapes what is inside it
+      cur[i] = 1;
+      bm += m[i]; bx += this.x[i]*m[i]; by += this.y[i]*m[i]; bz += this.z[i]*m[i];
+    }
+    this._clump = cur; this._clump2 = prev;                // swap, do not allocate
+    if (bm <= 0) { bx = this.x[h]; by = this.y[h]; bz = this.z[h]; }
+    else { bx /= bm; by /= bm; bz /= bm; }
+    this.clumpMass = bm;
+    /* How far the origin actually moved this step, measured after the easing
+       below is applied. Clump membership flickers as bodies
+       cross the escape test, and every flicker shifts the centroid - which
+       shifts every body on screen at once. Tracked so that jitter is a number
+       we can look at rather than something to squint for. */
+    this.shift = 0;                     // set below, once the easing is known
+
+    /* Ease the origin toward the clump centre instead of snapping to it, the
+       same way viewRadius eases toward its target just below. bx,by,bz is an
+       ERROR signal, so this is a low-pass on it: a one-step disturbance is
+       attenuated sevenfold, while steady tracking costs only a small constant
+       lag (the clump's speed times dt over this rate, a couple of units
+       against a view radius of thirty to a hundred and fifty). */
+    const CENTRE_EASE = 0.06;
+    bx *= CENTRE_EASE; by *= CENTRE_EASE; bz *= CENTRE_EASE;
+    this.shift = Math.hypot(bx, by, bz);
+
+    const byDist = [];
+    for (let i = 0; i < n; i++) {
+      if (!active[i]) continue;
+      this.x[i] -= bx; this.y[i] -= by; this.z[i] -= bz;
+      byDist.push([Math.hypot(this.x[i], this.y[i], this.z[i]), m[i], i]);
+    }
+    if (!byDist.length) return;
+    byDist.sort((a, b) => a[0] - b[0]);
+
+    /* Mass decides WHAT COUNTS as the system; body positions decide HOW BIG to
+       draw it. Those are separate questions and need separate statistics -
+       conflating them zooms either to infinity or to a single dominant body.
+       The framing uses the same clump the centre does, so the two cannot
+       disagree about what is being looked at. */
+    let acc = 0, rHalf = 10;
+    for (const [rr, mi] of byDist) { acc += mi; if (acc <= 0.5*bm) rHalf = rr; }
+    rHalf = Math.max(rHalf, 1e-6);
+
+    const framing = [];
+    for (const [rr, , i] of byDist) {
+      if (!cur[i] && rr > rHalf*3.2) continue;      // on its way out: do not frame for it
+      framing.push(rr);
+    }
+    if (!framing.length) return;
+    const rFrame = framing[Math.max(0, Math.floor(0.90*framing.length)-1)];
+    /* Only DECIDE the zoom here. Moving it is the frame loop's job.
+
+       This used to ease viewRadius by a fixed fraction on every call - and
+       recentre() runs once per SOLVER STEP, of which there are up to sixteen
+       in a single frame once the fast-forward winds up. So the camera zoomed
+       up to sixteen times faster per frame exactly when time was most
+       compressed: measured, the fractional change per frame went from 2.7% at
+       real time to 8.0% at three to six times, which is about 480% a second
+       and reads as lurching in and out. */
+    this.viewTarget = Math.min(CONFIG.viewMax, Math.max(10, rFrame*1.4));
+  }
+
+  /* Colour by speed measured against the LOCAL ESCAPE VELOCITY.
+
+     This is a better question than "how fast, on some arbitrary scale". A body
+     at v/v_esc = 1 is leaving forever no matter where it sits, so red always
+     means the same physical thing whether the body is deep in the well or far
+     out in the halo. It also uses the full colour range for free: the scale is
+     anchored at both ends by physics rather than by whatever the fastest body
+     happened to be doing this frame. */
+  escapeFraction(i) {
+    const r = Math.hypot(this.x[i], this.y[i], this.z[i]) + this.s.soft;
+    const vEsc = Math.sqrt(2*this.s.G*this.boundMass/r);
+    const v = Math.hypot(this.vx[i], this.vy[i], this.vz[i]);
+    return v/vEsc;
+  }
+}
+
+/* ======================= rendering ======================= */
+const canvas = document.getElementById('sky');
+const ctx = canvas.getContext('2d', { alpha:false });
+const titleEl = document.getElementById('title');
+const nameEl = titleEl.querySelector('.name');
+const blurbEl = titleEl.querySelector('.blurb');
+const infoEl = document.getElementById('info');
+
+let W=0, H=0, DPR=1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.floor(innerWidth*DPR); H = Math.floor(innerHeight*DPR);
+  canvas.width = W; canvas.height = H;
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H);
+}
+addEventListener('resize', resize);
+resize();
+
+let sim=null, runIndex=-1, camAngle=0, fps=0, paused=false, lastFrame=performance.now();
+let lastDrawT=0;     // sim time at the previous draw, for integrating spin
+let boostSmooth=1;   // eased fast-forward multiplier
+/* Leftover fraction of a physics step, carried to the next frame.
+
+   Easing boostSmooth was only half the job: nSteps was round()ed, so with
+   spf=2 the achievable rates were the whole numbers 2,3,4...16 and the jump
+   from 2 to 3 is a FIFTY PERCENT change in speed, held for seconds and then
+   stepped again. That is the lurch. Carrying the fraction over means the
+   average rate follows boostSmooth exactly and continuously; the frame count
+   dithers between k and k+1 instead of sitting on the wrong integer. */
+let stepAcc=0;
+let handingOff = false;
+
+function newRun() {
+  runIndex++;
+  const scenario = SCENARIOS[Math.floor(Math.random()*SCENARIOS.length)];
+  sim = new Sim(scenario, 1 + Math.floor(Math.random()*999998));
+  camAngle = Math.random()*Math.PI*2;
+  boostSmooth = 1; stepAcc = 0; lastDrawT = 0;
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H);
+  nameEl.textContent = scenario.name;
+  blurbEl.textContent = scenario.blurb;
+  titleEl.classList.add('show');
+  setTimeout(() => titleEl.classList.remove('show'), 9000);
+  setCaption(
+    'Every body pulls on every other. Bodies that touch merge, conserving mass, momentum and angular momentum, so the count only ever falls and an off-centre hit leaves the new body spinning. Colour is speed as a fraction of escape velocity — red means this one is leaving for good.',
+    `${scenario.N} bodies  ·  G ${scenario.G}  ·  softening ${scenario.soft}  ·  dt ${scenario.dt}  ·  seed ${sim.seed}`);
+}
+
+/* ---- irregular bodies ----
+   Real accreted bodies are rubble piles, not spheres. A deterministic radial
+   wobble driven by hash01 gives each body a stable silhouette for free - no
+   per-body geometry stored, and it changes when the body merges (the salt
+   bumps), so a growing body visibly becomes a new aggregate.
+
+   Cost is trivial: ~14 vertices per body, only for bodies big enough on
+   screen to show a silhouette at all. Anything smaller stays a disc, because
+   below a few pixels the shape is invisible and the arc is cheaper. */
+const LOBES = 14;
+/* `lump` fades the silhouette's relief toward a smooth disc, and exists to
+   stop a fast rotator aliasing. The outline repeats every 2*pi/LOBES, so once
+   a body turns more than half that in one frame the lumps sample past their
+   own Nyquist limit and the rock appears to jitter, stall or run backwards -
+   at 8x fast-forward that was happening to nearly half of all drawn
+   silhouettes. The relief simply fades out instead, which is honest: at that
+   speed there is no orientation left to show.
+
+   The fade costs nothing in size because the weights average exactly 1
+   (0.80 + 0.30/2 + 0.10/2), so lump = 0 relaxes to a regular LOBES-gon of the
+   SAME radius - no pop as it crosses over. */
+/* The outline: an ellipse of semi-axes radA and radB tilted to `tilt`, with
+   the old lumpy relief riding on top of it. A body that has never merged has
+   radA === radB and this is exactly the circle it always was. */
+function boulderPath(i, salt, cxp, cyp, radA, radB, tilt, rot, lump) {
+  const ct2 = Math.cos(tilt), st2 = Math.sin(tilt);
+  ctx.beginPath();
+  for (let k = 0; k < LOBES; k++) {
+    const a = (k/LOBES)*Math.PI*2 + rot;
+    // two octaves: broad lumps plus finer chips
+    const w = 1 + lump*(0.30*hash01(i*131 + k, salt)
+                      + 0.10*hash01(i*977 + k*7, salt+1) - 0.20);
+    // the lobe in the body's own frame, then turned into the screen frame
+    const u = Math.cos(a)*radA*w, v = Math.sin(a)*radB*w;
+    const px = cxp + u*ct2 - v*st2, py = cyp + u*st2 + v*ct2;
+    if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
+
+function draw(nowSec) {
+  ctx.fillStyle = `rgba(0,0,0,${CONFIG.trail})`;
+  ctx.fillRect(0, 0, W, H);
+
+  const barH = H*CONFIG.barHeight;
+  const fieldH = H - barH*2.1;
+  const scale = Math.min(W, fieldH)/(2*sim.viewRadius);
+  const cx = W/2, cy = fieldH/2;
+  const ca = Math.cos(camAngle), sa = Math.sin(camAngle);
+  const st = Math.sin(CONFIG.camTilt), ct = Math.cos(CONFIG.camTilt);
+
+  /* Turning the spin VECTOR into the rotation you actually see.
+
+     A flat silhouette can only show rotation about the line of sight, so that
+     is the component we take - a body whose axis points at the camera spins
+     on screen, one whose axis lies across the view barely does, which is what
+     a real tumbling rock looks like from a fixed viewpoint.
+
+     The angle is INTEGRATED, not recomputed as rate*time. With rate*time an
+     absolute clock is multiplied by a rate that changes at every merger, so
+     the moment a body's spin changed its drawn angle jumped to somewhere
+     completely different - a visible pop exactly when the viewer's eye had
+     been drawn to the collision. */
+  const nvx = sa*ct, nvy = ca*ct, nvz = st;
+  const dtSim = Math.max(0, sim.t - lastDrawT); lastDrawT = sim.t;
+
+  const order = [];
+  for (let i = 0; i < sim.n; i++) {
+    if (!sim.active[i]) continue;
+    const ry = sim.x[i]*sa + sim.y[i]*ca;
+    order.push([i, ry*ct + sim.z[i]*st]);       // depth for painter's sort
+  }
+  order.sort((a,b) => a[1]-b[1]);
+
+  for (const [i] of order) {
+    /* Uniform sphere about its own centre, I = 2/5 M R^2, on the DRAWN radius.
+
+       NOT the collision radius - but not because r[i] is unphysical. It is the
+       more physical of the two: dens is SMALL for a dense body (0.22 on a
+       star, see set()), so r[i] shrinks as density rises exactly as a real
+       radius does, R ~ rho^(-1/3). Measured on the Tidal Encounter core it
+       implies a bulk density of 1622 against a rubble pile's 17.3.
+
+       The objection is different. Those densities are chosen for what the
+       ACCRETION RATE needs - 0.22 on a star so the central mass does not
+       swallow the field in seconds - not from any density model, so taking the
+       inertia from them hands a star's spin rate to a collision-tuning knob.
+       It also makes that spin unwatchable: the same core comes out with I some
+       63x smaller and turns at about 150 revolutions per wall second.
+
+       rDraw states one bulk density for every body and is the radius actually
+       on screen, so the sphere the viewer watches turning is the sphere whose
+       rate is being drawn. That is a rendering-consistency argument, and it is
+       the honest one.
+
+       With the right inertia the honest rate is already watchable and needs no
+       display fudge: the fastest bodies measured run a few revolutions a
+       second, and the breakup shedding at merge time bounds the top end.
+
+       Only the component along the line of sight is drawn, because a flat
+       silhouette can only show rotation about that axis. A body whose spin
+       axis lies across the sky will therefore visibly slow, stop and reverse
+       as the camera orbits over three minutes. That is correct projection
+       geometry, not a glitch - do not "fix" it by taking |L|, which would
+       throw away the orientation this is carrying. */
+    const Rb = sim.rDraw[i];
+    const Ib = 0.4*sim.m[i]*Rb*Rb;
+    let dPhi = 0;
+    if (Ib > 0) {
+      dPhi = (sim.lx[i]*nvx + sim.ly[i]*nvy + sim.lz[i]*nvz)/Ib * dtSim;
+      sim.ang[i] += dPhi;
+    }
+    // relief fades out as the turn per frame approaches the lobe Nyquist limit
+    const lump = 1 - Math.min(1, Math.abs(dPhi)/(Math.PI/LOBES));
+
+    /* CARRY THE LONG AXIS ROUND WITH THE BODY.
+
+       The shape has to turn with the spin it was given, or the two drift apart
+       and the elongation stops meaning anything. This rotates the stored axis
+       about the FULL angular velocity vector - not the line-of-sight part used
+       for the drawn angle - because the axis lives in the world, not on the
+       screen. Rodrigues' formula, which is the cheapest exact way to turn a
+       unit vector about an arbitrary axis. */
+    let axA = Rb, axB = Rb, eU = 1, eV = 0;
+    if (sim.aW[i] > 0 && Ib > 0) {
+      const Lm = Math.hypot(sim.lx[i], sim.ly[i], sim.lz[i]);
+      if (Lm > 0) {
+        const kx = sim.lx[i]/Lm, ky = sim.ly[i]/Lm, kz = sim.lz[i]/Lm;
+        const th = (Lm/Ib)*dtSim;
+        const cth = Math.cos(th), sth = Math.sin(th);
+        const ex = sim.ex[i], ey = sim.ey[i], ez = sim.ez[i];
+        const kd = kx*ex + ky*ey + kz*ez;
+        const nx = ex*cth + (ky*ez - kz*ey)*sth + kx*kd*(1-cth);
+        const ny = ey*cth + (kz*ex - kx*ez)*sth + ky*kd*(1-cth);
+        const nz = ez*cth + (kx*ey - ky*ex)*sth + kz*kd*(1-cth);
+        const nn = Math.hypot(nx, ny, nz) || 1;      // renormalise against drift
+        sim.ex[i] = nx/nn; sim.ey[i] = ny/nn; sim.ez[i] = nz/nn;
+      }
+
+      /* The projected outline of a prolate spheroid. Volume is preserved, so
+         a long body is a thin one: a*b^2 = R^3. Seen at an angle g to the long
+         axis the silhouette is an ellipse of semi-minor b and semi-major
+         sqrt(a^2 sin^2 g + b^2 cos^2 g) - end-on it is simply a disc of radius
+         b. That foreshortening is why the body appears to lengthen and shorten
+         as it turns, and it is exact rather than an approximation. */
+      const a = Math.max(sim.aW[i], Rb);
+      const b = Math.sqrt(Math.max(1e-12, (Rb*Rb*Rb)/a));
+      // the axis in screen coordinates: two in-plane components and one along
+      // the line of sight, which together are a unit vector
+      eU = sim.ex[i]*ca      - sim.ey[i]*sa;
+      eV = sim.ex[i]*sa*st   + sim.ey[i]*ca*st - sim.ez[i]*ct;
+      const inPlane2 = eU*eU + eV*eV;                 // = sin^2 g
+      axA = Math.sqrt(a*a*inPlane2 + b*b*(1-inPlane2));
+      axB = b;
+    }
+
+    const rx = sim.x[i]*ca - sim.y[i]*sa;
+    const ry = sim.x[i]*sa + sim.y[i]*ca;
+    const sx = cx + rx*scale;
+    const sy = cy + (ry*st - sim.z[i]*ct)*scale;
+
+    const col = turbo(sim.escapeFraction(i));
+    const rad = Math.max(2.2*DPR, sim.rDraw[i]*CONFIG.markerGain*scale);
+    // the same figure in pixels, and which way its long axis points on screen
+    const radA = Math.max(2.2*DPR, axA*CONFIG.markerGain*scale);
+    const radB = Math.max(2.2*DPR, axB*CONFIG.markerGain*scale);
+    const tilt = Math.atan2(eV, eU);
+
+    if (rad > 7*DPR) {   // glow only where it reads
+      const g = ctx.createRadialGradient(sx, sy, rad*0.45, sx, sy, rad*2.5);
+      g.addColorStop(0, rgba(col, 0.28));
+      g.addColorStop(1, rgba(col, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(sx, sy, rad*2.5, 0, 6.2832); ctx.fill();
+    }
+
+    /* THE FLASH. Brightness and size both come from how much kinetic energy
+       the merger destroyed, against the MEDIAN merger for this scenario -
+       measured, and stored per scenario, because those medians differ 32-fold
+       between them and a single constant would leave one run invisible and
+       white out another.
+
+       Logarithmic, because the spread WITHIN a run is far wider than between
+       them: the energies span roughly six decades, and on a linear scale the
+       typical collision would be a dark speck beside the rare one. A decade
+       below the median draws nothing, the median draws a modest flare, and two
+       and a half decades above it saturates. */
+    const fe = sim.flashE[i];
+    if (fe > 0) {
+      const age = (nowSec*1000 - sim.flashT[i]) / CONFIG.flashMs;
+      if (age >= 1) { sim.flashE[i] = 0; }
+      else {
+        const ref = sim.s.keRef || 1;
+        const u = Math.max(0, Math.min(1, (Math.log10(fe/ref) + 1)/2.5));
+        const a = (1-age)*(1-age)*(0.18 + 0.82*u);
+        // bounded so even the rarest collision cannot wash out the frame
+        const rr = Math.min(H*0.22, rad*(2.2 + 11*u));
+        const g2 = ctx.createRadialGradient(sx, sy, 0, sx, sy, rr);
+        g2.addColorStop(0,    'rgba(255,252,242,' + a.toFixed(3) + ')');
+        g2.addColorStop(0.30, 'rgba(255,226,160,' + (a*0.42).toFixed(3) + ')');
+        g2.addColorStop(1,    'rgba(255,170,80,0)');
+        ctx.fillStyle = g2;
+        ctx.beginPath(); ctx.arc(sx, sy, rr, 0, 6.2832); ctx.fill();
+      }
+    }
+
+    ctx.fillStyle = rgb(col);
+    // Silhouettes only where they can actually be seen. Below ~6px a 14-sided
+    // outline just reads as a hexagon, which looks like a rendering bug rather
+    // than a rubble pile; a plain disc is both cheaper and more honest there.
+    if (rad > 6*DPR) {
+      boulderPath(i, sim.salt[i], sx, sy, radA, radB, tilt, sim.ang[i], lump);
+      ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(sx, sy, rad, 0, 6.2832); ctx.fill();
+    }
+  }
+
+  drawMassBar(barH);
+}
+
+/* ---- mass bar ----
+   One horizontal bar spanning the screen, showing the whole system's mass
+   partitioned among its bodies, largest first, each segment coloured exactly
+   as its body is. At the start it is a fine comb of hundreds of slivers; as
+   accretion proceeds the comb resolves into a few broad blocks. That IS the
+   story of the simulation, told as a single line. */
+function drawMassBar(barH) {
+  const y = H - barH*1.55, pad = W*0.035, barW = W - pad*2;
+
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  ctx.fillRect(pad, y, barW, barH);
+
+  const list = [];
+  for (let i = 0; i < sim.n; i++) if (sim.active[i]) list.push(i);
+  list.sort((a,b) => sim.m[b] - sim.m[a]);
+
+  const total = sim.boundMass || 1;
+  let x = pad;
+  for (const i of list) {
+    const w = (sim.m[i]/total)*barW;
+    ctx.fillStyle = rgb(turbo(sim.escapeFraction(i)));
+    // Sub-pixel segments still deserve a mark, or a swarm of small bodies
+    // silently vanishes from the bar it is supposed to be represented in.
+    ctx.fillRect(x, y, Math.max(w, 0.6), barH);
+    if (w > 2.5) {                             // hairline separator
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(x + w - 1, y, 1, barH);
+    }
+    x += w;
+  }
+
+  // Labels sit ABOVE the bar: below it they run off the bottom of the screen.
+  ctx.fillStyle = 'rgba(196,210,228,0.68)';
+  ctx.font = `500 ${Math.round(barH*0.60)}px ui-monospace, Menlo, monospace`;
+  ctx.textBaseline = 'bottom';
+  ctx.textAlign = 'left';
+  ctx.fillText(`${sim.alive} bodies`, pad, y - barH*0.35);
+  ctx.textAlign = 'right';
+  ctx.fillText(sim.settled ? 'SETTLED' : `${sim.merges} mergers`, pad + barW, y - barH*0.35);
+
+  /* How fast time is running, in the empty middle of the bar's label line -
+     the only strip up here that the two end labels can never reach. Quiet
+     stretches are fast-forwarded and a merger drops it straight back to real
+     time, so without this the viewer has no way to tell a genuinely frantic
+     moment from a compressed one. */
+  const mult = sim.settled ? 1 : boostSmooth;   // 1x is spf steps/frame
+  ctx.textAlign = 'center';
+  ctx.fillStyle = mult < 1.08 ? 'rgba(196,210,228,0.68)' : 'rgba(255,214,140,0.86)';
+  ctx.fillText(mult < 1.08 ? 'REAL TIME' : `TIME \u00D7${mult.toFixed(1)}`,
+               pad + barW*0.5, y - barH*0.35);
+  ctx.fillStyle = 'rgba(196,210,228,0.68)';
+  ctx.textAlign = 'left';
+}
+
+function updateInfo() {
+  if (!sim) return;
+  infoEl.textContent =
+    `scenario  ${sim.s.name}\n` +
+    `seed      ${sim.seed}\n` +
+    `bodies    ${sim.alive} / ${sim.n}\n` +
+    `merges    ${sim.merges}   escaped ${sim.escaped}\n` +
+    `spin shed ${sim.shed.toFixed(2)}  (L lost to breakup)\n` +
+    `flash ref ${sim.s.keRef}  (median this run ${(()=>{const k=sim.keLog.slice().sort((a,b)=>a-b); return k.length?k[k.length>>1].toFixed(2):'-';})()})\n` +
+    `centre    clump ${(100*(sim.clumpMass||0)/(sim.boundMass||1)).toFixed(0)}% of mass, shift ${(sim.shift||0).toFixed(3)}/step\n` +
+    `steps     ${sim.steps}  (last merge ${sim.steps - sim.lastMerge} ago)\n` +
+    `settled   ${sim.settled ? 'yes' : 'no'}\n` +
+    `boost     ${boostSmooth.toFixed(2)}x\n` +
+    `view r    ${sim.viewRadius.toFixed(1)}\n` +
+    `fps       ${fps.toFixed(0)}${paused ? '  [PAUSED]' : ''}`;
+}
+
+function handOff() {
+  if (handingOff) return;
+  handingOff = true;
+  const t0 = performance.now();
+  (function fade() {
+    const k = Math.min(1, (performance.now()-t0)/1400);
+    ctx.fillStyle = `rgba(0,0,0,${0.05 + 0.2*k})`;
+    ctx.fillRect(0, 0, W, H);
+    if (k < 1) requestAnimationFrame(fade);
+    /* An EMPTY nextPage means there is nowhere to hand on to - which is what
+       build_github.py leaves behind when it cuts this page out of the wall's
+       rotation for publishing. Start again instead. */
+    else if (CONFIG.nextPage) location.href = CONFIG.nextPage;
+    else location.reload();
+  })();
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dtms = now - lastFrame; lastFrame = now;
+  fps = fps ? fps*0.9 + (1000/dtms)*0.1 : 1000/dtms;
+  if (paused || handingOff) return;
+
+  // A settled system is held on screen so the outcome can be taken in, then
+  // the next scenario begins.
+  if (sim && sim.settled && now - sim.settledAt > CONFIG.holdMs) {
+    if (!PINNED && runIndex + 1 >= CONFIG.runsPerTurn) { handOff(); return; }
+    newRun();
+  }
+
+  if (!sim.settled) {
+    /* Fast-forward through quiet stretches - but EASE into it. Stepping the
+       multiplier in whole integers made the whole field visibly lurch between
+       speeds, which reads as the animation stuttering rather than as time
+       being compressed. The target still snaps back to 1x on a merge; only the
+       approach to it is smoothed, so speed changes are gradual either way. */
+    const quiet = sim.steps - sim.lastMerge;
+    const target = Math.min(CONFIG.maxBoost, 1 + quiet / CONFIG.boostAfter);
+    boostSmooth += (target - boostSmooth) * (target < boostSmooth ? 0.10 : 0.02);
+    stepAcc += sim.s.spf * boostSmooth;
+    const nSteps = Math.max(1, Math.floor(stepAcc));
+    stepAcc -= nSteps;                      // keep only the remainder
+    if (stepAcc < 0) stepAcc = 0;           // the max(1,...) floor can overdraw
+    for (let k = 0; k < nSteps; k++) sim.step();
+  } else {
+    /* The hold runs at TRUE 1x, which means spf steps - not one. Stepping once
+       here made the settled system drift at half the speed it had been moving
+       a moment earlier, and now that the readout says REAL TIME during the
+       hold, that would have been a plain lie. A merger during the hold still
+       clears `settled` and the run carries on, which is the intended
+       behaviour: if bodies are still colliding the story is not over. */
+    for (let k = 0; k < sim.s.spf; k++) sim.step();
+  }
+
+  /* Move the zoom ONCE PER FRAME, and never faster than a fixed fraction of
+     the current radius. The per-frame easing makes the speed independent of
+     how much physics a frame contains; the cap is what makes it calm, because
+     when the system is expanding quickly the TARGET runs away fast and an
+     uncapped ease would chase it just as fast. With the cap the picture can
+     only ever breathe at one rate, whatever the simulation is doing. */
+  if (sim.viewTarget > 0) {
+    const cur = sim.viewRadius;
+    let d = (sim.viewTarget - cur) * CONFIG.zoomEase;
+    const cap = cur * CONFIG.zoomMaxRate;
+    if (d >  cap) d =  cap;
+    if (d < -cap) d = -cap;
+    sim.viewRadius = cur + d;
+  }
+
+  camAngle += CONFIG.camRate*(dtms/1000);
+  draw(now/1000);
+  if (document.body.classList.contains('showinfo')) updateInfo();
+}
+
+addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': newRun(); break;
+    case 'p': case 'P': case ' ': paused = !paused; updateInfo(); break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      if (/^[0-9]$/.test(e.key)) {
+        const score = e.key === '0' ? 10 : parseInt(e.key, 10);
+        console.log('[gravity] RATING STUB - score', score,
+                    'scenario', sim && sim.s.name, 'seed', sim && sim.seed);
+      }
+  }
+});
+
+newRun();
+requestAnimationFrame(frame);
+</script>
+<script src="nav.js"></script>
+</body>
+</html>

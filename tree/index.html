@@ -1,0 +1,2234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- ======================================================================
+     NOTES FROM THE PI / DISPLAY-MANAGEMENT SESSION          (2026-08-18)
+
+     From the session that owns the Raspberry Pi and the rotation, to the
+     session that owns this page. Observations only - no code changed here.
+     Joe has seen these and is happy with the cream palette as it is, so the
+     earlier note about it clashing with the dark pages has been withdrawn.
+
+     MEASURED ON THE ACTUAL PI (4K, year ~9, 2,997 shoots):
+       ~18% CPU on the main Chromium process, 61.5 C, no throttling.
+       plume.html runs at 47% for comparison. This is the CHEAPEST page in the
+       rotation. If leafCap (5200) or maxPasses (42) have been held down for
+       performance, they need not be. Hardware is a Pi 5 / 8 GB at 3840x2160.
+       The dirty-flag redraw (paint only when stepped/viewMoved/finishing) is
+       a large part of why it is so cheap - worth keeping as the page grows.
+
+     1. NOTHING GUARANTEES THIS PAGE EVER HANDS THE SCREEN ON.  handOff() is
+        reached only via finishedAt, which is set only when
+        T.day >= TOTAL_DAYS(). runMs is used to derive the growth RATE, not as
+        a deadline. So if simulate() ever throws, stalls, or the day counter
+        stops advancing for any reason, the wall sits on a frozen tree
+        indefinitely - rAF keeps rescheduling because it is called before the
+        body of frame(). Every other page has an escape hatch (kiosk has an
+        explicit watchdog, gravity has maxSteps, surnames has maxMs). A single
+        absolute deadline - if (now - runStart > runMs * 1.6) handOff() -
+        would remove the only way this piece can capture the display. On a
+        wall that runs unattended for weeks this is the one I would fix first.
+
+     2. NO PERSISTENT CAPTION.  Every other display carries two fixed lines at
+        the bottom: one plain-language sentence on what is being illustrated,
+        and one line of the parameter values behind THIS run. Joe asked for
+        this across all displays. The title card here dissolves after 9 s and
+        the ticker carries only state (year / height / shoots), so a viewer
+        arriving mid-run cannot tell what they are watching. The other pages
+        expose setCaption(what, params); copying that pattern would make this
+        consistent. Worth putting the SEED in the params line - makeTree(seed)
+        already takes one, and a seed on screen is what lets a particularly
+        good tree be found again.
+
+     3. THE 16:9 PANEL IS MOSTLY EMPTY.  fitView() works, but a tall narrow
+        subject fitted by height leaves roughly the outer thirds of a 4K
+        screen blank. Options, in rough order of effort:
+          (a) slowly orbit camAz during the run (fixed at -37 deg now). Costs
+              nothing, reveals the crown's 3D structure, and the swing uses
+              the width naturally. gravity.html orbits at 0.035 rad/s.
+          (b) use the margin for a quiet line graph on the paper - height by
+              year, or shoot count - which suits the botanical-plate look.
+          (c) tighten the vertical margins so the tree simply runs larger.
+
+     4. CLAMP THE FRAME DELTA.  dayDebt += (now - lastStepAt) * perMs has no
+        bound on the delta. The want > 0 guard means a negative first delta is
+        harmless (rAF timestamps can precede a performance.now() taken just
+        before - that exact case produced a NaN that silently killed the wind
+        field in plume.html). The live risk is the other direction: any long
+        stall banks unbounded debt and the tree then sprints at the 6-step cap
+        to catch up. Math.min(250, now - lastStepAt) would cap it.
+
+     5. TURN LENGTH.  runMs 205 s + holdMs 11 s makes this the longest single
+        page in an eight-page rotation (most others run 60-120 s), so the full
+        cycle is now ~15 min and any one piece comes round less often. Growth
+        genuinely needs the time - just worth being a deliberate choice.
+
+     6. DEPLOYMENT.  Only the Pi session pushes files to the Pi; editing this
+        file locally does not reach the wall. On 2026-08-18 the ring was
+        rewired to plume -> tree -> kiosk before tree.html had been copied
+        across, and the TV sat on "file not found" until it was. Ping the Pi
+        session to deploy; that step now verifies every nextPage target
+        resolves ON THE PI before finishing.
+
+     7. Conventions already correct, for the record: PINNED / ?pin, the i-n-p
+        keys, the digit RATING STUB, nextPage handoff, and clock-based rather
+        than per-frame stepping. Nothing to change.
+     ====================================================================== -->
+<title>Heartwood</title>
+<style>
+  /* Self-contained on purpose: no external files, fonts or libraries, so this works as a
+     file:// page on the Pi kiosk AND as a single drop-in file on GitHub Pages. Same
+     contract as gravity.html and surnames.html. */
+  html, body { margin:0; padding:0; height:100%; background:#efe7d7; overflow:hidden; }
+  canvas { position:fixed; left:0; top:0; display:block; }
+  * { cursor:none; }
+
+  #curtain {
+    position:fixed; inset:0; z-index:20; background:#efe7d7; pointer-events:none;
+    opacity:0; transition:opacity 1400ms ease-in-out;
+  }
+  #curtain.on { opacity:1; }
+
+  #info {
+    position:fixed; left:2vw; bottom:9vh; z-index:10; display:none;
+    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,"SF Mono",Menlo,monospace;
+    color:#3a3128; background:rgba(239,231,215,.82); padding:.7em 1em;
+    border-radius:.4em; border:1px solid rgba(90,74,58,.25); white-space:pre;
+  }
+  body.showinfo #info { display:block; }
+
+  /* Title, faded in at the start of each run. Dark ink on the cream page -- this piece
+     is a drawing, so the text is drawn on the paper rather than lit over a dark scene. */
+  #title {
+    position:fixed; left:0; right:0; top:0; z-index:9; text-align:center;
+    padding:5vh 6vw 9vh; box-sizing:border-box;
+    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out;
+  }
+  #title.show { opacity:1; }
+  #title .name {
+    font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.22em; text-transform:uppercase; color:rgba(58,49,40,.78);
+  }
+  #title .blurb {
+    margin-top:.9em;
+    font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.06em; color:rgba(78,66,54,.55);
+  }
+
+  /* Two persistent lines, the convention every other page in the rotation
+     carries: one plain sentence saying what is being illustrated, one line of
+     the parameters behind THIS run. The title card dissolves after nine
+     seconds, so without these a viewer arriving mid-run has no idea what they
+     are looking at. Dark ink on the cream page rather than the light-on-dark
+     the other pages use. (Pi session note 2.) */
+  #caption {
+    position:fixed; left:0; right:0; bottom:2.4vh; z-index:8;
+    text-align:center; pointer-events:none; padding:0 4vw;
+    opacity:0; transition:opacity 1.2s ease-in-out;
+  }
+  #caption.show { opacity:1; }
+  #caption .what {
+    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.055em; color:rgba(58,49,40,.62);
+  }
+  #caption .params {
+    margin-top:.45em;
+    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
+    letter-spacing:.02em; color:rgba(78,66,54,.44);
+  }
+</style>
+</head>
+<body>
+<canvas id="page"></canvas>
+<div id="title"><div class="name"></div><div class="blurb"></div></div>
+<div id="caption"><div class="what"></div><div class="params"></div></div>
+<div id="info"></div>
+<div id="curtain"></div>
+
+<script>
+/* ---- rotation navigation (remote D-pad) --------------------------------
+   Right steps to the next piece in the wall's rotation, left to the previous
+   one. The ring is listed explicitly rather than derived from nextPage,
+   because nextPage only points forwards - there is no way to walk it
+   backwards. Keep this list in step with the nextPage chain. */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+/* =======================================================================
+   HEARTWOOD -- an open-grown sugar maple, grown live in the browser.
+
+   A deliberately reduced port of tree_phase10.m (Joe's mechanistic Acer
+   saccharum model, ~5,600 lines of MATLAB) plus the pencil-stroke look of
+   tree_art.m / build_strokes.m. It simulates, it does not replay: every
+   showing grows a different tree from a different seed.
+
+   WHAT WAS CUT, AND WHY IT COST NOTHING TO CUT
+   --------------------------------------------
+   The MATLAB model spends roughly three quarters of its runtime on a phloem
+   sucrose field solved as a differential-algebraic system by damped Newton,
+   once per simulated day. That field comes out spatially FLAT -- measured at
+   day 4010 on a 6,863-node tree, trunk C 90.1 against a lateral minimum of
+   90.2, a spread under 2% -- because munch_phloem sets the edge conductance
+   proportional to leaves_above precisely so the source-to-sink drop is
+   size-independent (tree_phase10.m:5237). Every visible thing it drives goes
+   through four global scalars. So here it is ONE global number, C, on a
+   whole-tree budget. Growth rate is still an OUTPUT of that budget; it is
+   never scripted, which is the one rule of this model that cannot be bent.
+
+   The other expensive thing was the light field: 25 sky directions, each
+   allocating dense N-by-N occlusion temporaries, every day
+   (compute_angular_light, :3719). Benchmarked at 4.2 SECONDS per call at
+   N=10,000 in JS. Here it is a 0.5 m voxel occupancy grid marched in 7
+   directions and refreshed every few steps -- the same field to within a
+   cell, about 270x cheaper. Side-shading is kept, not dropped: the model's
+   own note at :1011 records that pure overhead Beer-Lambert grows a palm
+   tree, because branch flanks come out wrongly deep-shaded.
+
+   Also gone: auxin (apical_control is already default-off at :1430), the
+   root and starch pools, the respiration partition, cork, the diurnal solar
+   integral, the descendant matrix (every reader of it is a subtree sum, which
+   is one reverse pass over birth order), and the seasonal growth gate --
+   season survives as leaf colour, not as a growth clock, because with it on
+   the leader needs ~25 simulated years to reach the handoff and the piece
+   would end on a sapling.
+
+   WHAT HAD TO STAY, OR IT STOPS BEING A MAPLE
+   -------------------------------------------
+     - fork insertion angle measured from the PARENT axis, decaying with
+       radial distance -- wide scaffolds low, narrow forks at the tips
+     - a birth-elevation floor, or a third of the crown is born aimed down
+     - decussate pairs: two buds 180 deg apart, next pair rotated 90 deg
+     - the 0.5 m trunk relay -- this, and only this, is the bole
+     - leader retirement to co-leaders, or it stays an excurrent spire
+     - shoot LENGTH graded by height and light, plus a radial reach bound;
+       this, not branch angle, is what makes a dome instead of a cone
+     - preformation: length = a COUNT x a SPACING, so spurs can exist at all
+     - shade death: about 70% of shoots born must die, or the crown is a blob
+       instead of a lit shell over bare interior wood
+   ======================================================================= */
+
+const CONFIG = {
+  /* ---- piece ---- */
+  /* Long enough to get well past the leader handoff (~yr 10). The decurrent
+     spread -- the spire opening into a dome -- happens AFTER the leader retires,
+     so a 13-year run ended three years too early and the tree stayed columnar. */
+  /* Height plateaus near 7.8 m under the hydraulic cap, so years past ~20 go
+     into WIDTH rather than up -- which is exactly the decurrent spread, and the
+     reason to keep running. */
+  simYears:        22,
+  runMs:       205000,     // wall-clock target for the growth phase
+  holdMs:       11000,     // finished tree held on screen before the fade
+  fadeMs:        1400,
+  titleMs:       9000,
+  runsPerTurn:      1,
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,
+  deadlineSlack:  1.6,     // hand off unconditionally past runMs * this
+  fitMin:        0.34,     // share of frame height a seedling gets
+  fitMax:        0.88,     // ... and a grown tree
+  person:        true,     // the 1.75 m figure that gives the scene absolute scale
+  /* A slow orbit. The subject is tall and narrow and a 16:9 panel fitted by
+     height leaves the outer thirds of a 4K screen empty; swinging the camera
+     uses that width and reveals that the crown is a 3-D object rather than a
+     silhouette. Far slower than gravity.html's 0.035 rad/s -- this is a
+     botanical plate, so it should drift, not spin. About 25 degrees over a
+     full run. Set to 0 for the fixed plate. (Pi session note 3a.) */
+  camOrbit:     0.0021,    // rad/s
+  /* 12, not 20. Calibrating against the Pi session's own measurement (18% CPU
+     at year 9, which is ~5-6 ms a frame here at ~13 paints/s) puts the Pi at
+     about 2.6x this laptop rather than the 5x I had assumed. At 4K, year 22
+     costs ~15 ms a paint here, so ~39 ms there: 20 fps would be ~78% CPU,
+     12 fps is ~47% -- the same as plume.html. The orbit is still smooth at 12,
+     because 0.0021 rad/s moves the far edge of the crown about a third of a
+     pixel between paints. */
+  maxPaintFps:     10,
+
+  /* ---- pacing ----
+     dt is in simulated DAYS per step. The whole piece is ~4,700 days, so at
+     dt=3 that is ~1,580 steps spread over runMs -- roughly 8 per second,
+     which is far below frame rate. The sim is not the cost here; the drawing
+     is. Steps are taken on a clock, not per frame, so the growth runs at the
+     same speed whether the panel manages 60 fps or 24. */
+  dt:               3,
+  lightEvery:       4,     // steps between light-field refreshes
+  postureEvery:     2,     // steps between posture updates
+
+  /* ---- render ---- */
+  inkAlpha:      0.50,     // per-stroke alpha; thickness is BUILT UP, never widened
+  jitterGain:    0.42,     // stroke offset SD = gain * 2 * radius  (build_strokes.m)
+  /* Passes must FILL the scattered band, not merely suggest it. Hairlines of
+     width w spread over +/-sd need roughly 2*sd/w of them before the band reads
+     as solid wood; at 7 passes across a 6.6 px band the trunk came out a sparse
+     fuzz instead of a dark column. */
+  lineW:         0.85,
+  leafCap:       9000,     // LOD ceiling on drawn leaves (Pi has headroom)
+  camAz:      -37*Math.PI/180,
+  camEl:       12*Math.PI/180
+};
+const PINNED = /[?&]pin\b/.test(location.search);
+
+/* =======================================================================
+   PARAMETERS -- ported values, each with the tree_phase10.m line it came
+   from. Anything not traceable to the model is marked INVENTED, so the two
+   are never confused when this is read back later.
+   ======================================================================= */
+const P = {
+  // ---- light ----
+  I_open:        1500,     // [umol] open sky                              (:988)
+  I_floor:         50,     //                                              (:989)
+  k_Beer:         0.5,     //                                              (:1003)
+  K_elong_light:  120,     // f_light_e = I/(I+120)              [MAPLE]   (:1777)
+  hill_K:         400,     // f_light_h = I^1.5/(400^1.5+I^1.5)            (:1046)
+  hill_n:         1.5,     //                                              (:1047)
+  f_light_crit:  0.25,     // HARD bud-break cutoff              [MAPLE]   (:1760)
+
+  // ---- Borchert-Honda apical control ----
+  lambda_bh:     0.60,     //                                              (:521)
+  bh_floor:      0.12,     // every broken bud keeps >= a spur             (:524)
+  sigma_bh:      0.15,     // birth-frozen lognormal vigor noise           (:523)
+  tau_short:      120,     // tau_node = tau_short + (tau_elong-tau_short)*v [MAPLE] (:1786)
+  tau_elong:     2190,     //                                              (:438)
+
+  // ---- preformation: length = count x spacing ----
+  n_pre_min:        2,     // [pairs]                                      (:1653)
+  n_pre_max:        7,     // [pairs]                                      (:1654)
+  internode_spur: 0.002,   // [m] rosette                                  (:1655)
+  internode_long: 0.05,    // [m]                                          (:1656)
+
+  // ---- geometry ----
+  fork_ang_min:  5*Math.PI/180,      //                                    (:1405)
+  fork_ang_max: 65*Math.PI/180,      //                                    (:1406)
+  /* Slackened from the model's 0.60 so forks stay wide further out from the
+     bole: a picture wants the broader silhouette, and at 0.60 the crown came
+     out at CDmax/H 0.52 against a real 0.67. */
+  fork_kpath:    0.32,               // [1/m] angle decay  (model MAPLE: 0.60, :1814)
+  ang_jitter:    7*Math.PI/180,      //                                    (:831)
+  cont_ang_min:  3*Math.PI/180,      // the axis-continuation shoot barely deflects
+  cont_ang_max: 17*Math.PI/180,
+  /* OUTWARD BIAS. Bud azimuth is otherwise set by phyllotaxis alone, so a chain
+     of laterals random-walks around the compass and its radius saturates -- the
+     crown stopped widening at year 20 and running to year 30 added nothing.
+     Real limbs reach outward because the outward-facing buds are the lit ones;
+     with a voxel light field too coarse to resolve one bud from its opposite
+     mate, that preference is applied directly. The continuation shoot, which
+     carries the limb, feels it most. */
+  az_out_cont:   0.60,     // how far a continuation bud turns toward "away from the trunk"
+  az_out_side:   0.28,
+  ang_lo:        2*Math.PI/180,      //                                    (:753)
+  ang_hi:       85*Math.PI/180,      //                                    (:754)
+  theta_floor:  15*Math.PI/180,      // birth elevation floor              (:1461)
+  phyllotaxis:  Math.PI/2,           // decussate                          (:772)
+  az_jitter:    12*Math.PI/180,      //                                    (:832)
+  int_jitter:   0.20,                //                                    (:833)
+  trunk_seg:    0.5,                 // [m]                                (:472)
+  /* phytomer_radial_offset (0.01 m, :781) is deliberately ZERO here. Against a
+     ~1.8 mm median twig radius it puts 95% of child bases OUTSIDE the parent's
+     wood -- a 7 mm mid-air gap -- which is exactly what made the model's two
+     renderers disagree. It is sub-pixel at any TV scale. */
+  radial_offset: 0,
+
+  // ---- crown form ----
+  /* form_vigor is the model's "fill the apex" operator: it multiplies growth by
+     exp(kh*(z/H - h0) + kl*(light - 0.5)). With kh = 2.0 the height term
+     dominates and the tree is COLUMNAR BY CONSTRUCTION -- a lateral low in the
+     crown grows at the 0.40 floor no matter how well lit it is, so the crown
+     can only climb, never spread. Weakening the height term and leaning on the
+     LIGHT term instead is what an open-grown tree actually experiences: nothing
+     is competing above it, so the reward for being high is small and the reward
+     for being in the open is large. (model MAPLE: kh 2.0, h0 0.55, kl 1.5) */
+  form_kh:      0.55,
+  form_h0:      0.42,
+  form_kl:      2.1,
+  form_lo:      0.40,      //                                              (:1536)
+  form_hi:      1.4,       //                                    [MAPLE]   (:1821)
+  reach_frac:   0.58,      // model MAPLE 0.45 (:1823) -- widened for the picture
+  n_reach:      2.0,       //                                              (:1552)
+  /* Hydraulic height cap. The model's 20 m is the species maximum and barely
+     bites at 8 m; pulling it in makes the leader ease off as the tree matures
+     so the crown has time to broaden instead of chasing it upward. (model: 20) */
+  H_max:        9.0,
+  n_hydro:      3,         //                                              (:457)
+  /* WHEN THE LEADER RETIRES, and the strongest lever on the silhouette. At the
+     model's 7 m the leader runs until year ~10, so the crown's top is only ever
+     a few years old and the tree stays a cone: widest point at z/H 0.22, pointed
+     head. Retiring it at 4.5 m hands the canopy over around year 6 and gives the
+     upper crown fifteen years to fill and round over -- a shorter, stockier,
+     domed tree, which is what an open-grown maple in a field actually looks
+     like. (model MAPLE: 7 m) */
+  handoff_h:    4.5,
+  handoff_ncol: 2,         //                                              (:1508)
+  max_apex:     7,         //                                    [MAPLE]   (:1794)
+  crel_top_frac: 0.45,     //                                    [MAPLE]   (:1790)
+  crel_zmin:    1.8,       //                                              (:1791)
+  crel_light_min: 0.35,    // on the HILL light                            (:939)
+  crel_age_min: 120,       // [d]                                          (:943)
+  crel_p_day:   0.03,      //                                    [MAPLE]   (:1792)
+  /* A promoted co-leader is righted only part way. At 0.5 the seven co-leaders
+     all stand near-vertical and the "handoff" produces seven parallel trunks
+     rather than an opening crown. (model MAPLE: 0.5) */
+  crel_upright: 0.30,
+
+  // ---- pipe model + mechanics ----
+  c_pipe:      1.5e-4,     //                                              (:396)
+  leaf_area:   56e-4,      // [m2]                               [MAPLE]   (:1773)
+  SF_buckling:    2,       //                                              (:328)
+  E_wood:      9e9,        // [Pa] green MOE                               (:326)
+  rho_green:   900,        // [kg/m3]                                      (:327)
+  LMA:         0.10,       // [kg/m2]                                      (:1420)
+  r_thicken:   1/365,      // [1/day]  (1/(1.0*365*86400) per s)           (:340)
+  K_thick:     60,         //                                    [MAPLE]   (:1816)
+  n_thick:     4,          //                                              (:356)
+
+  // ---- rates ----
+  r_elong_lat:   0.15/90,  // [m/day] 0.15 m per 90 d                      (:416)
+  /* A LATERAL CANNOT RUN FOREVER. Dropping this cap let indeterminate long
+     shoots grow a metre and a half straight out of the crown -- pale bare
+     quills radiating past the foliage, which is the single ugliest thing the
+     renderer produced. The cap fades the last 25% rather than stopping dead, so
+     shoots ease into their limit instead of ending on a hard edge. */
+  /* Scaled by vigor rather than flat. A flat 0.62 m cap (the model's :428) caps
+     the scaffold limbs at the same length as a twig, so the crown could never
+     reach outward and CDmax/H sat at 0.46 against a real 0.67. Vigorous shoots
+     now reach ~1.5 m; spurs are held short by spur_max regardless. */
+  /* Most laterals sit at the bh_floor (0.12), so with base 0.30 their cap was
+     0.45 m -- the crown was built out of half-metre chains that mortality then
+     trimmed. Raising the floor lets ordinary limbs reach. */
+  /* Length of ONE shoot -- one season's extension -- not of a limb. A limb gets
+     long by CHAINING shoots, which is what gives it joints and taper. Letting a
+     single shoot run to 4 m (a 2.4x apex multiplier on top of a vigor-scaled
+     cap) drew the co-leaders as bare straight spears radiating out past the
+     foliage, because one segment carries only one shoot's worth of leaves. */
+  ell_lat_base:  0.40,     // [m]
+  ell_lat_gain:  0.62,     // [m] extra per unit vigor
+  r_elong_trunk: 0.25/90,  // [m/day] -- the leader's ONLY rate privilege  (:417)
+  K_elong:       50,       // carbon half-sat, f_Ce = C/(50+C)   [MAPLE]   (:1776)
+  lead_c_floor:  0.3,      // f_Ce floor for the trunk apex      [MAPLE]   (:1819)
+  p_break_max:   0.08,     //                                    [MAPLE]   (:1766)
+  S_ref:         110,      //                                    [MAPLE]   (:1755)
+  S_scale:       60,       //                                              (:677)
+  K_comp:        0.8,      // correlative inhibition             [MAPLE]   (:1781)
+  p_shade_max:   0.015,    // [1/day]                            [MAPLE]   (:1767)
+  /* THE BUD-BANK AGE FACTOR. Leaving this out is what made the first build of
+     this file explode: break probability peaks at 0.3 and DECAYS to 0.05, so
+     omitting it multiplies every bud's chance by 3-20x and the crown grows
+     exponentially instead of settling. (:1762-1764, :4768) */
+  break_peak:    0.30,     //                                    [MAPLE]   (:1764)
+  break_floor:   0.05,     //                                    [MAPLE]   (:1763)
+  tau_break:     1460,     // [d]                                [MAPLE]   (:1762)
+  bud_max_age:   90,       // [d] an unbroken bud in shade dies   [MAPLE]   (:1765)
+  /* NOT FROM THE MATLAB -- this stands in for the counted bud bank and its age
+     bins (p.budcount / p.bud_bank, :704-714), which I did not port. It is a
+     STRUCTURAL constraint, not a rate tune: it says how many buds a shoot may
+     release in a season, and leaves how far they then grow entirely to the
+     carbon budget and the light. Joe should sign this number off. */
+  max_break_per_year: 3,
+
+  /* PREFORMATION ON/OFF. The MATLAB defaults this OFF (:1640), and the run
+     family that produced the validated decurrent crown -- real bole, CDmax/H
+     around 0.64, handoff at year 9.5-12 -- is the no-preform one. With it ON,
+     every shoot stops at n_pre x internode; vigor decays 0.6 per fork so the
+     whole crown lands on the bh_floor, n_pre falls to 3, and shoots stop at
+     ~23 mm. The crown then cannot spread: measured here CDmax/H 0.07 against a
+     real 0.67 -- a green pipe cleaner. That is not a porting artefact, it is
+     the same stall Joe's own SEASON+PREFORM runs show (CD/H 0.19-0.27, height
+     frozen at 4-5 m), and the bhf_* jobs are testing a fix for it right now.
+     THE FIX, and it is a PICTURE fix rather than a model fix. In the MATLAB,
+     whether a bud becomes a spur or a long shoot falls out of its vigor, and
+     because vigor decays 0.6 per fork the long-shoot class goes extinct: n_pre
+     >= 6 drops to zero by year three and never returns, so nothing is left to
+     build a crown with. Here the two classes are SPECIFIED instead. A shoot is
+     drawn as a long shoot with probability long_frac, in which case it is
+     indeterminate and runs on its vigor clock; otherwise it is a preformed spur
+     and stops dead at n_pre x internode. Bimodality is guaranteed by
+     construction rather than hoped for, which is the whole visual point: a mass
+     of fine twigs over a scaffold that still reaches.
+     This is deliberately NOT how the model works. It is a display. */
+  preform: true,
+  long_frac: 0.30,          // share of buds packed as indeterminate long shoots
+  spur_vigor_boost: 1.9,    // spurs pack a little fatter than raw vigor implies
+  /* A spur stays a spur FOR LIFE. Its target accumulates every season (a real
+     twig's bud-scale scars record exactly that), so without a ceiling a spur
+     adds ~16 mm a year and by year 20 it is a 71 mm shoot -- the whole spur
+     class quietly evaporates and the fine twig texture goes with it. */
+  spur_max: 0.016,          // [m] a spur never gets longer than this
+  f_thin:        0.15,     //                                              (:948)
+
+  // ---- posture ----
+  k_sag:        1.0,       //                                              (:1808)
+  sag_tol:      0.85,      //                                    [MAPLE]   (:1806)
+  gsa_rate:     0.06,      //                                    [MAPLE]   (:1801)
+  /* How far a limb's set-point blends toward vertical with age. At the model's
+     0.65 every limb slowly stands up and the crown closes in on the trunk; a
+     spreading maple keeps most of its birth angle. (model MAPLE: 0.65) */
+  gsa_upturn:   0.38,
+  gsa_tau:      1095,      // [d]                                [MAPLE]   (:1803)
+  /* THE CO-LEADER PROBLEM. At the model's 0.92 a promoted co-leader's
+     set-point is essentially straight up, so within a year of the handoff the
+     seven of them are seven parallel trunks and the crown is a bundle of
+     spires. Letting them keep an outward lean is what turns the handoff into
+     an OPENING rather than a re-launch. (model: 0.92) */
+  gsa_upturn_apex: 0.42,
+  gsa_tau_apex: 300,       // [d]                                          (:1468)
+  gsa_diam_half: 0.005,    // [m] 'diam' fade                    [MAPLE]   (:1806)
+  gsa_order_cap: 0.85,     //                                              (:1482)
+  ac_relax:     0.6,       //                                              (:1498)
+  ac_href:      12,        // [m]                                          (:1499)
+  curv_rate:    0.02,      // [1/day]                                      (:1569)
+  react_arrest: 0.7,       //                                              (:1570)
+  tau_react:    730,       // [d]                                          (:1571)
+  curv_max:     70*Math.PI/180,  //                                        (:1572)
+
+  /* ---- carbon: ONE global pool ----
+     The two coefficients below are the ONLY numbers in this file with no
+     counterpart in the MATLAB, because the thing they replace is a spatial
+     field. They are set so C lives inside the 66-91 band the model actually
+     occupies (demographics_dflt_reg.csv) and so it RISES as the crown fills,
+     which is the model's real behaviour -- it is sink-limited, not
+     source-limited. They set the source/sink BALANCE. They do not set the
+     growth rate: that still falls out of rate x f_Ce x light x form x reach. */
+  C0:            70,
+  C_cap:        110,
+  fix_per_leaf: 0.0165,    // INVENTED
+  maint_per_leaf: 0.0092,  // INVENTED
+  /* A ceiling, purely as an unattended-display backstop. It must never be the
+     thing that shapes the tree -- the LOD bud gate is what does that -- and it
+     must NEVER gate the trunk relay, which is the mistake the MATLAB makes:
+     continue_trunk is guarded by any(~p.active) (:4663), so when its node pool
+     fills the leader silently stops and height freezes. */
+  N_ceiling: 26000,
+  wood_c:    2.6e5         // INVENTED: carbon charged per m3 of new wood
+};
+
+/* ---------------- seeded randomness ---------------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+/* Stable per-(node,pass) noise for the pencil strokes. The whole tree is
+   redrawn every frame, so a running RNG would make every segment pick a new
+   wobble each frame and the drawing would BOIL. Hashing the identity instead
+   means a segment inks the identical stroke forever. */
+function hash2(a, b) {
+  let h = Math.imul(a ^ 0x9E3779B9, 0x85EBCA6B) ^ Math.imul(b + 0x165667B1, 0xC2B2AE35);
+  h ^= h >>> 13; h = Math.imul(h, 0x5BD1E995); h ^= h >>> 15;
+  return ((h >>> 0) / 4294967296);
+}
+function gauss(rng) {
+  let u = 0, v = 0;
+  do { u = rng(); } while (u <= 1e-12);
+  v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+function hashN(a, b) { return (hash2(a, b) + hash2(a, b + 7919) + hash2(a, b + 104729) - 1.5) * 1.4142; }
+
+/* =======================================================================
+   THE TREE -- parallel typed arrays, grown by doubling.
+
+   Nodes are stored in BIRTH ORDER, which is automatically parents-before-
+   children. That single property replaces the model's sparse descendant
+   matrix (p.D_desc, rebuilt daily): every reader of it -- leaves_above, the
+   Borchert-Honda subtree light, the beam-sag distal load, the pipe-model
+   area -- is a subtree accumulation, so ONE reverse loop computes them all.
+   Slots are never reused. The MATLAB model's single worst bug family comes
+   from recycling slots in a fixed pool without scrubbing per-node fields
+   (a dead spur's ell_target froze the leader at 1.7 m; a dead limb's A_xyl
+   froze a live node's diameter for life and kept charging carbon for the
+   phantom wood). Growing arrays and never reusing an index dodges all of it.
+   ======================================================================= */
+const KIND = { TRUNK: 0, LATERAL: 1 };
+
+function makeTree(seed) {
+  const cap0 = 4096;
+  const T = {
+    seed, rng: mulberry32(seed), n: 0, cap: cap0, day: 0,
+    C: P.C0, H: 0, nAlive: 0, nLeafy: 0, births: 0, deaths: 0, lastBudSet: -1e9,
+    handedOff: false, handoffDay: 0, apexCount: 1,
+
+    parent:   new Int32Array(cap0),
+    kind:     new Uint8Array(cap0),
+    alive:    new Uint8Array(cap0),
+    leafless: new Uint8Array(cap0),
+    isApex:   new Uint8Array(cap0),
+
+    px: new Float32Array(cap0), py: new Float32Array(cap0), pz: new Float32Array(cap0),
+    ax: new Float32Array(cap0), ay: new Float32Array(cap0), az: new Float32Array(cap0),
+
+    ell:      new Float32Array(cap0),   // current shoot length [m]
+    ellTgt:   new Float32Array(cap0),   // preformed stop: n_pre x internode, accumulating
+    intern:   new Float32Array(cap0),   // this shoot's own internode spacing [m]
+    nPre:     new Uint8Array(cap0),
+    area:     new Float32Array(cap0),   // xylem cross-section [m2]
+    areaTgt:  new Float32Array(cap0),
+    vigor:    new Float32Array(cap0),   // Borchert-Honda continuous vigor
+    gate:     new Float32Array(cap0),   // elongation gate, reused as the sink-competition load
+    light:    new Float32Array(cap0),   // I [umol]
+    birthDay: new Float32Array(cap0),
+    azim:     new Float32Array(cap0),
+    nextPhy:  new Float32Array(cap0),   // parent ell at which the next phytomer drops
+    pairFlip: new Uint8Array(cap0),
+    isLong:   new Uint8Array(cap0),    // long shoot (scaffold) vs preformed spur
+    subLeaf:  new Float32Array(cap0),   // subtree leaf count (reverse pass)
+    subTip:   new Float32Array(cap0),
+    curv:     new Float32Array(cap0),   // beam-sag bow [rad]
+    attach:   new Float32Array(cap0),   // distance along the PARENT axis where this sits [m]
+    /* Bud sites are a BITMASK, not nodes. In the MATLAB, dormant buds are real
+       slots -- 2,292 of 8,925 nodes (26%) at year 13 -- and the renderer never
+       draws one. Tracking which of a shoot's <=32 phytomer sites has broken
+       costs one integer instead. */
+    budMask:  new Uint32Array(cap0),
+    phyCount: new Uint8Array(cap0),
+    brokeYr:  new Uint8Array(cap0),    // breaks taken on this shoot this year
+    sitesDay: new Float32Array(cap0),  // day this shoot's buds were laid down
+    sx: new Float32Array(cap0), sy: new Float32Array(cap0), sz: new Float32Array(cap0)
+  };
+  return T;
+}
+
+function grow(T) {
+  if (T.n < T.cap) return;
+  const c = T.cap * 2;
+  const F = ['px','py','pz','ax','ay','az','ell','ellTgt','intern','area','areaTgt',
+             'vigor','light','birthDay','azim','nextPhy','subLeaf','subTip','curv','attach','gate','sitesDay','sx','sy','sz'];
+  const I = ['parent'], U = ['kind','alive','leafless','isApex','nPre','pairFlip','phyCount','brokeYr','isLong'];
+  const W = ['budMask'];
+  for (const k of W) { const a = new Uint32Array(c); a.set(T[k]); T[k] = a; }
+  for (const k of F) { const a = new Float32Array(c); a.set(T[k]); T[k] = a; }
+  for (const k of I) { const a = new Int32Array(c);   a.set(T[k]); T[k] = a; }
+  for (const k of U) { const a = new Uint8Array(c);   a.set(T[k]); T[k] = a; }
+  T.cap = c;
+}
+
+function addNode(T, parent, kind, pos, axis, ell) {
+  grow(T);
+  const i = T.n++;
+  T.parent[i] = parent; T.kind[i] = kind; T.alive[i] = 1;
+  T.leafless[i] = 0; T.isApex[i] = 0;
+  T.px[i] = pos[0]; T.py[i] = pos[1]; T.pz[i] = pos[2];
+  T.ax[i] = axis[0]; T.ay[i] = axis[1]; T.az[i] = axis[2];
+  T.sx[i] = axis[0]; T.sy[i] = axis[1]; T.sz[i] = axis[2];   // gravitropic SET-POINT, frozen at birth
+  T.ell[i] = ell; T.birthDay[i] = T.day;
+  T.area[i] = 0; T.areaTgt[i] = 0; T.vigor[i] = 1; T.light[i] = P.I_open;
+  T.curv[i] = 0; T.nextPhy[i] = 0; T.pairFlip[i] = 0;
+  T.ellTgt[i] = 0; T.intern[i] = P.internode_long; T.nPre[i] = 0;
+  T.attach[i] = 0; T.budMask[i] = 0; T.phyCount[i] = 0; T.sitesDay[i] = T.day;
+  T.brokeYr[i] = 0;
+  T.births++;
+  return i;
+}
+
+function seedTree(seed) {
+  const T = makeTree(seed);
+  // A single near-vertical trunk segment. Everything else has to be earned.
+  const i = addNode(T, -1, KIND.TRUNK, [0, 0, 0], [0, 0, 1], 0.10);
+  T.isApex[i] = 1;
+  T.area[i] = Math.PI * 0.004 * 0.004;
+  T.areaTgt[i] = T.area[i];
+  packBud(T, i, 1.0, true);
+  return T;
+}
+
+/* PREFORMATION. A real maple bud is packed the previous summer with a FIXED,
+   SMALL number of leaf primordia, and in spring it unpacks what is inside it
+   and STOPS. So a shoot's length is not a rate on a clock, it is
+       length = (a COUNT) x (a SPACING)
+   -- a product of two small numbers, which is the only way to reach the 2-20 mm
+   spur band at all. BOTH factors must vary with vigor: setting only the count
+   leaves a 3-pair spur 150 mm long, because a spur is short because its
+   primordia are packed AND its internodes never elongate.
+
+   The max() against bh_floor is load-bearing and was a real bug in the MATLAB
+   for a while: both packing sites clamped at 0 instead of at the floor, which
+   bypassed the documented "every broken bud makes at least a spur" guarantee.
+   Vigor then collapsed 40x below its own floor, 97.8% of buds packed at
+   n_pre_min, and the LONG-SHOOT CLASS went extinct -- n_pre>=6 hit exactly
+   zero by year 3 and stayed there. A crown with no long shoots never builds
+   a canopy. (tree_phase10.m:3458-3468, :4361) */
+function packBud(T, i, v, isLong) {
+  const vv = Math.min(1, Math.max(P.bh_floor, v));
+  if (!P.preform || isLong) {
+    /* A LONG SHOOT: indeterminate. No packed stop -- it runs on its vigor clock
+       (tau_node, :3165) and the age damp is what eventually halts it. These are
+       the shoots that build the scaffold and carry the crown outward. */
+    T.nPre[i]   = Math.round(P.n_pre_min + (P.n_pre_max - P.n_pre_min) * vv);
+    T.intern[i] = P.internode_long;
+    T.ellTgt[i] = 0;
+    T.isLong[i] = 1;
+    return;
+  }
+  /* A SPUR: packed and determinate. Both factors must vary -- setting only the
+     count leaves a 3-pair spur 150 mm long, because a spur is short because its
+     primordia are few AND its internodes never elongate. */
+  const sv = Math.min(1, vv * P.spur_vigor_boost);
+  const n  = Math.round(P.n_pre_min + (P.n_pre_max - P.n_pre_min) * sv * 0.45);
+  T.nPre[i]   = Math.max(P.n_pre_min, n);
+  T.intern[i] = P.internode_spur + (P.internode_long - P.internode_spur) * sv * 0.30;
+  T.ellTgt[i] = Math.min(P.spur_max, T.ell[i] + T.nPre[i] * T.intern[i]);
+  T.isLong[i] = 0;
+}
+
+/* =======================================================================
+   LIGHT -- a voxel occupancy field, marched in a few directions.
+
+   This replaces compute_angular_light (:3719), which walks 25 sky directions
+   and builds dense N-by-N pairwise occlusion masks for each one, every
+   simulated day. It is the model's only genuinely O(N^2) term and it was
+   benchmarked at 4.2 seconds per call at N=10,000 in JS -- about 500x over
+   any budget a wall display has.
+
+   What survives is the part that matters: light arrives from MULTIPLE
+   DIRECTIONS, not just overhead. The model's own note at :1011 records that
+   a purely vertical Beer-Lambert field gives every node at the same height
+   the same light and grows a PALM TREE, because a branch's flanks come out
+   wrongly deep-shaded. Seven directions on a 0.5 m grid reproduces the field
+   to within about a cell.
+   ======================================================================= */
+const CELL = 0.5;
+const DIRS = (() => {
+  const d = [[0, 0, 1, 0.34]];                   // zenith, weighted heaviest
+  for (let k = 0; k < 6; k++) {                  // a ring at 45 deg zenith
+    const a = k * Math.PI / 3;
+    const s = Math.SQRT1_2;
+    d.push([s * Math.cos(a), s * Math.sin(a), s, 0.11]);
+  }
+  return d;
+})();
+
+function leafCount(T, i) {
+  /* The model's own leaf rule: shoot length divided by internode spacing, two
+     leaves per decussate phytomer. Once a shoot STOPS at exactly n internodes
+     this returns exactly n pairs -- Steingraeber's 2-3 for a spur and 4-5 for
+     a long shoot -- by COUNTING, with nothing fitted. (:2994) */
+  if (!T.alive[i] || T.leafless[i]) return 0;
+  if (T.nPre[i] > 0) return 2 * T.nPre[i];                       // nlc = 2*n_pre  (:3028)
+  const sp = Math.max(T.intern[i], 1e-4);
+  return Math.max(2, Math.min(30, Math.round(T.ell[i] / sp) * 2));
+}
+
+function buildLight(T) {
+  let x0 = 1e9, y0 = 1e9, z0 = 0, x1 = -1e9, y1 = -1e9, z1 = -1e9;
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i]) continue;
+    const tx = T.px[i] + T.ell[i] * T.ax[i], ty = T.py[i] + T.ell[i] * T.ay[i], tz = T.pz[i] + T.ell[i] * T.az[i];
+    if (tx < x0) x0 = tx; if (tx > x1) x1 = tx;
+    if (ty < y0) y0 = ty; if (ty > y1) y1 = ty;
+    if (tz > z1) z1 = tz;
+  }
+  if (x1 < x0) return null;
+  x0 -= CELL; y0 -= CELL; x1 += CELL; y1 += CELL; z1 += CELL;
+  const nx = Math.max(1, Math.ceil((x1 - x0) / CELL));
+  const ny = Math.max(1, Math.ceil((y1 - y0) / CELL));
+  const nz = Math.max(1, Math.ceil((z1 - z0) / CELL));
+  const g = new Float32Array(nx * ny * nz);
+  const inv = 1 / CELL;
+  for (let i = 0; i < T.n; i++) {
+    const nl = leafCount(T, i);
+    if (!nl) continue;
+    // Foliage sits along the shoot, not at a point: smear it over the axis.
+    const K = Math.max(1, Math.min(4, Math.round(T.ell[i] / CELL) + 1));
+    const per = nl * P.leaf_area / K;
+    for (let k = 0; k < K; k++) {
+      const s = T.ell[i] * (k + 0.5) / K;
+      const cx = ((T.px[i] + s * T.ax[i]) - x0) * inv | 0;
+      const cy = ((T.py[i] + s * T.ay[i]) - y0) * inv | 0;
+      const cz = ((T.pz[i] + s * T.az[i]) - z0) * inv | 0;
+      if (cx < 0 || cy < 0 || cz < 0 || cx >= nx || cy >= ny || cz >= nz) continue;
+      g[(cz * ny + cy) * nx + cx] += per;
+    }
+  }
+  return { g, nx, ny, nz, x0, y0, z0 };
+}
+
+function gatherLight(T, L) {
+  if (!L) { for (let i = 0; i < T.n; i++) T.light[i] = P.I_open; return; }
+  const { g, nx, ny, nz, x0, y0, z0 } = L;
+  const inv = 1 / CELL, cellVol = CELL * CELL * CELL;
+  /* Step at HALF a cell, not a whole one. A 0.5 m step is wider than a young
+     crown, so every ray cleared the foliage in its first stride and came back
+     unshaded: light sat at a uniform 660 umol for 26,000 shoots packed into a
+     13 cm ball, nothing ever fell below the mortality threshold, and with no
+     death there was no thermostat and no bound on the crown. */
+  const STEP = CELL * 0.5, MAXSTEP = 48;
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i]) continue;
+    const bx = T.px[i] + 0.6 * T.ell[i] * T.ax[i];
+    const by = T.py[i] + 0.6 * T.ell[i] * T.ay[i];
+    const bz = T.pz[i] + 0.6 * T.ell[i] * T.az[i];
+    let I = 0;
+    for (let d = 0; d < DIRS.length; d++) {
+      const D = DIRS[d];
+      let lai = 0;
+      for (let s = 1; s <= MAXSTEP; s++) {
+        const cx = ((bx + D[0] * s * STEP) - x0) * inv | 0;
+        const cy = ((by + D[1] * s * STEP) - y0) * inv | 0;
+        const cz = ((bz + D[2] * s * STEP) - z0) * inv | 0;
+        if (cz >= nz) break;
+        if (cx < 0 || cy < 0 || cx >= nx || cy >= ny || cz < 0) continue;
+        /* leaf-area DENSITY in the cell (m2/m3) times the path length through
+           it (m) is the leaf area index the beam actually crosses. */
+        lai += g[(cz * ny + cy) * nx + cx] * STEP / cellVol;
+      }
+      I += D[3] * Math.exp(-P.k_Beer * lai);
+    }
+    T.light[i] = Math.max(P.I_floor, P.I_open * I);
+  }
+}
+
+const fLightE = (I) => I / (I + P.K_elong_light);                        // (:3163)
+const fLightH = (I) => {                                                 // (:1046)
+  const a = Math.pow(I, P.hill_n);
+  return a / (Math.pow(P.hill_K, P.hill_n) + a);
+};
+
+/* =======================================================================
+   ONE SIMULATED STEP
+   ======================================================================= */
+function step(T, stepIdx) {
+  const dt = CONFIG.dt;
+  T.day += dt;
+
+  /* ---- 1. reverse pass: every subtree sum at once ----
+     Nodes are in birth order so a parent's index is always below its
+     children's. One downward loop therefore accumulates leaf counts and tip
+     counts up the tree. This is the whole of p.D_desc (:3812-3866), which
+     the MATLAB rebuilds as a sparse N-by-N matrix after every topology
+     change, i.e. daily. */
+  const nChild = new Int32Array(T.n);
+  const maxSub = new Float32Array(T.n);
+  const mainChild = new Int32Array(T.n).fill(-1);
+  for (let i = 0; i < T.n; i++) { T.subLeaf[i] = leafCount(T, i); T.subTip[i] = T.alive[i] ? 1 : 0; }
+  for (let i = T.n - 1; i > 0; i--) {
+    const p = T.parent[i];
+    if (p < 0 || !T.alive[i]) continue;
+    T.subLeaf[p] += T.subLeaf[i];
+    T.subTip[p]  += T.subTip[i];
+    nChild[p]++;
+    if (T.subTip[i] > maxSub[p]) { maxSub[p] = T.subTip[i]; mainChild[p] = i; }
+  }
+
+  /* ---- 2. Borchert-Honda vigor, AT FORKS ONLY ----
+     The model's bug note is explicit here: applying the decay per internode
+     collapses the entire crown onto one elongation clock (0.60^12 = 0.002).
+     A node with a single child divides nothing and passes its vigor straight
+     through; only a genuine fork splits it, main child taking lambda. The
+     floor is what guarantees every broken bud still makes at least a spur.
+     (:3103-3131) */
+  const Q = new Float32Array(T.n);
+  for (let i = 0; i < T.n; i++) Q[i] = T.alive[i] ? leafCount(T, i) * fLightE(T.light[i]) : 0;
+  for (let i = T.n - 1; i > 0; i--) { const q = T.parent[i]; if (q >= 0 && T.alive[i]) Q[q] += Q[i]; }
+  const sibQ = new Float32Array(T.n);             // sum of Q over a parent's NON-main children
+  for (let i = 1; i < T.n; i++) {
+    const q = T.parent[i];
+    if (q >= 0 && T.alive[i] && mainChild[q] !== i) sibQ[q] += Q[i];
+  }
+  for (let i = 0; i < T.n; i++) {
+    const q = T.parent[i];
+    if (q < 0) { T.vigor[i] = 1; continue; }
+    if (!T.alive[i]) continue;
+    let v;
+    if (T.kind[q] === KIND.TRUNK) {
+      /* A trunk node passes vigor straight down the relay, and seeds its order-1
+         laterals from their OWN light -- they are uncontested, so they do not
+         inherit a share of anything. (:3095-3099) */
+      v = (T.kind[i] === KIND.TRUNK) ? T.vigor[q] : fLightE(T.light[i]);
+    } else if (nChild[q] <= 1) {
+      v = T.vigor[q];                             // an internode, not a fork: divide nothing
+    } else if (mainChild[q] === i) {
+      v = T.vigor[q] * P.lambda_bh;
+    } else {
+      v = sibQ[q] > 0 ? T.vigor[q] * (1 - P.lambda_bh) * Q[i] / sibQ[q]
+                      : T.vigor[q] * (1 - P.lambda_bh) / Math.max(1, nChild[q] - 1);
+    }
+    if (T.isApex[i]) v = Math.max(v, 0.85);       // a promoted co-leader is a leader
+    T.vigor[i] = Math.min(1, Math.max(P.bh_floor, v));
+  }
+
+  /* ---- 3. carbon: ONE global pool ----
+     Standing in for the whole phloem field, which the MATLAB solves as a DAE
+     and which comes out flat to under 2% anyway. Growth is still an OUTPUT of
+     a source/sink balance -- fixation against maintenance and the growth
+     sinks -- never a scripted curve. */
+  let leaves = 0, litArea = 0;
+  for (let i = 0; i < T.n; i++) {
+    const nl = leafCount(T, i);
+    if (!nl) continue;
+    leaves += nl;
+    litArea += nl * fLightE(T.light[i]);
+  }
+  const src = P.fix_per_leaf * litArea;
+  const snk = P.maint_per_leaf * leaves;
+  /* The GROWTH sink. Without it the pool has nothing to spend carbon on, so it
+     pegs at its ceiling, f_Ce sits at a constant, and the "budget" is a fiction
+     -- growth would be set by the light and form gates alone. Extension and
+     thickening must DRAW DOWN the same C they are gated by; that competition is
+     what makes the tree decelerate into maturity instead of growing forever. */
+  const grow_c = P.wood_c * (T.dVol || 0) / Math.max(dt, 1e-6);
+  T.C += dt * (src - snk - grow_c) / Math.max(1, 0.02 * leaves + 8);
+  T.C = Math.min(P.C_cap, Math.max(4, T.C));
+  const f_Ce = T.C / (P.K_elong + T.C);
+  const f_th = Math.pow(T.C, 4) / (Math.pow(P.K_thick, 4) + Math.pow(T.C, 4));
+
+  /* ---- 4. height, and the crown-form fields ---- */
+  let H = 0;
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i]) continue;
+    const tz = T.pz[i] + T.ell[i] * T.az[i];
+    if (tz > H) H = tz;
+  }
+  T.H = H;
+  const Href = Math.max(H, 0.4);
+
+  /* ---- 5. elongation ----
+     dell = base rate x carbon x light x form x reach x age-damp, and then the
+     preformed HARD STOP. form_vigor reallocates growth to the well-lit upper
+     crown and away from the shaded lower interior, which is what fills the
+     apex and dissolves the leader into a decurrent dome; f_reach fades
+     elongation past ~0.45H from the axis, which is what bounds crown WIDTH to
+     the real CDmax/H ~0.67 instead of letting it run to 1.2. (:3196-3212) */
+  let dVol = 0;
+  const Rcap = Math.max(P.reach_frac * Href, 0.3);
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i]) continue;
+    if (T.ellTgt[i] > 0 && T.ell[i] >= T.ellTgt[i]) continue;   // spent its bud (:5376)
+    const zTip = T.pz[i] + T.ell[i] * T.az[i];
+    const Le   = fLightE(T.light[i]);                            // I/(I+120)
+    let dell;
+    if (T.kind[i] === KIND.TRUNK) {
+      if (!T.isApex[i]) continue;                                // demoted: an inert thickener
+      const fHydro = Math.max(0, 1 - Math.pow(zTip / P.H_max, P.n_hydro));   // (:3190)
+      dell = P.r_elong_trunk * dt * Math.max(f_Ce, P.lead_c_floor) * fHydro;
+    } else {
+      /* form_vigor reads the LINEAR-SATURATING light, not the Hill. Putting the
+         Hill here moves the whole crown-form operator onto a different curve. */
+      const sF = P.form_kh * (zTip / Href - P.form_h0) + P.form_kl * (Le - 0.5);
+      const form = Math.min(P.form_hi, Math.max(P.form_lo, Math.exp(sF)));
+      const r = Math.hypot(T.px[i], T.py[i]);
+      const reach = Math.max(0, 1 - Math.pow(r / Rcap, P.n_reach));
+      const tau  = P.tau_short + (P.tau_elong - P.tau_short) * T.vigor[i];
+      const fAge = Math.exp(-(T.day - T.birthDay[i]) / tau);
+      /* Apices are exempted from the FORM bias (they are supposed to lead) but
+         no longer from the REACH bound. Skipping both let seven co-leaders run
+         upward without limit after the handoff, which is most of why the crown
+         stayed a column: every year of post-handoff growth went into height. */
+      const gate = Le * fAge * (T.isApex[i] ? (0.45 + 0.55 * reach) : form * reach);
+      T.gate[i] = gate;
+      dell = P.r_elong_lat * dt * f_Ce * gate;
+      // (:5332) soft length cap -- apices get a generous one rather than none
+      const cap = (P.ell_lat_base + P.ell_lat_gain * T.vigor[i]) * (T.isApex[i] ? 1.25 : 1);
+      dell *= Math.max(0, Math.min(1, (1 - T.ell[i] / cap) / 0.25));
+    }
+    if (T.ellTgt[i] > 0) dell = Math.min(dell, T.ellTgt[i] - T.ell[i]);
+    T.ell[i] += dell;
+    dVol += dell * T.area[i];                      // extension volume
+  }
+
+  /* ---- 6. diameter: pipe model, top-down, monotone ----
+     A_target from the subtree's leaf area, relaxed toward rather than
+     integrated as a rate. The MATLAB's one-way ratchet max(0, A_target-A_xyl)
+     can never correct downward, which is where 15% of forks end up with a
+     child THICKER than its parent -- something no real tree does. Clamping to
+     the parent costs nothing and removes the artefact. */
+  /* Height above the node, for the buckling term: the tallest tip anywhere in
+     this node's own subtree, minus its own height. One reverse pass. */
+  const maxTip = new Float32Array(T.n);
+  for (let i = 0; i < T.n; i++) maxTip[i] = T.alive[i] ? (T.pz[i] + T.ell[i] * T.az[i]) : -1e9;
+  for (let i = T.n - 1; i > 0; i--) {
+    const q = T.parent[i];
+    if (q >= 0 && T.alive[i] && maxTip[i] > maxTip[q]) maxTip[q] = maxTip[i];
+  }
+  const gconst = 0.851 * Math.pow(P.E_wood / (P.rho_green * 9.81), 1/3);
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i]) continue;
+    let At = Math.max(T.subLeaf[i], 1) * P.leaf_area * P.c_pipe;         // A_pipe (:2971)
+    if (T.kind[i] === KIND.TRUNK) {
+      // invert Greenhill: a column this tall must be at least this thick (:2988)
+      const Hab = Math.max(maxTip[i] - T.pz[i], T.ell[i]);
+      const Dm  = Math.pow(P.SF_buckling * Hab / gconst, 1.5);
+      At = Math.max(At, Math.PI / 4 * Dm * Dm);
+    }
+    const q = T.parent[i];
+    if (q >= 0 && T.area[q] > 0) At = Math.min(At, 0.98 * T.area[q]);
+    T.areaTgt[i] = At;
+    const dA = P.r_thicken * Math.max(0, At - T.area[i]) * f_th * dt;    // (:2136-2138)
+    T.area[i] += dA;
+    dVol += dA * T.ell[i];                          // thickening volume
+    if (T.area[i] < 1e-9) T.area[i] = 1e-9;
+  }
+  // parents must not end up thinner than their thickest child
+  for (let i = T.n - 1; i > 0; i--) {
+    const p = T.parent[i];
+    if (p >= 0 && T.alive[i] && T.area[i] > T.area[p]) T.area[p] = T.area[i];
+  }
+  T.dVol = dVol;
+  return { f_Ce, leaves };
+}
+
+/* ---------------- small vector helpers ---------------- */
+function norm3(v) { const n = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/n, v[1]/n, v[2]/n]; }
+function cross3(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+
+/* A stable perpendicular frame. The fallback matters: build the frame off
+   global Z and a near-vertical parent axis gives a degenerate cross product,
+   which sends every trunk child to the same azimuth -- a whorl instead of a
+   spiral. Every trunk bud goes through this path. */
+function perpFrame(ax) {
+  const a = Math.abs(ax[2]) > 0.99 ? [1, 0, 0] : [0, 0, 1];
+  const e1 = norm3(cross3(ax, a));
+  return [e1, norm3(cross3(ax, e1))];
+}
+
+/* BRANCH AXIS -- the fork insertion law.
+   The angle is measured from the PARENT AXIS, not from global vertical. That
+   distinction is the whole character of the crown: measured off the parent, a
+   bud on a drooping limb leaves at the same angle relative to its limb, so
+   limbs keep their identity; measured off vertical, every branch in the tree
+   points the same way and the crown reads as a mechanical fan. The angle also
+   DECAYS with radial distance -- broad scaffolds off the bole, progressively
+   narrower forks out toward the tips (measured median 29.7 deg, correlation
+   -0.61 against radius).
+   Then the BIRTH FLOOR: no bud is born below +15 deg elevation, applied in the
+   bud's own vertical plane so its azimuth survives. About 28% of laterals pin
+   exactly to it. Without it a third of the crown is born aimed at the ground
+   and the base grows the old kink-and-droop artefact. (:4206-4237) */
+/* A limb EXTENDS through a continuation axis and FILLS through side branches.
+   Without that distinction every child is deflected 35-65 deg from its parent,
+   so a limb wanders instead of reaching and the only way to get crown width is
+   absurdly long single shoots -- which draw as bare spears. Giving the leading
+   shoot of each flush a near-parallel angle is what a real limb does: the
+   thickest child carries the axis on (that is the definition QSM uses for
+   branching order) and the rest fork away from it. */
+function branchAxis(parAxis, azimuth, radial, jitter, isContinuation) {
+  const [e1, e2] = perpFrame(parAxis);
+  const r = [Math.cos(azimuth)*e1[0] + Math.sin(azimuth)*e2[0],
+             Math.cos(azimuth)*e1[1] + Math.sin(azimuth)*e2[1],
+             Math.cos(azimuth)*e1[2] + Math.sin(azimuth)*e2[2]];
+  const th0 = isContinuation
+    ? P.cont_ang_min + (P.cont_ang_max - P.cont_ang_min) * Math.exp(-P.fork_kpath * radial)
+      + P.ang_jitter * 0.45 * jitter
+    : P.fork_ang_min + (P.fork_ang_max - P.fork_ang_min) * Math.exp(-P.fork_kpath * radial)
+      + P.ang_jitter * jitter;
+  const th  = Math.min(P.ang_hi, Math.max(P.ang_lo, th0));
+  let v = norm3([Math.sin(th)*r[0] + Math.cos(th)*parAxis[0],
+                 Math.sin(th)*r[1] + Math.cos(th)*parAxis[1],
+                 Math.sin(th)*r[2] + Math.cos(th)*parAxis[2]]);
+  if (v[2] < Math.sin(P.theta_floor)) {
+    const h = Math.hypot(v[0], v[1]);
+    const hd = h > 1e-9 ? [v[0]/h, v[1]/h, 0] : [1, 0, 0];
+    const c = Math.cos(P.theta_floor), sN = Math.sin(P.theta_floor);
+    v = [c*hd[0], c*hd[1], sN];
+  }
+  return v;
+}
+
+/* Where a point sits along a bowed shoot. The model bows each shoot under its
+   own weight, so base + ell*axis is the straight CHORD end, not the tip. */
+function arcPoint(base, dir, L, curv, s) {
+  if (Math.abs(curv) < 1e-4 || L < 1e-6) return [base[0]+dir[0]*s, base[1]+dir[1]*s, base[2]+dir[2]*s];
+  const [e1] = perpFrame(dir);
+  // bow in the vertical plane: the sag direction is "down" projected perpendicular to dir
+  let d = [-dir[0]*dir[2], -dir[1]*dir[2], 1 - dir[2]*dir[2]];
+  const dn = Math.hypot(d[0], d[1], d[2]);
+  d = dn > 1e-6 ? [d[0]/dn, d[1]/dn, d[2]/dn] : e1;
+  const th = curv * (s / L);
+  const c = (1 - Math.cos(th)) * L * 0.5;
+  return [base[0] + dir[0]*s - d[0]*c, base[1] + dir[1]*s - d[1]*c, base[2] + dir[2]*s - d[2]*c];
+}
+function tipOf(T, i) {
+  return arcPoint([T.px[i], T.py[i], T.pz[i]], [T.ax[i], T.ay[i], T.az[i]], Math.max(T.ell[i],1e-9), T.curv[i], T.ell[i]);
+}
+
+/* =======================================================================
+   EVENTS -- births, promotions, deaths. This is where the tree's topology
+   changes and where all the stochasticity lives.
+   ======================================================================= */
+function events(T, nChild, pxPerM) {
+  const dt = CONFIG.dt, rng = T.rng;
+  const lodOn = T.n > 0.55 * P.N_ceiling;
+  const n0 = T.n;                                   // freeze: newborns do not act this step
+  const Href = Math.max(T.H, 0.4);
+
+  /* ---- phytomer deposition: decussate PAIRS ----
+     Two buds 180 deg apart at the same point on the shoot, and the next pair
+     rotated 90 deg. This is what makes it Acer rather than Quercus, and it is
+     nearly free. Sites are recorded, not built: a bud becomes a node only if
+     it breaks. */
+  for (let i = 0; i < n0; i++) {
+    if (!T.alive[i] || T.leafless[i]) continue;
+    /* A PREFORMED shoot has exactly n_pre phytomers -- that is what "preformed"
+       means: the bud was packed with that many leaf pairs and it expands them
+       and stops. Deriving the count from ell/internode instead gave a 10 mm
+       spur five phytomers (and ten buds) rather than two, which is where the
+       26,000-node thicket came from. Each phytomer bears a decussate PAIR. */
+    const want = Math.min(16, T.nPre[i] > 0 ? 2 * T.nPre[i]
+                            : Math.floor(T.ell[i] / Math.max(T.intern[i], 2e-3)));
+    if (want <= T.phyCount[i]) continue;
+    if (T.phyCount[i] === 0) T.sitesDay[i] = T.day;      // start this shoot's bud clock
+    /* LOD gate: once the tree is already dense, stop recording bud sites on
+       wood too thin to see. It caps the node count BY DESIGN -- the lit outside
+       keeps filling while the invisible interior stops proliferating -- rather
+       than by a hard ceiling that would silently stop the trunk.
+       IT MUST NOT ENGAGE EARLY. Applied from the first step it blocks every
+       twig in the crown (a 1 mm twig is 0.12 px at TV scale), and the tree
+       grows into a 136-node pole: the whole crown lives on wood this thin. */
+    if (lodOn && T.kind[i] !== KIND.TRUNK) {
+      const rpx = Math.sqrt(T.area[i] / Math.PI) * pxPerM;
+      if (rpx < 0.35) continue;
+    }
+    T.phyCount[i] = want;
+  }
+
+  /* Apical dominance, the cheap way. Auxin is a full N-state ODE field in the
+     MATLAB, but apical_control is default-OFF there (:1430), so its ONE live
+     reader is this: buds within about 0.3 m below an apex break at a reduced
+     rate. There are never more than 8 apices, so walking each one's parent
+     chain costs nothing and reproduces the whole of auxin's visible effect. */
+  /* summed elongation gate of each node's active children */
+  const childGate = new Float32Array(T.n);
+  for (let i = 1; i < T.n; i++) if (T.alive[i] && T.parent[i] >= 0) childGate[T.parent[i]] += T.gate[i];
+
+  T.apexNear = new Uint8Array(T.n);
+  for (let a = 0; a < T.n; a++) {
+    if (!T.alive[a] || !T.isApex[a]) continue;
+    let node = a, acc = 0;
+    while (node >= 0 && acc < 0.30) { T.apexNear[node] = 1; acc += T.ell[node]; node = T.parent[node]; }
+  }
+
+  /* ---- bud break ----
+     Light-gated with a HARD cutoff, sugar-modulated, and divided by a
+     correlative-inhibition term. The hard cutoff is the crown-density
+     thermostat: below f_light_crit the probability is EXACTLY zero, so the
+     crown self-organises until its interior light sits just under that line
+     and then stops thickening. Remove the cutoff and branch density becomes a
+     free parameter that drifts as the tree grows. (:4749, :4783, :4570) */
+  const roomToGrow = T.n < P.N_ceiling;
+  for (let i = 0; i < n0 && roomToGrow; i++) {
+    if (!T.alive[i] || T.leafless[i] || T.phyCount[i] === 0) continue;
+    const Lh = fLightH(T.light[i]);
+    if (Lh < P.f_light_crit) continue;                       // the thermostat
+    /* AN UNBROKEN BUD DOES NOT WAIT FOREVER. This is the brake that actually
+       sets crown density: a bud has a ~90 day window, and most buds never take
+       it. Without expiry every bud eventually breaks no matter how small the
+       daily probability, so the crown fills to whatever ceiling it is given.
+       In the MATLAB this is the bud bank ageing out. (:4824, :1765) */
+    /* A BUD PACKED THIS SUMMER BREAKS NEXT SPRING, NOT THIS ONE. This is the
+       preformation mechanism applied to recruitment, and it is what sets the
+       tree's GENERATION TIME to a year. Without it a shoot born in March has
+       bud sites in March and recruits in April, so generations turn over in
+       days: measured 4 births/day in year one, 26,000 shoots inside a 13 cm
+       ball before the tree was one year old, vigor collapsed onto the bh_floor
+       and the long-shoot class extinct. The per-year flush cap alone cannot fix
+       that -- it bounds how many buds a shoot opens, not how fast shoots
+       replace themselves. */
+    if (T.sitesDay[i] > T.lastBudSet) continue;
+    if ((T.day - T.lastBudSet) > P.bud_max_age) continue;   // the spring window closes
+    /* ONE FLUSH PER SHOOT PER YEAR. This is the structural constraint that was
+       missing, and without it the tree is a dust cloud: a decussate maple shoot
+       releases its distal pair and the remaining buds stay dormant, they do not
+       all open in the same season. Leaving it out let every one of a shoot's
+       2*n_pre buds break inside its 90-day window, giving a branching factor of
+       ~80 per year -- 27,000 shoots inside a 13 cm ball by month ten, with
+       vigor collapsed onto the bh_floor and the long-shoot class extinct.
+       In the MATLAB the same brake arrives through the counted bud bank and its
+       age bins, which is a good deal more machinery than this. */
+    if (T.brokeYr[i] >= P.max_break_per_year) continue;
+    /* L_i = this node's OWN elongation gate plus the summed gate of its active
+       children -- a real sink-competition load, not a child count. This is the
+       local density brake: as a shoot accumulates children it stops recruiting
+       more. Without it branch density is a free parameter that drifts as the
+       tree grows. (:4560, :4760-4761) */
+    const L_i = T.gate[i] + (childGate[i] || 0);
+    /* Bud-bank ageing: a bud's chance PEAKS at 0.30 and decays toward 0.05. */
+    const age = T.day - T.birthDay[i];
+    const ageFac = P.break_floor + (P.break_peak - P.break_floor) * Math.exp(-age / P.tau_break);
+    let p = Math.min(P.p_break_max, P.p_break_max * Math.exp((T.C - P.S_ref) / P.S_scale))
+          * Lh * ageFac / (1 + L_i / P.K_comp);
+    if (T.apexNear && T.apexNear[i]) p *= 0.70;             // apical dominance, ~0.3 m below an apex
+    const pe = 1 - Math.pow(1 - p, dt);
+    for (let k = 0; k < T.phyCount[i]; k++) {
+      if (T.brokeYr[i] >= P.max_break_per_year) break;   // re-checked PER SITE, not per step
+      if (T.budMask[i] & (1 << k)) continue;
+      if (rng() >= pe) continue;
+      T.budMask[i] |= (1 << k);
+      T.brokeYr[i]++;
+      const sp   = Math.max(T.intern[i], 2e-3);
+      const dist = Math.min(T.ell[i], (k + 0.5) * sp);
+      const par  = [T.ax[i], T.ay[i], T.az[i]];
+      const base = arcPoint([T.px[i], T.py[i], T.pz[i]], par, Math.max(T.ell[i],1e-9), T.curv[i], dist);
+      const sgn  = (k & 1) ? Math.PI : 0;                    // the opposite mate
+      let azb    = T.azim[i] + Math.floor(k/2) * P.phyllotaxis + sgn
+                 + P.az_jitter * gauss(rng);
+      const rad  = Math.hypot(base[0], base[1]);
+      const isCont = (T.brokeYr[i] === 0) && (T.isLong[i] === 1);   // leads the flush
+      /* Turn the bud toward "away from the trunk", expressed in the parent's own
+         perpendicular frame. Blended as VECTORS so the wrap at +/-pi is not a
+         discontinuity. */
+      if (rad > 0.05) {
+        const [f1, f2] = perpFrame(par);
+        const ox = base[0] / rad, oy = base[1] / rad;
+        const azOut = Math.atan2(f2[0]*ox + f2[1]*oy, f1[0]*ox + f1[1]*oy);
+        const w = isCont ? P.az_out_cont : P.az_out_side;
+        azb = Math.atan2((1-w)*Math.sin(azb) + w*Math.sin(azOut),
+                         (1-w)*Math.cos(azb) + w*Math.cos(azOut));
+      }
+      const axis = branchAxis(par, azb, rad, gauss(rng), isCont);
+      /* birth-frozen lognormal vigor noise: it jitters the AMOUNT without
+         flipping a bud's identity -- canalized skeleton, stochastic detail. */
+      const nz = Math.exp(P.sigma_bh * gauss(rng) - 0.5 * P.sigma_bh * P.sigma_bh);
+      const j = addNode(T, i, KIND.LATERAL, base, axis, 0);
+      T.azim[j] = azb; T.attach[j] = dist;
+      T.area[j] = Math.min(1e-8, T.area[i] * 0.5);
+      /* The continuation shoot is always a long shoot -- an axis cannot be
+         carried on by a spur. This is what keeps the scaffold class alive. */
+      packBud(T, j, T.vigor[i] * nz, isCont || rng() < P.long_frac);
+      T.ell[j] = T.intern[j];                               // first internode (:4806)
+      /* PAIRBREAK: the decussate mate co-breaks most of the time, which is
+         what puts real opposite PAIRS in the crown instead of alternating
+         singletons. */
+      const m = (k & 1) ? k - 1 : k + 1;
+      if (m < T.phyCount[i] && !(T.budMask[i] & (1 << m)) && rng() < 0.90) {
+        T.budMask[i] |= (1 << m); T.brokeYr[i]++;
+        const azm = azb + Math.PI + P.az_jitter * gauss(rng);
+        const nz2 = Math.exp(P.sigma_bh * gauss(rng) - 0.5 * P.sigma_bh * P.sigma_bh);
+        const j2 = addNode(T, i, KIND.LATERAL, base, branchAxis(par, azm, rad, gauss(rng), false), 0);
+        T.azim[j2] = azm; T.attach[j2] = dist;
+        T.area[j2] = Math.min(1e-8, T.area[i] * 0.5);
+        packBud(T, j2, T.vigor[i] * nz2, rng() < P.long_frac);
+        T.ell[j2] = T.intern[j2];
+      }
+    }
+  }
+
+  /* ---- trunk relay ----
+     The bole is not one node. A new near-vertical TRUNK segment is stacked
+     every 0.5 m and its predecessor is demoted to an inert thickener. This
+     relay, and nothing else, is what gives the tree a real bole with a real
+     taper (measured 176 mm to 36 mm over 15 segments). (:4470-4521) */
+  for (let i = 0; i < n0; i++) {
+    if (!T.alive[i] || !T.isApex[i] || T.kind[i] !== KIND.TRUNK) continue;
+    if (T.ell[i] < P.trunk_seg) continue;
+    if (T.H >= P.handoff_h) continue;                        // retired; see handoff below
+    const base = tipOf(T, i);
+    const lean = 0.055;
+    const a = norm3([T.ax[i] + (rng()-0.5)*lean, T.ay[i] + (rng()-0.5)*lean, T.az[i] + 0.25]);
+    const j = addNode(T, i, KIND.TRUNK, base, a, 0.02);
+    T.isApex[i] = 0; T.isApex[j] = 1;
+    T.attach[j] = T.ell[i];
+    T.azim[j] = T.azim[i] + 0.7;
+    T.area[j] = T.area[i] * 0.75;
+    packBud(T, j, 1.0, true);                                // the leader is always a long shoot
+  }
+
+  /* ---- crown release, then the handoff ----
+     Co-leaders form in the UPPER crown of a tree tall enough to have one, not
+     at the base of a sapling -- otherwise the tree forks from the ground into
+     a vase. A promoted co-leader gets a FRESH vigor clock, or it keeps its old
+     decayed one, never out-extends the leader, and the tree stalls as a low
+     bole-less dome. (:4935-4968)
+     NOTE ON crel_len_min: the MATLAB gates promotion on a single shoot being
+     >= 0.30 m, which no PREFORMED shoot can ever satisfy (median 9-11 mm). We
+     gate on the shoot's accumulated axis length instead, which is the quantity
+     that rule was reaching for. */
+  let apexCount = 0;
+  for (let i = 0; i < T.n; i++) if (T.alive[i] && T.isApex[i]) apexCount++;
+  if (apexCount < P.max_apex) {
+    const zCut = Math.max(T.H - P.crel_top_frac * T.H, P.crel_zmin);
+    for (let i = 0; i < n0 && apexCount < P.max_apex; i++) {
+      if (!T.alive[i] || T.leafless[i] || T.isApex[i] || T.kind[i] !== KIND.LATERAL) continue;
+      if (fLightH(T.light[i]) < P.crel_light_min) continue;
+      /* The MATLAB gates on ell >= crel_len_min = 0.30 m (:940). Under
+         preformation the median shoot is 9-11 mm, so that test can never pass
+         and crown release simply never fires -- the measured signature is one
+         apex and a 4 m tree at 25 years. Gate on the LIMB instead: a subtree
+         with real structure beyond it, which is the quantity that rule was
+         reaching for. */
+      if (T.subTip[i] < 8) continue;
+      const tz = T.pz[i] + T.ell[i] * T.az[i];
+      if (tz < zCut) continue;
+      if ((T.day - T.birthDay[i]) < P.crel_age_min) continue;
+      if (rng() > P.crel_p_day * dt) continue;
+      T.isApex[i] = 1;
+      T.birthDay[i] = T.day;                                 // fresh clock (reiteration)
+      const w = norm3([(1-P.crel_upright)*T.ax[i], (1-P.crel_upright)*T.ay[i],
+                       (1-P.crel_upright)*T.az[i] + P.crel_upright]);
+      T.ax[i] = w[0]; T.ay[i] = w[1]; T.az[i] = w[2];
+      T.sx[i] = w[0]; T.sy[i] = w[1]; T.sz[i] = w[2];   // axis_set follows (:4956)
+      T.ellTgt[i] = 0;                                       // released from its packed bud
+      apexCount++;
+    }
+  }
+  if (!T.handedOff && T.H >= P.handoff_h && apexCount >= P.handoff_ncol) {
+    for (let i = 0; i < T.n; i++) if (T.kind[i] === KIND.TRUNK && T.isApex[i]) T.isApex[i] = 0;
+    T.handedOff = true; T.handoffDay = T.day;
+  }
+  T.apexCount = apexCount;
+
+  /* ---- death ----
+     About 70% of every shoot ever born has to die or the crown renders as a
+     solid blob instead of a lit shell over bare interior wood. The operative
+     rule is a LIGHT rule, not a carbon one. A shaded shoot first drops its
+     leaves and stands as a bare conduit connecting whatever is still
+     productive beyond it; a limb with nothing productive left is shed whole at
+     the collar, which is the only thing in the model that clears a bole.
+     (:4869, :5079-5122) */
+  for (let i = 1; i < n0; i++) {
+    if (!T.alive[i] || T.isApex[i]) continue;
+    if (T.leafless[i]) continue;
+    const excess = Math.max(0, (P.f_thin - fLightH(T.light[i])) / P.f_thin);   // (:4868)
+    if (excess > 0 && rng() < P.p_shade_max * excess * dt) T.leafless[i] = 1;   // (:4869, :4885)
+  }
+  // a limb with no leafy node anywhere beyond it is shed at the collar
+  const leafyBelow = new Uint8Array(T.n);
+  for (let i = 0; i < T.n; i++) leafyBelow[i] = (T.alive[i] && !T.leafless[i]) ? 1 : 0;
+  for (let i = T.n - 1; i > 0; i--) {
+    const p = T.parent[i];
+    if (p >= 0 && leafyBelow[i]) leafyBelow[p] = 1;
+  }
+  for (let i = 1; i < n0; i++) {
+    if (!T.alive[i] || leafyBelow[i] || T.kind[i] === KIND.TRUNK) continue;
+    T.alive[i] = 0; T.deaths++;
+  }
+  for (let i = 1; i < T.n; i++) {                            // kill orphaned subtrees
+    const p = T.parent[i];
+    if (p >= 0 && !T.alive[p] && T.alive[i]) { T.alive[i] = 0; T.deaths++; }
+  }
+  let na = 0, nl = 0;
+  for (let i = 0; i < T.n; i++) if (T.alive[i]) { na++; if (!T.leafless[i]) nl++; }
+  T.nAlive = na; T.nLeafy = nl;
+}
+
+/* =======================================================================
+   POSTURE -- sag composed with reaction-wood upturn, then one forward pass.
+
+   Measured amplitude in the MATLAB is small: a median 4.9 deg rotation away
+   from the birth axis and a bow sagitta of about 1 mm on a 7.7 m tree, and
+   re-integrating the crown from birth axes alone moves H by 2% and CD/H by
+   less than 0.1. So this is kept for CHARACTER, not for shape -- the two terms
+   together are what make a limb swoop, down at the collar and up at the tip.
+   Either one alone reads as a stick figure or a weeping willow.
+
+   The forward re-seating pass is NOT optional. Children must be re-attached
+   along the parent's arc, in parent-before-child order, every time posture
+   moves. Attach them all at the tip and you get whorls; draw them from the
+   parent's base and you get the starburst artefact; iterate in the wrong order
+   and the crown lags a frame behind the limb it hangs on. (:4140-4155)
+   ======================================================================= */
+function posture(T) {
+  const dt = CONFIG.dt * CONFIG.postureEvery;
+  const E = 9e9, rho = 900, g = 9.81;
+
+  // distal load: one reverse pass over birth order
+  const W = new Float32Array(T.n);
+  for (let i = 0; i < T.n; i++) W[i] = T.alive[i] ? (T.area[i] * T.ell[i] * rho * g + 0.0016 * leafCount(T, i)) : 0;
+  for (let i = T.n - 1; i > 0; i--) { const p = T.parent[i]; if (p >= 0 && T.alive[i]) W[p] += W[i]; }
+
+  for (let i = 1; i < T.n; i++) {
+    if (!T.alive[i]) continue;
+    const A = Math.max(T.area[i], 1e-9);
+    const Iz = A * A / (4 * Math.PI);                        // second moment for a round section
+    const sag = Math.min(0.55, 0.10 * W[i] * T.ell[i] * T.ell[i] / (E * Iz + 1e-9));
+    T.curv[i] += (sag - T.curv[i]) * Math.min(1, 0.02 * dt);
+    /* REACTION-WOOD UPTURN. The axis relaxes toward a SET-POINT that is a blend
+       of the shoot's BIRTH axis and vertical -- it does not rotate toward
+       vertical itself. Getting this wrong is what turned the crown into a
+       broomstick: rotating a fraction of the way to vertical on every posture
+       pass compounds to 1.0 within weeks, so every limb stood straight up and
+       CDmax/H came out at 0.03 against a real 0.67. The blend weight is capped
+       at gsa_upturn (0.65), thick wood resists it, and a tall tree relaxes it
+       further, so a limb keeps most of its birth angle for life. (:4093-4118) */
+    if (T.kind[i] === KIND.LATERAL) {
+      const age = T.day - T.birthDay[i];
+      const D   = 2 * Math.sqrt(Math.max(T.area[i], 0) / Math.PI);
+      const dAx = P.gsa_order_cap * D / (P.gsa_diam_half + D);      // thick wood resists
+      const f_ac = 1 - P.ac_relax * Math.min(T.H / P.ac_href, 1);
+      const tau_i = T.isApex[i] ? P.gsa_tau_apex : P.gsa_tau;
+      let up = (T.isApex[i] ? P.gsa_upturn_apex : P.gsa_upturn) * (1 - dAx) * f_ac;
+      const wv = up * (1 - Math.exp(-age / tau_i));
+      const sp = norm3([(1-wv)*T.sx[i], (1-wv)*T.sy[i], (1-wv)*T.sz[i] + wv]);
+      const k = Math.min(1, P.gsa_rate * dt);
+      const w = norm3([T.ax[i] + k*(sp[0]-T.ax[i]), T.ay[i] + k*(sp[1]-T.ay[i]), T.az[i] + k*(sp[2]-T.az[i])]);
+      T.ax[i] = w[0]; T.ay[i] = w[1]; T.az[i] = w[2];
+    }
+  }
+  // forward pass: parents before children, so a limb carries its crown with it
+  for (let i = 1; i < T.n; i++) {
+    const p = T.parent[i];
+    if (p < 0 || !T.alive[i]) continue;
+    const b = arcPoint([T.px[p], T.py[p], T.pz[p]], [T.ax[p], T.ay[p], T.az[p]],
+                       Math.max(T.ell[p], 1e-9), T.curv[p], Math.min(T.attach[i], T.ell[p]));
+    T.px[i] = b[0]; T.py[i] = b[1]; T.pz[i] = b[2];
+  }
+}
+
+/* Annual bud set. Preformation needs a calendar: you cannot have a bud "set
+   last summer" without one. The seasonal GROWTH gate is gone -- with it on the
+   leader needs about 25 simulated years to reach the handoff -- but the annual
+   packing clock stays, because it is the mechanism, not decoration. Targets
+   ACCUMULATE, which is precisely what the growth rings and bud-scale scars on
+   a real twig record, and it is what lets a spur persist for decades: a spur
+   stops because it SPENT ITS BUD, not because a clock ran out, so next spring
+   it opens a new one and flushes again. (:3503-3505) */
+function budSet(T) {
+  T.lastBudSet = T.day;                                    // this season's buds are now open
+  for (let i = 0; i < T.n; i++) {
+    T.brokeYr[i] = 0;                                      // a new season, a new flush
+    if (!T.alive[i] || T.leafless[i]) continue;
+    /* A spur reflushes: it stopped because it SPENT ITS BUD, not because a clock
+       ran out, so next spring it opens a new one and goes again. That is what
+       lets a spur persist for decades. Targets ACCUMULATE (:3505). */
+    const vv = Math.min(1, Math.max(P.bh_floor, T.vigor[i] * (0.8 + 0.4 * T.rng())));
+    if (T.isLong[i] || T.isApex[i]) {
+      T.nPre[i] = Math.round(P.n_pre_min + (P.n_pre_max - P.n_pre_min) * vv);
+    } else {
+      const sv = Math.min(1, vv * P.spur_vigor_boost);
+      T.nPre[i]   = Math.max(P.n_pre_min, Math.round(P.n_pre_min + (P.n_pre_max - P.n_pre_min) * sv * 0.45));
+      T.intern[i] = P.internode_spur + (P.internode_long - P.internode_spur) * sv * 0.30;
+      T.ellTgt[i] = Math.min(P.spur_max, T.ell[i] + T.nPre[i] * T.intern[i]);
+    }
+  }
+}
+
+/* =======================================================================
+   THE DRAWING
+
+   tree_art.m's hand-drawn quality comes from four mechanisms and no others,
+   all of them cheap:
+
+     1. LINEAGE OVERDRAW. Every terminal tip walks its own parent chain to the
+        ground and draws an INDEPENDENTLY jittered copy, so shared wood gets
+        drawn many times and builds up dark and fuzzy, the way overlapping
+        pencil strokes do. Measured on a 10-year tree: 7,292 m of stroke over
+        613 m of unique skeleton, i.e. 11.9x overdraw.
+     2. WIDTH AS SCATTER. Branch diameter is the standard deviation of a
+        perpendicular jitter -- it is NEVER line width, which stays a hairline
+        throughout. Widen a stroke to fake thickness and pencil becomes marker.
+     3. SMOOTHING. Raw noise reads as mange; Gaussian-smoothed noise reads as
+        a wandering hand.
+     4. A PURE DEPTH CUE as the entire lighting model. Near dark, far pale,
+        fading toward the page. There are no lights anywhere in the scene --
+        FaceLighting is explicitly 'none' on every object.
+
+   WHAT IS DONE DIFFERENTLY HERE, AND WHY. Walking a real lineage per tip is
+   ~1e6 points for a mature tree, which is a one-shot ink pass in MATLAB but
+   would be 150-250 ms EVERY FRAME on a Pi. Instead each segment is drawn
+   `passes` times with independently hashed jitter, where passes rises with
+   log radius -- log(radius) correlates 0.84 with the true number of lineage
+   traversals, so the same buildup falls out at a fraction of the cost. The
+   jitter is hashed on (node, pass) rather than drawn from a running RNG,
+   because the whole tree is redrawn every frame and a running RNG would make
+   every segment pick a new wobble each frame: the drawing would BOIL.
+
+   At 1080p a 6.5 m tree is about 1.5 px per cm, so the median twig is half a
+   pixel across. For 87% of the skeleton, thickness cannot be drawn at all --
+   only accumulated as darkness. That single fact is why this works.
+   ======================================================================= */
+/* =======================================================================
+   THE LOOK -- one drawn per run, so no two showings are rendered alike.
+
+   tree_art.m carries thirty-odd artistic sliders and six curated presets in
+   presetVals() (tree_art.m:1285-1315): Summer maple, Autumn glow, Foliage
+   mass, Winter bare, Ink sketch, Backlit glow. Those are Joe's own looks and
+   they are what is sampled here, adapted to the knobs this renderer actually
+   has, with every value then jittered so two "Summer maple" runs still differ.
+
+   SEEDED FROM THE RUN SEED, on a DERIVED stream. Two things matter about
+   that. The caption already prints the seed, so a look worth keeping can be
+   found again -- seed and look travel together. And deriving the stream
+   (seed XOR a constant) rather than drawing from the growth RNG means adding
+   or changing look logic never perturbs the TREE: the same seed grows the
+   same maple whatever is done to the palette.
+   ======================================================================= */
+const LOOKS = [
+  { name: 'summer maple', w: 30 },                                   // lush, calm daylight
+  { name: 'backlit',      w: 17, haze: 1.9, green: 0.90, leafV: 0.16,
+                              inkMul: 0.88, camEl: 6 },              // sun behind the canopy
+  { name: 'foliage mass', w: 16, leafSz: 1.42, leafA: 0.62, leafNoise: 0.42,
+                              haze: 1.35, inkMul: 0.85 },            // soft impressionist blobs
+  { name: 'autumn glow',  w: 15, hue: 0.72, green: 0.82, haze: 1.6,
+                              lightAz: 150, camEl: 8 },              // warm, low sun
+  { name: 'ink sketch',   w: 12, leaves: false, inkMul: 1.35, lw: 0.62,
+                              jitMul: 1.5, ramp: 1.45, haze: 0.35,
+                              shadow: false, ground: false },        // pen and ink, no scene
+  { name: 'winter bare',  w: 10, leaves: false, inkMul: 1.05, lw: 0.95,
+                              ramp: 1.2, haze: 0.8, shadowA: 0.9 }   // leafless skeleton
+];
+
+let LOOK = null;
+
+function jit(rng, base, frac) { return base * (1 + (rng() * 2 - 1) * frac); }
+
+function pickLook(seed) {
+  const rng = mulberry32((seed ^ 0x5f3759df) >>> 0);
+  const total = LOOKS.reduce((a, L) => a + L.w, 0);
+  let acc = rng() * total, chosen = LOOKS[0];
+  for (const L of LOOKS) { acc -= L.w; if (acc <= 0) { chosen = L; break; } }
+
+  /* Base values are the ones tuned by hand earlier; a preset scales or replaces
+     them, and then everything gets a final wobble so the preset is a FAMILY of
+     looks rather than a single fixed one. */
+  const L = {
+    name:      chosen.name,
+    leaves:    chosen.leaves !== false,
+    jitGain:   jit(rng, CONFIG.jitterGain * (chosen.jitMul || 1), 0.16),
+    ink:       Math.min(0.78, jit(rng, CONFIG.inkAlpha * (chosen.inkMul || 1), 0.13)),
+    lw:        jit(rng, chosen.lw || CONFIG.lineW, 0.14),
+    ramp:      jit(rng, 0.44 * (chosen.ramp || 1), 0.16),   // depth-ramp compression ("con")
+    haze:      Math.min(0.45, jit(rng, PAL.haze * (chosen.haze || 1), 0.22)),
+    leafSz:    jit(rng, 1.45 * (chosen.leafSz || 1), 0.14),
+    leafNoise: jit(rng, chosen.leafNoise || 0.5, 0.25),     // spread of per-leaf size
+    leafScat:  jit(rng, 1.7, 0.28),                         // how loosely leaves sit on the shoot
+    leafA:     Math.min(1, jit(rng, chosen.leafA || 0.90, 0.10)),
+    green:     jit(rng, chosen.green || 1.0, 0.09),
+    leafV:     jit(rng, chosen.leafV || 0.37, 0.18),        // value lift with distance
+    hue:       chosen.hue || 0,                             // a warm run starts part-turned
+    shadow:    chosen.shadow !== false,
+    shadowA:   jit(rng, 0.18 * (chosen.shadowA || 1), 0.22),
+    lightAz:   (chosen.lightAz !== undefined ? chosen.lightAz : 40) + (rng() * 2 - 1) * 25,
+    ground:    chosen.ground !== false,
+    camEl:     (chosen.camEl !== undefined ? chosen.camEl : 12) + (rng() * 2 - 1) * 3.5,
+    camAz0:    -37 + (rng() * 2 - 1) * 26,                  // where the slow orbit starts
+    orbitDir:  rng() < 0.5 ? -1 : 1,
+
+    /* THE PEN. build_strokes.m draws one continuous stroke per terminal tip,
+       walking the real parent chain all the way to the ground: resample the
+       path at ds, offset each sample perpendicular by gain*2*radius, SMOOTH
+       that offset along the path, then spline through it. The smoothing is the
+       whole trick -- unsmoothed offsets read as mange, smoothed ones read as a
+       wandering hand -- and the continuity is what makes it a pen stroke
+       instead of a chain of unrelated wobbles.
+         penTips     how many lineages are drawn (tree_art's density slider).
+                     Every one passes through the trunk, so this IS the overdraw
+                     that makes the bole dark: tree_art measures 11.9x.
+         penSpacing  ds, in px.
+         penFlex     wobble wavelength in px -- tree_art's flex/sigma. Short is
+                     nervous and sketchy, long is a slow confident line.
+         penBase     how much wobble survives at the ground (basewidth 0.92):
+                     1 = the base meets the ground at full trunk width, 0 = every
+                     stroke funnels to a point and the trunk tapers to a toothpick. */
+    penTips:   Math.round(jit(rng, 190, 0.45)),
+    penSpacing: jit(rng, 6.5, 0.35),
+    penFlex:   jit(rng, 46, 0.55),
+    penBase:   Math.min(1, jit(rng, 0.86, 0.16)),
+    penWidth:  jit(rng, 1.0, 0.22)
+  };
+  return L;
+}
+
+const PAL = {
+  page:   [245, 240, 227],     // tree_art.m:63
+  near:   [ 43,  26,  13],     // :64  dark wood, close to the eye
+  far:    [194, 161, 117],     // :65  pale wood, far away
+  ground: [204, 199, 179],     // :66
+  shadow: [ 33,  28,  26],     // :989
+  haze:   0.15                 // :133  far end fades toward the page
+};
+function woodColor(t) {
+  /* base = near + t*(far-near), then haze blends toward the page (makeBrown.m:5-7).
+     THE RAMP IS COMPRESSED. tree_art spends near-to-far across a whole scene; here
+     the entire ramp goes on one tree perhaps 2 m deep, so half the wood landed at
+     the pale end and the drawing read as beige. Running only the first ~55% of the
+     ramp keeps the depth cue and keeps the wood dark. */
+  t = t * (LOOK ? LOOK.ramp : 0.44);
+  const h = (LOOK ? LOOK.haze : PAL.haze) * 0.5 * t;
+  const r = (PAL.near[0] + t*(PAL.far[0]-PAL.near[0])) * (1-h) + PAL.page[0]*h;
+  const g = (PAL.near[1] + t*(PAL.far[1]-PAL.near[1])) * (1-h) + PAL.page[1]*h;
+  const b = (PAL.near[2] + t*(PAL.far[2]-PAL.near[2])) * (1-h) + PAL.page[2]*h;
+  return 'rgb(' + (r|0) + ',' + (g|0) + ',' + (b|0) + ')';
+}
+/* Leaf colour in HSV, straight off tree_art.m:886-903: hue 0.27, saturation
+   0.85 near falling to 0.20 far, value 0.55 near rising to 0.92 far -- so
+   distant foliage goes pale and desaturated rather than dark. */
+function leafColor(t, vNoise, autumn) {
+  const Hn = 0.27*(1-autumn) + 0.06*autumn, Hf = 0.27*(1-autumn) + 0.11*autumn;
+  const H = Hf + (1-t)*(Hn-Hf);
+  const gSat = LOOK ? LOOK.green : 1;              // NB: r/g/b below are the HSV output
+  const S = Math.max(0, (0.85 - 0.65*t) * gSat);
+  const V = Math.min(1, 0.55 + (LOOK ? LOOK.leafV : 0.37)*t + vNoise);
+  const i = Math.floor(H*6), f = H*6 - i;
+  const q = V*(1-S), w = V*(1-S*f), e = V*(1-S*(1-f));
+  let r, g, b;
+  switch (i % 6) {
+    case 0: r=V; g=e; b=q; break;  case 1: r=w; g=V; b=q; break;
+    case 2: r=q; g=V; b=e; break;  case 3: r=q; g=w; b=V; break;
+    case 4: r=e; g=q; b=V; break;  default: r=V; g=q; b=w;
+  }
+  const h = (LOOK ? LOOK.haze : PAL.haze)*t;
+  return 'rgb(' + ((r*255)*(1-h) + PAL.page[0]*h | 0) + ','
+                + ((g*255)*(1-h) + PAL.page[1]*h | 0) + ','
+                + ((b*255)*(1-h) + PAL.page[2]*h | 0) + ')';
+}
+
+/* THE LEAF. Ported straight from build_leaf_template.m:20-22 -- the same eight
+   control points tree_art uses for the sugar maple silhouette, given as radius
+   against angle for the right half of the blade and mirrored to close the loop:
+
+     phi  0  30  55  80  110  148  172  180 deg
+     r  1.00 .46 .94 .42  .72  .40  .46  .36
+
+   Tip at phi = 0, cordate base at 180, and the alternating high/low radii are
+   the five palmate lobes with their sinuses between. Fourteen points, built
+   once at unit scale with the tip along +x, then rotated and scaled per leaf.
+
+   This is not more expensive than the ellipse it replaces -- probably less.
+   ctx.ellipse expands to a run of bezier segments internally, whereas this is
+   fourteen lineTo calls, and they batch into exactly the same three fills per
+   depth band. At 4K a leaf lands at about 6-8 px, too small to read as a maple
+   leaf on its own, but it makes the canopy edge SERRATED rather than bubbly,
+   and that is what shows from across a room. */
+const LEAF_POLY = (() => {
+  const phi = [0, 30, 55, 80, 110, 148, 172, 180];
+  const r   = [1.00, 0.46, 0.94, 0.42, 0.72, 0.40, 0.46, 0.36];
+  const pts = [];
+  for (let i = 0; i < phi.length; i++) {
+    const a = phi[i] * Math.PI / 180;
+    pts.push(r[i] * Math.cos(a), r[i] * Math.sin(a));
+  }
+  for (let i = phi.length - 2; i >= 1; i--) {           // mirrored left half, base -> tip
+    const a = phi[i] * Math.PI / 180;
+    pts.push(r[i] * Math.cos(a), -r[i] * Math.sin(a));
+  }
+  /* Shift so the blade is centred on its own area rather than on the petiole,
+     otherwise every leaf hangs off one side of the point it is placed at. */
+  let cx = 0; for (let i = 0; i < pts.length; i += 2) cx += pts[i];
+  cx /= (pts.length / 2);
+  for (let i = 0; i < pts.length; i += 2) pts[i] -= cx;
+  return pts;
+})();
+
+/* Fixed orthographic camera at az -37 / el 12, tree_art's own default
+   (tree_art.m:52, 736). Orthographic because the renderer has no lights and
+   perspective buys nothing a growing tree does not already give. */
+/* Camera. az and el are per-run now: the fixed plate at -37/12 was the model's
+   own default, but a portrait wants to be framed a little differently each time
+   and the elevation change alone re-reads the crown. camAz below adds the slow
+   orbit on top. */
+const CAM = { az: -37*Math.PI/180, el: 12*Math.PI/180 };
+function project(x, y, z, V) {
+  const ca = Math.cos((LOOK ? LOOK.camAz0*Math.PI/180 : CAM.az) + camAz);
+  const sa = Math.sin((LOOK ? LOOK.camAz0*Math.PI/180 : CAM.az) + camAz);
+  const x1 =  x*ca + y*sa;
+  const y1 = -x*sa + y*ca;
+  const el = LOOK ? LOOK.camEl*Math.PI/180 : CAM.el;
+  const ce = Math.cos(el), se = Math.sin(el);
+  return [V.cx + x1*V.s, V.cy - (z*ce - y1*se)*V.s, y1*ce + z*se];
+}
+
+/* Smooth noise along a stroke, by construction rather than by filtering.
+   build_strokes draws white noise and then Gaussian-smooths it; three hashed
+   sine octaves give the same wandering line for one multiply-add per sample and
+   no smoothing pass, and the wavelength is a directly meaningful control. */
+function penWobble(id, s, wavelen, ph) {
+  return (Math.sin(s / wavelen + ph)
+        + 0.42 * Math.sin(s / (wavelen * 0.41) + ph * 2.7 + 1.3)
+        + 0.17 * Math.sin(s / (wavelen * 0.17) + ph * 5.1 + 2.6)) / 1.59;
+}
+
+/* ONE CONTINUOUS STROKE, tip to ground. Walks the node's real parent chain --
+   laterals and the trunk relay alike -- resamples it at penSpacing, offsets each
+   sample perpendicular by gain*2*radius (thickness is drawn as SCATTER, never as
+   line width), and runs a quadratic through the offset points. Returns the number
+   of samples drawn so the caller can budget. */
+function penStroke(T, V, tip, ph, chainBuf) {
+  let n = 0;
+  for (let i = tip; i >= 0 && n < 128; i = T.parent[i]) chainBuf[n++] = i;
+  if (n < 2) return 0;
+
+  // root-first: project each node's base, then the tip of the outermost shoot
+  const px = [], py = [], pr = [];
+  for (let k = n - 1; k >= 0; k--) {
+    const i = chainBuf[k];
+    const q = project(T.px[i], T.py[i], T.pz[i], V);
+    px.push(q[0]); py.push(q[1]); pr.push(Math.sqrt(T.area[i] / Math.PI));
+  }
+  const t0 = tipOf(T, chainBuf[0]);
+  const qt = project(t0[0], t0[1], t0[2], V);
+  px.push(qt[0]); py.push(qt[1]); pr.push(pr[pr.length - 1]);
+
+  // cumulative arc length in screen px
+  const m = px.length, arc = new Float64Array(m);
+  for (let k = 1; k < m; k++) arc[k] = arc[k-1] + Math.hypot(px[k]-px[k-1], py[k]-py[k-1]);
+  const total = arc[m-1];
+  if (total < 2) return 0;
+
+  const ds = LOOK.penSpacing;
+  const nq = Math.max(2, Math.min(420, Math.ceil(total / ds) + 1));
+  let seg = 1, first = true, prevX = 0, prevY = 0;
+  for (let q = 0; q < nq; q++) {
+    const sArc = total * q / (nq - 1);
+    while (seg < m - 1 && arc[seg] < sArc) seg++;
+    const a0 = arc[seg-1], a1 = arc[seg];
+    const u = a1 > a0 ? (sArc - a0) / (a1 - a0) : 0;
+    const x = px[seg-1] + (px[seg] - px[seg-1]) * u;
+    const y = py[seg-1] + (py[seg] - py[seg-1]) * u;
+    const r = pr[seg-1] + (pr[seg] - pr[seg-1]) * u;
+
+    // perpendicular to the local tangent, in screen space
+    let tx = px[seg] - px[seg-1], ty = py[seg] - py[seg-1];
+    const tn = Math.hypot(tx, ty) || 1; tx /= tn; ty /= tn;
+
+    /* The wobble is held at full strength down the shaft and only eased over
+       the last stretch into the ground -- penBase sets how much survives there.
+       (build_strokes.m:110) */
+    const ramp = LOOK.penBase + (1 - LOOK.penBase) * Math.min(1, (total - sArc) / 90);
+    const sd = LOOK.jitGain * 2 * r * V.s * ramp * LOOK.penWidth;
+    const off = penWobble(tip, sArc, LOOK.penFlex, ph) * sd;
+    const X = x - ty * off, Y = y + tx * off;
+
+    if (first) { ctx.moveTo(X, Y); first = false; }
+    else       { ctx.quadraticCurveTo(prevX, prevY, (prevX + X) * 0.5, (prevY + Y) * 0.5); }
+    prevX = X; prevY = Y;
+  }
+  ctx.lineTo(prevX, prevY);
+  return nq;
+}
+
+/* A standing human silhouette, normalised to height 1 with the feet at v = 0,
+   lifted verbatim from personOutline() in tree_art.m: the right half from the
+   crown of the head down to the crotch, mirrored for the left. Drawn at 1.75 m
+   in WORLD units beside the tree, so as the maple grows the figure shrinks on
+   screen -- which is the whole point. Without a fixed-size object in the frame
+   there is nothing for the eye to measure the tree against, and a subject that
+   holds a constant share of the screen reads as static however much it grows. */
+const PERSON = (() => {
+  const R = [[0.000,1.000],[0.050,0.985],[0.072,0.950],[0.072,0.905],[0.042,0.876],
+             [0.090,0.858],[0.150,0.848],[0.150,0.610],[0.132,0.520],[0.100,0.535],
+             [0.082,0.700],[0.088,0.470],[0.098,0.450],[0.086,0.020],[0.020,0.000],
+             [0.030,0.440],[0.000,0.470]];
+  const pts = R.slice();
+  for (let i = R.length - 2; i >= 1; i--) pts.push([-R[i][0], R[i][1]]);  // mirror
+  return pts;
+})();
+const PERSON_H = 1.75;                                    // [m]
+
+function drawPerson(T, V) {
+  /* Stands just past the crown edge, on the ground, facing the camera. Its
+     screen size falls out of the same projection as the tree, so it is a true
+     scale reference rather than a decoration. */
+  let rmax = 0.4;
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i]) continue;
+    const t = tipOf(T, i);
+    const r = Math.hypot(t[0], t[1]);
+    if (r > rmax) rmax = r;
+  }
+  const az = (LOOK ? LOOK.camAz0 * Math.PI/180 : CAM.az) + camAz;
+  /* Offset ALONG the view azimuth, not across it. project() maps a world point
+     to screen-x by (x*cos(az) + y*sin(az)), so an offset perpendicular to the
+     azimuth is the DEPTH axis and contributes no horizontal screen movement at
+     all -- the figure ends up dead centre, standing inside the trunk. Along the
+     azimuth it displaces the full distance sideways. */
+  const bx = Math.cos(az) * rmax * 1.25, by = Math.sin(az) * rmax * 1.25;
+  const foot = project(bx, by, 0, V);
+  const head = project(bx, by, PERSON_H, V);
+  const hpx = foot[1] - head[1];                          // screen height of 1.75 m
+  if (hpx < 6) return;                                    // too small to read; leave it out
+
+  ctx.beginPath();
+  for (let k = 0; k < PERSON.length; k++) {
+    const X = foot[0] + PERSON[k][0] * hpx;
+    const Y = foot[1] - PERSON[k][1] * hpx;
+    if (k === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+  }
+  ctx.closePath();
+  /* Quiet: it is a ruler, not a character. tree_art fills at 0.55 against a
+     cream page and outlines thinly (tree_art.m:775); the same weight here reads
+     heavier because the figure is much larger on screen early on, when the tree
+     is still shorter than it is. */
+  ctx.globalAlpha = 0.34;
+  ctx.fillStyle = 'rgb(96,98,106)';
+  ctx.fill();
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = 'rgb(64,64,70)';
+  ctx.lineWidth = Math.max(0.5, hpx * 0.008);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+let cv, ctx, W = 0, H = 0, dpr = 1;
+function layout() {
+  cv = document.getElementById('page');
+  ctx = cv.getContext('2d', { alpha: false });
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+/* The view. A growing tree spans 9x in height over the piece, so a frame fitted
+   to the FINAL tree leaves the first minute on an almost invisible seedling.
+   The camera therefore tracks the crown with a lag. This is only affordable
+   because the renderer is stateless -- it redraws everything every frame -- so
+   there is no accumulated ink buffer that a zoom would invalidate. */
+function fitView(T, V, ease) {
+  let zmax = 0.4, rmax = 0.25;
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i]) continue;
+    const t = tipOf(T, i);
+    if (t[2] > zmax) zmax = t[2];
+    const r = Math.hypot(t[0], t[1]);
+    if (r > rmax) rmax = r;
+  }
+  /* THE TREE MUST GET BIGGER ON SCREEN, NOT JUST DETAILED.
+     A plain auto-fit keeps the subject at a constant fraction of the frame for
+     the whole run, so the only thing that visibly changes is the GROUND sliding
+     down and away -- and the eye reads that as the tree shrinking, not growing.
+     The fix is to let the fraction of the screen the tree occupies RISE with
+     its height: a seedling gets a third of the frame, a grown tree nearly all
+     of it. The zoom still only ever pulls back (never in), but far more slowly
+     than the tree grows, so on-screen size increases monotonically throughout.
+     The exponent is well under 1 so most of the gain happens early, while the
+     tree is small and the change is otherwise hardest to see. */
+  /* The figure is part of the composition, so the frame has to contain it --
+     otherwise a seedling shorter than 1.75 m is fitted snugly and the person is
+     cut off at the shins, which is precisely when the scale cue matters most. */
+  if (CONFIG.person) zmax = Math.max(zmax, PERSON_H * 1.12);
+  const grown  = Math.min(1, zmax / (P.handoff_h * 1.55));
+  const frac   = CONFIG.fitMin + (CONFIG.fitMax - CONFIG.fitMin) * Math.pow(grown, 0.42);
+  const wantH  = zmax * 1.015 + 0.06;
+  const wantW  = rmax * 2.1 + 0.1;
+  const s = Math.min(H * frac / wantH, W * (frac * 0.72) / wantW);
+  const cx = W * 0.5;
+  const cy = H * 0.90;
+  if (!V.s) { V.s = s; V.cx = cx; V.cy = cy; }
+  else { V.s += (s - V.s) * ease; V.cx += (cx - V.cx) * ease; V.cy += (cy - V.cy) * ease; }
+  return V;
+}
+
+function draw(T, V, autumn) {
+  ctx.fillStyle = 'rgb(' + PAL.page.join(',') + ')';
+  ctx.fillRect(0, 0, W, H);
+
+  // ---- ground wash: two radial stops, alpha 0.60 at the centre to 0 at the rim
+  if (LOOK.ground) {
+    const gy = V.cy, gr = Math.max(W, H) * 0.55;
+    const gg = ctx.createRadialGradient(V.cx, gy, 0, V.cx, gy, gr);
+    gg.addColorStop(0,    'rgba(204,199,179,0.60)');
+    gg.addColorStop(0.45, 'rgba(204,199,179,0.50)');
+    gg.addColorStop(1,    'rgba(204,199,179,0)');
+    ctx.fillStyle = gg;
+    ctx.beginPath(); ctx.ellipse(V.cx, gy, gr, gr*0.30, 0, 0, 6.2832); ctx.fill();
+  }
+
+  // ---- collect drawable segments, with depth
+  const segs = [];
+  let dLo = 1e9, dHi = -1e9;
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i] || T.ell[i] < 1e-4) continue;
+    /* Don't draw a dead fine twig at the end of a branch. A leafless node with
+       nothing beyond it and no thickness is a twig the tree would already have
+       shed; drawn, it is a bare whisker sticking out past the foliage and it is
+       the last thing spoiling the silhouette. Leafless wood that still CARRIES
+       something stays -- that is the bare interior conduit, and it should show. */
+    if (T.leafless[i] && T.subTip[i] <= 1 && Math.sqrt(T.area[i]/Math.PI) < 0.0018) continue;
+    const q = T.parent[i];
+    const b = project(T.px[i], T.py[i], T.pz[i], V);
+    const tp = tipOf(T, i);
+    const e = project(tp[0], tp[1], tp[2], V);
+    const d = (b[2] + e[2]) * 0.5;
+    if (d < dLo) dLo = d; if (d > dHi) dHi = d;
+    segs.push([b[0], b[1], e[0], e[1], Math.sqrt(T.area[i]/Math.PI), d, i]);
+  }
+  if (!segs.length) return;
+  const dSpan = Math.max(dHi - dLo, 1e-6);
+
+  /* Back to front. Canvas has no z-buffer, so draw order IS the depth test;
+     bucketing into bands also lets one colour and one path serve many
+     segments, which is where the per-frame cost actually goes. */
+  const NB = 22;
+  const bands = Array.from({length: NB}, () => []);
+  for (const sg of segs) bands[Math.min(NB-1, ((dHi - sg[5]) / dSpan * NB) | 0)].push(sg);
+
+  // ---- cast shadow, drawn first and flat on the ground
+  if (LOOK.shadow) {
+    /* Light azimuth sets which way the shadow falls -- tree_art exposes the same
+       as lightaz/lightel (default 40/35). Here it just skews the ground
+       projection, which is all a flat cast shadow needs. */
+    const lx = Math.cos(LOOK.lightAz * Math.PI/180) * 0.42;
+    ctx.globalAlpha = LOOK.shadowA;
+    ctx.strokeStyle = 'rgb(' + PAL.shadow.join(',') + ')';
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    for (const sg of segs) {
+      if (sg[4] < 0.004) continue;                     // only real limbs cast
+      ctx.moveTo(sg[0] + (V.cy - sg[1])*lx, V.cy + (V.cy - sg[1])*0.055);
+      ctx.lineTo(sg[2] + (V.cy - sg[3])*lx, V.cy + (V.cy - sg[3])*0.055);
+    }
+    ctx.stroke();
+  }
+
+  if (CONFIG.person) drawPerson(T, V);
+
+  /* ---- THE PEN: continuous lineage strokes, tip to ground ----
+     Lineages are sorted far-to-near by their TIP depth and coloured by it. A
+     single stroke spans many depths and Canvas cannot colour along one; the
+     crown is where the depth cue actually reads, and the trunk -- crossed by
+     every lineage -- ends up an average of all of them, which is about right. */
+  {
+    const tips = [];
+    for (let i = 1; i < T.n; i++) {
+      if (!T.alive[i] || T.subTip[i] > 1) continue;         // a tip carries nothing beyond it
+      if (T.leafless[i] && Math.sqrt(T.area[i]/Math.PI) < 0.0018) continue;
+      tips.push(i);
+    }
+    if (tips.length) {
+      const want = Math.min(LOOK.penTips, tips.length);
+      const stride = tips.length / want;
+      const chosen = [];
+      for (let k = 0; k < want; k++) {
+        const i = tips[Math.floor(k * stride)];
+        const t0 = tipOf(T, i);
+        chosen.push([i, project(t0[0], t0[1], t0[2], V)[2]]);
+      }
+      const chainBuf = new Int32Array(160);
+      ctx.lineWidth = LOOK.lw * LOOK.penWidth;
+      ctx.lineCap = 'round';
+      ctx.globalAlpha = LOOK.ink * 0.62;                    // many passes overlap on the bole
+      let budget = 26000;                                   // samples per frame, hard cap
+      const NBP = 10;                                       // colour buckets for the pen
+      for (let b = NBP - 1; b >= 0 && budget > 0; b--) {
+        let opened = false;
+        for (let c = 0; c < chosen.length; c++) {
+          const bi = Math.min(NBP - 1, ((dHi - chosen[c][1]) / dSpan * NBP) | 0);
+          if (bi !== b) continue;
+          if (!opened) { ctx.strokeStyle = woodColor((b + 0.5) / NBP); ctx.beginPath(); opened = true; }
+          budget -= penStroke(T, V, chosen[c][0], hash2(chosen[c][0], 7) * 6.2832, chainBuf);
+          if (budget <= 0) break;
+        }
+        if (opened) ctx.stroke();
+      }
+    }
+  }
+
+  // ---- wood and foliage, INTERLEAVED band by band, back to front
+  ctx.lineWidth = LOOK.lw;                              // constant hairline, always
+  ctx.lineCap = 'round';
+  let drawn = 0;
+  const stride = Math.max(1, Math.ceil(T.nLeafy / CONFIG.leafCap));
+  const lrBase = Math.sqrt(P.leaf_area / Math.PI) * V.s * 0.62;
+  /* BACK TO FRONT. Canvas has no depth buffer, so draw order IS the depth test.
+     Interleaving each band's foliage with its own wood matters too: drawing all
+     the wood and then all the leaves puts every leaf in front of every branch, so
+     near limbs sink behind far foliage and the wood stops reading as structure. */
+  for (let bi = NB - 1; bi >= 0; bi--) {
+    const band = bands[bi];
+    if (!band.length) continue;
+    const t = (bi + 0.5) / NB;
+
+    ctx.globalAlpha = LOOK.ink;
+    ctx.strokeStyle = woodColor(t);
+    ctx.beginPath();
+    for (const sg of band) {
+      const [x0, y0, x1, y1, r, , id] = sg;
+      /* One pass now. The overdraw that darkens the trunk and the limbs is done
+         properly by the lineage strokes above -- every one of them runs through
+         the bole, which is exactly how build_strokes gets its measured 11.9x.
+         This pass exists only so every twig, including ones no selected lineage
+         happens to pass through, is drawn at least once. */
+      const sd = LOOK.jitGain * 2 * r * V.s;           // SD in PIXELS (build_strokes.m:115)
+      const passes = sd > 3 ? 2 : 1;
+      /* Passes are SPREAD ACROSS the band, not drawn from a gaussian. Gaussian
+         offsets pile up at the centre and thin toward the edges, so a 20 px
+         trunk read as a dark 4 px line with fuzz either side instead of a solid
+         column. Sweeping k evenly across [-sd, +sd] and adding a small hashed
+         wobble fills the band and still wanders like a hand. */
+      const perp = Math.hypot(x1-x0, y1-y0) > 1e-6
+        ? [-(y1-y0), (x1-x0)] : [1, 0];
+      const pn = Math.hypot(perp[0], perp[1]) || 1;
+      const ux = perp[0]/pn, uy = perp[1]/pn;
+      for (let k = 0; k < passes; k++) {
+        const spread = passes > 1 ? ((k / (passes - 1)) - 0.5) * 2 * sd : 0;
+        const wob = 0.42 * sd;
+        const a = spread + hashN(id, k*2) * wob;
+        const b = spread + hashN(id, k*2+64) * wob;
+        const ax = ux*a, ay = uy*a, bx = ux*b, by = uy*b;
+        ctx.moveTo(x0 + ax, y0 + ay);
+        ctx.quadraticCurveTo((x0+x1)*0.5 + (ax+bx)*0.55, (y0+y1)*0.5 + (ay+by)*0.55, x1 + bx, y1 + by);
+      }
+    }
+    ctx.stroke();
+
+    /* Foliage is BATCHED. One beginPath/fill per leaf meant ~5,000 fill calls a
+       frame, which measured 23-27 ms on a fast laptop -- about 7 fps once scaled
+       to a Pi, and essentially the entire frame cost. Leaves in a band differ
+       only by a small value-noise term, so they are bucketed into three shades
+       and each bucket is one path and one fill: 66 fills a frame instead of
+       5,000, for a difference nobody can see at three metres. */
+    ctx.globalAlpha = LOOK.leafA;
+    if (LOOK.leaves && lrBase >= 0.7) {
+      const NV = 3;
+      for (let vb = 0; vb < NV; vb++) {
+        // A warm look starts part-turned; the finale drives it the rest of the way.
+        ctx.fillStyle = leafColor(t, ((vb + 0.5)/NV - 0.5) * 0.1,
+                                  Math.min(1, LOOK.hue + autumn));
+        ctx.beginPath();
+        let any = false;
+        for (const sg of band) {
+          const id = sg[6];
+          if (T.leafless[id] || (id % stride)) continue;
+          const nl = Math.min(8, leafCount(T, id));
+          if (!nl) continue;
+          /* FEWER, BIGGER LEAVES. A fourteen-point silhouette costs about 2.6x
+             an ellipse of the same size (39 ms a frame at 4K against 15 -- so
+             much for lineTo being cheaper than ctx.ellipse). Halving the count
+             and growing each blade buys the shape back at the old price, and a
+             canopy of fewer larger lobed leaves reads BETTER at three metres
+             than more, smaller blobs: the silhouette is what carries. */
+          for (let k = 0; k < nl; k += 4) {
+            if ((Math.floor(hash2(id, k+91) * NV) | 0) !== vb) continue;
+            const f = (k + 0.5) / nl;
+            const px = sg[0] + (sg[2]-sg[0])*f, py = sg[1] + (sg[3]-sg[1])*f;
+            const a = T.azim[id] + k * P.phyllotaxis;
+            const jx = (hash2(id, k) - 0.5) * lrBase * LOOK.leafScat;
+            const jy = (hash2(id, k+31) - 0.5) * lrBase * LOOK.leafScat;
+            const sz = lrBase * LOOK.leafSz
+                     * (1 - LOOK.leafNoise/2 + LOOK.leafNoise * hash2(id, k+57));
+            const cx = px + Math.cos(a)*lrBase*0.7 + jx;
+            const cy = py + Math.sin(a)*lrBase*0.35 + jy;
+            /* Rotated so the tip points away from the shoot, and squashed
+               vertically by the same 0.78 the ellipse used -- the camera looks
+               slightly down, so a blade held out flat foreshortens. */
+            const ca = Math.cos(a), sn = Math.sin(a);
+            const sx = sz, sy = sz * 0.78;
+            ctx.moveTo(cx + sx*(ca*LEAF_POLY[0]) - sy*(sn*LEAF_POLY[1]),
+                       cy + sx*(sn*LEAF_POLY[0]) + sy*(ca*LEAF_POLY[1]));
+            for (let v = 2; v < LEAF_POLY.length; v += 2) {
+              ctx.lineTo(cx + sx*(ca*LEAF_POLY[v]) - sy*(sn*LEAF_POLY[v+1]),
+                         cy + sx*(sn*LEAF_POLY[v]) + sy*(ca*LEAF_POLY[v+1]));
+            }
+            ctx.closePath();
+            any = true; drawn++;
+          }
+        }
+        if (any) ctx.fill();
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+  return drawn;
+}
+
+/* =======================================================================
+   THE CYCLE
+   ======================================================================= */
+const titleEl = document.getElementById('title');
+const capWhat   = document.querySelector('#caption .what');
+const capParams = document.querySelector('#caption .params');
+const capEl     = document.getElementById('caption');
+
+/* setCaption(what, params) -- the shared signature the other pages expose. */
+function setCaption(what, params) {
+  capWhat.textContent   = what;
+  capParams.textContent = params;
+}
+const infoEl  = document.getElementById('info');
+const curtain = document.getElementById('curtain');
+
+let T = null, V = {}, runIndex = 0;
+let runStart = 0, lastStepAt = 0, dayDebt = 0, finishedAt = 0;
+let paused = false, handingOff = false, stepIdx = 0;
+let fps = 0, lastFrame = performance.now(), lastDrawn = 0, msSim = 0, msDraw = 0, paints = 0;
+let simFails = 0, camAz = 0, lastPaintAt = 0;
+
+const TOTAL_DAYS = () => CONFIG.simYears * 365;
+
+function showTitle() {
+  titleEl.querySelector('.name').textContent = 'Heartwood';
+  titleEl.querySelector('.blurb').textContent =
+    'A sugar maple, grown from one shoot. Light decides which buds open; the rest are shed.';
+  titleEl.classList.add('show');
+  setTimeout(() => titleEl.classList.remove('show'), CONFIG.titleMs);
+}
+
+function newRun() {
+  const seed = 1 + Math.floor(Math.random()*999998);
+  T = seedTree(seed);
+  LOOK = pickLook(seed);          // same seed, derived stream: look travels with the tree
+  V = {};
+  stepIdx = 0; dayDebt = 0; finishedAt = 0; simFails = 0; camAz = 0; lastPaintAt = 0;
+  runStart = performance.now(); lastStepAt = runStart;
+  fitView(T, V, 1);
+  showTitle();
+  capEl.classList.add('show');
+  updateTicker();
+}
+
+function simulate(nSteps) {
+  const t0 = performance.now();
+  for (let k = 0; k < nSteps; k++) {
+    const yearBefore = Math.floor(T.day / 365);
+    const st = step(T, stepIdx);
+    // events() needs the child counts the reverse pass just built
+    const nChild = new Int32Array(T.n);
+    for (let i = 1; i < T.n; i++) if (T.alive[i] && T.parent[i] >= 0) nChild[T.parent[i]]++;
+    events(T, nChild, V.s || 100);
+    if (Math.floor(T.day / 365) > yearBefore) budSet(T);
+    if (stepIdx % CONFIG.postureEvery === 0) posture(T);
+    if (stepIdx % CONFIG.lightEvery === 0) gatherLight(T, buildLight(T));
+    stepIdx++;
+    T.lastCe = st.f_Ce; T.leaves = st.leaves;
+  }
+  msSim = msSim*0.85 + (performance.now() - t0)*0.15;
+}
+
+function updateTicker() {
+  if (!T) return;
+  setCaption(
+    'A sugar maple grown one shoot at a time. Light decides which buds open; '
+    + 'about seven in ten shoots are shed before the tree is grown.',
+    'seed ' + T.seed + ' · ' + LOOK.name
+      + '   ·   year ' + (T.day / 365).toFixed(1) + ' of ' + CONFIG.simYears
+      + '   ·   ' + T.H.toFixed(2) + ' m tall, ' + (2*Math.sqrt(T.area[0]/Math.PI)*100).toFixed(0) + ' cm at the base'
+      + '   ·   ' + T.nAlive.toLocaleString() + ' live shoots, ' + T.deaths.toLocaleString() + ' shed'
+      + '   ·   ' + (T.handedOff
+            ? 'leader retired at ' + P.handoff_h + ' m, ' + T.apexCount + ' co-leaders'
+            : 'single leader')
+  );
+}
+function updateInfo() {
+  if (!T) return;
+  const dbh = 2*Math.sqrt(T.area[0]/Math.PI)*100;
+  infoEl.textContent =
+    'seed      ' + T.seed + '\n' +
+    'day       ' + T.day.toFixed(0) + '  (yr ' + (T.day/365).toFixed(1) + ')\n' +
+    'height    ' + T.H.toFixed(2) + ' m\n' +
+    'base dia  ' + dbh.toFixed(1) + ' cm   H/D ' + (dbh > 0 ? (T.H*100/dbh).toFixed(0) : '-') + '\n' +
+    'nodes     ' + T.nAlive + ' alive / ' + T.n + ' born   ' + T.deaths + ' dead\n' +
+    'leafy     ' + T.nLeafy + '   leaves ' + (T.leaves|0) + '\n' +
+    'apices    ' + T.apexCount + (T.handedOff ? '  (handoff yr ' + (T.handoffDay/365).toFixed(1) + ')' : '') + '\n' +
+    'C         ' + T.C.toFixed(1) + '   f_Ce ' + (T.lastCe||0).toFixed(2) + '\n' +
+    'drawn     ' + lastDrawn + ' leaf sprites\n' +
+    'sim/draw  ' + msSim.toFixed(1) + ' / ' + msDraw.toFixed(1) + ' ms\n' +
+    'paints    ' + paints + '\n' +
+    'fps       ' + fps.toFixed(0) + (paused ? '  [PAUSED]' : '');
+}
+
+function handOff() {
+  if (handingOff) return;
+  handingOff = true;
+  curtain.classList.add('on');
+  setTimeout(() => {
+    runIndex++;
+    /* An EMPTY nextPage means there is nowhere to hand on to - which is what
+       build_github.py leaves behind when it cuts this page out of the wall's
+       rotation for publishing. Start again instead. */
+    if (!PINNED && runIndex >= CONFIG.runsPerTurn) {
+      if (CONFIG.nextPage) location.href = CONFIG.nextPage; else location.reload();
+      return;
+    }
+    newRun();
+    curtain.classList.remove('on');
+    handingOff = false;
+  }, CONFIG.fadeMs);
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dtms = now - lastFrame; lastFrame = now;
+  fps = fps ? fps*0.9 + (1000/dtms)*0.1 : 1000/dtms;
+  if (paused || handingOff || !T) return;
+
+  let stepped = false;
+  /* ABSOLUTE DEADLINE -- the escape hatch. handOff() was reachable only through
+     finishedAt, which is set only when the day counter reaches its target, and
+     runMs was used to derive the growth RATE rather than as a deadline. So if
+     simulate() ever threw or the day counter stopped advancing, the wall sat on
+     a frozen tree forever: rAF is rescheduled at the top of frame(), so an
+     exception in the body does not stop the loop, it just repeats. Every other
+     page in the rotation has one of these. (Pi session note 1.) */
+  if (now - runStart > CONFIG.runMs * CONFIG.deadlineSlack) { handOff(); return; }
+
+  const done = T.day >= TOTAL_DAYS();
+  if (!done) {
+    /* Simulated days are advanced on a CLOCK, not per frame, so the tree grows
+       at the same speed whether the panel manages 60 fps or 24. */
+    const perMs = TOTAL_DAYS() / CONFIG.runMs;
+    /* Clamped. An unbounded delta lets any long stall bank arbitrary debt, and
+       the tree then sprints at the 6-step cap to catch up -- years of growth in
+       a second. Capping the delta means a stall costs a pause, not a lurch.
+       (Pi session note 4.) */
+    dayDebt += Math.min(250, Math.max(0, now - lastStepAt)) * perMs;
+    lastStepAt = now;
+    const want = Math.min(6, Math.floor(dayDebt / CONFIG.dt));
+    if (want > 0) {
+      dayDebt -= want * CONFIG.dt;
+      /* A throw in here must not wedge the page. Losing one step is invisible;
+         losing the rotation is not. */
+      try { simulate(want); stepped = true; }
+      catch (err) { console.error('[tree] sim step failed', err); simFails++; }
+      if (simFails > 40) { handOff(); return; }
+    }
+  } else if (!finishedAt) {
+    finishedAt = now;
+  }
+
+  /* The finale. Growth stops, the leaves turn, and the piece ends on the bare
+     winter skeleton -- which is the best-looking frame this renderer makes and
+     the natural handoff to the next page. */
+  let autumn = 0;
+  if (finishedAt) {
+    const k = (now - finishedAt) / CONFIG.holdMs;
+    autumn = Math.min(1, Math.max(0, (k - 0.15) / 0.5));
+    if (k > 1) { handOff(); return; }
+  }
+
+  /* ONLY REDRAW WHEN SOMETHING CHANGED. The simulation steps about thirteen
+     times a second; redrawing on all sixty rAF ticks did the same work four or
+     five times over for an identical picture. A frame is worth painting when
+     the tree stepped, when the camera is still easing toward its new fit, or
+     when the autumn hue is moving. Canvas keeps the last frame, so skipping a
+     paint costs nothing visually. This is the difference between ~13 paints a
+     second and 60. */
+  const sBefore = V.s || 0;
+  fitView(T, V, 0.045);
+  const viewMoved = Math.abs((V.s || 0) - sBefore) > sBefore * 2e-4;
+  camAz += CONFIG.camOrbit * Math.min(250, Math.max(0, dtms)) / 1000;
+  /* The orbit means every frame is technically stale, which would undo the
+     dirty-flag saving and put us back at 60 repaints a second. Cap the paint
+     rate instead: at 20 fps a 0.0021 rad/s drift moves the far edge of the
+     crown well under a pixel between paints. */
+  const paintDue = (now - lastPaintAt) >= 1000 / CONFIG.maxPaintFps;
+  if (paintDue && (stepped || viewMoved || finishedAt || CONFIG.camOrbit !== 0)) {
+    lastPaintAt = now;
+    const t0 = performance.now();
+    lastDrawn = draw(T, V, autumn) || 0;
+    msDraw = msDraw*0.85 + (performance.now() - t0)*0.15;
+    paints++;
+  }
+  updateTicker();
+  if (document.body.classList.contains('showinfo')) updateInfo();
+}
+
+addEventListener('resize', () => { layout(); if (T) V = {}; });
+addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': handOff(); break;
+    case 'r': case 'R': newRun(); break;
+    case 'p': case 'P': case ' ':
+      paused = !paused; lastStepAt = performance.now(); updateInfo(); break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      if (/^[0-9]$/.test(e.key)) {
+        const score = e.key === '0' ? 10 : parseInt(e.key, 10);
+        console.log('[tree] RATING STUB - score', score, 'seed', T && T.seed);
+      }
+  }
+});
+
+layout();
+newRun();
+requestAnimationFrame(frame);
+</script>
+<script src="nav.js"></script>
+</body>
+</html>

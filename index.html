@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wall pieces</title>
+<style>
+  body { margin:0; padding:6vh 6vw; background:#0a0d14; color:#dbe3ef;
+         font:400 17px/1.6 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+  h1 { font-weight:300; letter-spacing:.16em; text-transform:uppercase;
+       font-size:clamp(20px,2.4vw,34px); margin:0 0 .3em; }
+  .lede { max-width:44em; color:#9fb0c8; margin:0 0 3em; }
+  .grid { display:grid; gap:1.2rem;
+          grid-template-columns:repeat(auto-fill,minmax(21rem,1fr)); }
+  .card { display:block; padding:1.4rem 1.5rem; text-decoration:none; color:inherit;
+          background:#111726; border:1px solid #1e2739; border-radius:.6rem;
+          transition:border-color .15s, transform .15s; }
+  .card:hover { border-color:#3c5170; transform:translateY(-2px); }
+  .card h2 { margin:0 0 .5em; font-size:1.06rem; font-weight:600; color:#eaf1fb; }
+  .card p { margin:0; font-size:.94rem; color:#9fb0c8; }
+  footer { margin-top:4em; color:#6c7d97; font-size:.88rem; max-width:44em; }
+</style>
+</head>
+<body>
+  <h1>Wall pieces</h1>
+  <p class="lede">Screens written for a television on a wall - each one a
+  simulation running live in the browser rather than a recording. Open any of
+  them; there is nothing to install.</p>
+  <div class="grid">
+    <a class="card" href="plume/">
+      <h2>Finding a gas leak from a moving vehicle</h2>
+      <p>A car drives a real street network with a methane analyser on the roof. Gas disperses from hidden leaks as Gaussian puffs carried on a wandering wind; the analyser samples whatever concentration is at the car. Colour on the ground is not the gas - it is the survey's BELIEF about where the leak is, built up reading by reading.</p>
+    </a>
+    <a class="card" href="surnames/">
+      <h2>Why surnames die out</h2>
+      <p>Five hundred families, one surname each, passed from father to son and to nobody else. Some men have no sons. Their name is gone, and nothing in a patrilineal system can bring it back. Watch long enough and five hundred names become one.</p>
+    </a>
+    <a class="card" href="gravity/">
+      <h2>An n-body system, integrated honestly</h2>
+      <p>Bodies pulling on each other under Newtonian gravity, integrated forward with no scripted orbits and no choreography. What you see is what the equations do.</p>
+    </a>
+    <a class="card" href="physarum/">
+      <h2>Slime mould finds the network</h2>
+      <p>Millions of particles, each doing nothing cleverer than steering towards the strongest smell in front of it and leaving a trail of its own. Out of that comes a transport network - the same behaviour that lets Physarum polycephalum reproduce a country's rail map when food is placed at the cities.</p>
+    </a>
+    <a class="card" href="reaction/">
+      <h2>Two chemicals, and every animal pattern</h2>
+      <p>A Gray-Scott reaction-diffusion system: one chemical feeds, another consumes it and reproduces, both spread at different rates. Change two numbers and the same equations give spots, stripes, mazes, waves, or dividing cells - which is Turing's 1952 answer to how a uniform embryo becomes a patterned animal.</p>
+    </a>
+    <a class="card" href="tree/">
+      <h2>A tree grown from its carbon budget</h2>
+      <p>Not a fractal and not an L-system. Every shoot is paid for out of what the leaves earned that season, against the cost of building and maintaining the wood already standing. The shape is what is left over.</p>
+    </a>
+    <a class="card" href="weather/">
+      <h2>A day of sun and wind over real ground</h2>
+      <p>Eighteen hours behind and eighteen ahead, over one of three regions. The land is veiled in grey and sunlight lifts the veil, so the map shows through exactly where the sun is reaching the ground. The streaks are surface wind, drawn by letting tracers ride the field.</p>
+    </a>
+  </div>
+  <footer>Every piece is a single HTML file with no build step, no server and
+  no API keys, generated from the version that actually runs on the wall.</footer>
+</body>
+</html>

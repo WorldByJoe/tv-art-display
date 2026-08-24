@@ -1,0 +1,1309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patriline</title>
+<style>
+  /* Self-contained on purpose: no external files, fonts or libraries, so this
+     works as a file:// page on the Pi kiosk AND as a single drop-in file on
+     GitHub Pages. Same contract as gravity.html. */
+  html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; }
+  * { cursor:none; }
+
+  /* Two canvases rather than one. The river is PERSISTENT - it is painted one
+     column per generation and never cleared, which is what lets a long run
+     accumulate into an image. The village is CLEARED every generation. Trying
+     to do both on one canvas would mean clearing a rectangle inside the
+     river's own bitmap on every tick, and the squash step below would then
+     have to work around that hole. Two canvases is less code and less to get
+     wrong. */
+  canvas { position:fixed; left:0; display:block; }
+  #river   { top:0; }
+  #village { }
+
+  /* Black curtain used for the dip between acts and for the hand-off. Fading
+     a DOM overlay covers both canvases at once; fading the canvases
+     themselves would need two separate animations kept in step. */
+  #curtain {
+    position:fixed; inset:0; z-index:20; background:#000; pointer-events:none;
+    opacity:0; transition:opacity 1200ms ease-in-out;
+  }
+  #curtain.on { opacity:1; }
+
+  #info {
+    position:fixed; left:2vw; bottom:9vh; z-index:10; display:none;
+    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,"SF Mono",Menlo,monospace;
+    color:#dfe6ee; background:rgba(0,0,0,.6); padding:.7em 1em;
+    border-radius:.4em; border:1px solid rgba(255,255,255,.15); white-space:pre;
+  }
+  body.showinfo #info { display:block; }
+
+  /* Act name and one line of explanation, faded in at the start of each act.
+     On a wall display this is the one piece of text worth showing: it says
+     what you are looking at without turning the screen into a dashboard. */
+  #title {
+    position:fixed; left:0; right:0; top:0; z-index:9; text-align:center;
+    padding:5vh 6vw 9vh; box-sizing:border-box;
+    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out;
+    background:linear-gradient(to bottom, rgba(0,0,0,.85) 0%,
+                                          rgba(0,0,0,.66) 42%,
+                                          rgba(0,0,0,0)  100%);
+  }
+  #title.show { opacity:1; }
+  #title .name {
+    font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.22em; text-transform:uppercase; color:rgba(226,236,248,.85);
+  }
+  #title .blurb {
+    margin-top:.9em;
+    font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.06em; color:rgba(190,205,225,.55);
+  }
+
+  /* A permanent, deliberately faint counter. Unlike the title it stays up for
+     the whole act, because the numbers are the thing that makes the picture
+     legible - "37 names left" is what turns a pretty gradient into a result.
+     Set CONFIG.showTicker = false to remove it entirely. */
+  #ticker {
+    position:fixed; right:2.4vw; bottom:2.4vh; z-index:9; text-align:right;
+    pointer-events:none; opacity:0; transition:opacity 1.2s ease-in-out;
+    font:300 clamp(10px,.9vw,17px)/1.5 ui-monospace,"SF Mono",Menlo,monospace;
+    letter-spacing:.08em; color:rgba(200,214,232,.34); white-space:pre;
+  }
+  #ticker.show { opacity:1; }
+
+  /* ---- persistent caption ----
+     Sits above the ticker, which keeps its own lane on the right. */
+  #caption {
+    position:fixed; left:0; right:0; bottom:2.4vh; z-index:8;
+    text-align:left; pointer-events:none; padding:0 2.4vw; max-width:66vw;
+  }
+  #caption .what {
+    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.055em; color:rgba(206,220,240,.62);
+  }
+  #caption .params {
+    margin-top:.45em;
+    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
+    letter-spacing:.02em; color:rgba(150,172,205,.42);
+  }
+
+  /* ---- scrim behind the caption ----------------------------------------
+     The caption used to sit directly on the artwork. On a black field that is
+     fine; over a lit basemap, a bright mosaic or a pale plume it becomes
+     unreadable exactly when there is something worth reading it about. A soft
+     upward fade keeps the text legible without drawing a visible box. */
+  #caption {
+    background: linear-gradient(to top,
+                rgba(3,5,10,0.88) 0%, rgba(3,5,10,0.70) 55%, rgba(3,5,10,0) 100%);
+    padding-top: 1.6em; padding-bottom: 0.7em;
+  }
+</style>
+</head>
+<body>
+<canvas id="river"></canvas>
+<canvas id="village"></canvas>
+<div id="title"><div class="name"></div><div class="blurb"></div></div>
+<div id="ticker"></div>
+<div id="caption"><div class="what"></div><div class="params"></div></div>
+<div id="info"></div>
+<div id="curtain"></div>
+
+<script>
+/* ---- rotation navigation (remote D-pad) --------------------------------
+   Right steps to the next piece in the wall's rotation, left to the previous
+   one. The ring is listed explicitly rather than derived from nextPage,
+   because nextPage only points forwards - there is no way to walk it
+   backwards. Keep this list in step with the nextPage chain. */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+/* ---- caption: the two persistent lines at the bottom-left ---- */
+const capWhat   = document.querySelector('#caption .what');
+const capParams = document.querySelector('#caption .params');
+function setCaption(what, params){
+  if(capWhat)   capWhat.textContent   = what || '';
+  if(capParams) capParams.textContent = params || '';
+}
+
+/* =======================================================================
+   PATRILINE - surname loss as a wall display.
+
+   A JavaScript restaging of the R simulations in
+   Claude/Patralineal name simulation/surname_fixation.Rmd. The models are
+   re-implemented here rather than pre-rendered, because the whole point of
+   the piece is that it is a live stochastic process: every showing is a
+   different run, and the long tail of fixation times means some runs really
+   do drag on. Pre-computed frames would quietly remove that.
+
+   WHAT IS ON SCREEN
+   -----------------
+   TOP (the river). Time runs left to right. Every surname alive in a given
+   generation gets a horizontal band whose thickness is its share of living
+   men. Bands are stacked in a stable order, so a band that pinches out stays
+   pinched and its neighbours simply close over it. This is a Muller plot,
+   and read backwards it is the coalescent tree of the male line.
+
+   BOTTOM (the village). One square per living man in the current generation,
+   coloured by his surname and sorted so that men sharing a name sit
+   together. This is the same data as the river's rightmost column, but it
+   shows the population as people rather than as area, and it is where the
+   collapse is easiest to read from across a room.
+
+   THREE ACTS
+   ----------
+   1. DRIFT       - the neutral Galton-Watson / Wright-Fisher model.
+   2. WEALTH      - heritable fortune biasing survival. Drift becomes
+                    selection and the timescale changes functional form.
+   3. INVENTION   - the neutral model plus a trickle of newly coined names.
+                    Never fixates. This act is what makes the piece loopable:
+                    it settles into a shimmering equilibrium instead of
+                    ending on a single dead colour.
+
+   WHY THE RIVER SQUASHES ITSELF
+   -----------------------------
+   Surname loss has two regimes on wildly different timescales: a cliff over
+   ~20 generations, then a crawl over hundreds. No fixed time axis shows both.
+   When the river reaches the right edge it copies itself onto its own left
+   half at half width and carries on, so the axis halves its resolution each
+   time it fills. The cliff stays visible, compressed, at the far left while
+   the crawl unfolds at full width. It is a log-ish axis achieved with one
+   drawImage instead of a coordinate transform on every band.
+   ======================================================================= */
+
+const CONFIG = {
+  /* ---- shared demography ---- */
+  n0:                500,   // founding surnames (one per founding man)
+  N:                 500,   // carrying capacity, per sex
+
+  /* ---- pacing ----
+     Generations per second is NOT constant. The first twenty generations
+     contain most of the story and would be over in a blink at a rate fast
+     enough to reach fixation in a reasonable time, so the rate starts slow
+     and doubles every `rampGens` generations up to a ceiling. */
+  holdMs:           5200,   // how long a finished act stays on screen
+  fadeMs:           1200,   // curtain dip between acts (must match the CSS)
+  titleMs:          9000,   // how long the act title stays up
+
+  /* ---- layout ---- */
+  /* These three have to leave a clear lane at the bottom for the ticker.
+     river 0 -> 0.70, village 0.745 -> 0.910, text below that. */
+  riverFrac:        0.700,  // fraction of screen height given to the river
+  villageTop:       0.745,  // village strip top, as a fraction of height
+  villageFrac:      0.165,  // village strip height, as a fraction of height
+  showTicker:        true,
+
+  /* ---- the naming pause ----
+     When the field is down to this many names the run STOPS, the view drops
+     the crowded opening, and the survivors are labelled. Eight is Joe's
+     number and it is a good one: it is few enough that every label fits the
+     height with room to spare, and it lands well before the last two names -
+     the endgame is the part worth watching with the names attached. */
+  nameAt:              8,
+  /* How much of the story so far the zoom KEEPS - the rest is the crowded
+     opening and it goes.
+
+     This was first written as a threshold ("truncate back to wherever the
+     field fell to two dozen names"), which sounds more principled and was
+     measurably worse: richness collapses so fast that the twenty-fourth
+     death lands at generation 41 of 144, so the trim came to 28% and
+     magnified the picture 1.4x - not enough to see. A plain fraction of the
+     elapsed run trims 72% and magnifies it about three and a half times,
+     which is what makes eight bands wide enough to carry a name. */
+  zoomKeep:         0.28,
+  nameZoomMs:       1900,   // the view slide, eased
+  namePauseMs:      6500,   // how long it holds, named and still, before resuming
+
+  /* ---- rotation ---- */
+  cyclesPerTurn:        1,  // full three-act cycles before handing the screen on
+  nextPage: '' /* standalone: nowhere to hand on to; start again */
+};
+const PINNED = /[?&]pin\b/.test(location.search);
+
+/* -----------------------------------------------------------------------
+   THE ACTS
+
+   colW is the on-screen width in CSS pixels of a single generation, BEFORE
+   any squashing. It is per-act because the acts differ in length by more
+   than an order of magnitude: the wealth run typically fixates in under a
+   hundred generations and would occupy a sliver of the screen at the width
+   that suits a neutral run of eight hundred.
+
+   maxMs is a hard cap, not the expected duration. Fixation time is strongly
+   right-skewed - the endgame is a random walk between the last two names -
+   so an unlucky run can take several times the median. On a wall display
+   that has to keep moving, the cap matters.
+   ----------------------------------------------------------------------- */
+const ACTS = [
+  {
+    key:   'drift',
+    name:  'Drift',
+    blurb: 'Five hundred surnames, no new ones. Two thirds of them were doomed from the first generation.',
+    wealth: false,
+    lam:    2.5,            // mean children per couple; mean SONS is lam/2
+    mu:     0,              // no new names coined
+    colW:   8,
+    gpsMin: 1.1, gpsMax: 34, rampGens: 48,
+    maxMs:  125000,
+    stopAtOne: true
+  },
+  {
+    key:   'wealth',
+    name:  'Wealth',
+    blurb: 'Fortune inherited down the same line as the name. One patriline runs away with the population.',
+    wealth: true,
+    /* Rank-based mortality kills exactly half of all offspring by
+       construction, so replacement needs lam = 4, not 2. lam = 5 keeps the
+       same 25% margin over replacement the neutral act has - the two acts
+       are compared at equal margin, not at equal fertility. */
+    lam:    5,
+    mu:     0,
+    colW:   26,
+    gpsMin: 1.0, gpsMax: 5, rampGens: 62,
+    maxMs:  80000,
+    stopAtOne: true
+  },
+  {
+    key:   'invention',
+    name:  'Invention',
+    blurb: 'A trickle of newly coined names. The collapse stops halfway and never finishes.',
+    wealth: false,
+    lam:    2.5,
+    /* theta = 2*N*mu = 4, so the Ewens prediction for the equilibrium name
+       count is theta*ln(1 + N/theta) = 4*ln(126) ~ 19 names. The act runs
+       long enough to reach that plateau and sit on it for a while, which is
+       the entire point of showing it. */
+    mu:     0.004,
+    colW:   5,
+    gpsMin: 1.2, gpsMax: 34, rampGens: 48,
+    maxMs:  100000,
+    stopAtOne: false
+  }
+];
+
+/* ---------------- seeded randomness ---------------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function makeGaussian(rng) {
+  let spare = null;
+  return function () {
+    if (spare !== null) { const s = spare; spare = null; return s; }
+    let u, v, s;
+    do { u = rng()*2-1; v = rng()*2-1; s = u*u + v*v; } while (s === 0 || s >= 1);
+    const f = Math.sqrt(-2*Math.log(s)/s);
+    spare = v*f; return u*f;
+  };
+}
+
+/* Knuth's method: exact, and fast enough while the mean is small. Expected
+   iterations is lam+1, so at lam = 2.5 this is about three multiplies. */
+function poissonSmall(rng, lam) {
+  const L = Math.exp(-lam);
+  let k = 0, p = 1;
+  do { k++; p *= rng(); } while (p > L);
+  return k - 1;
+}
+/* The bulk daughter count has a mean in the hundreds, where Knuth would loop
+   hundreds of times per generation for a number we only use as a marriage
+   ceiling. The normal approximation is far inside the noise there. */
+function poissonBig(rng, gauss, lam) {
+  if (lam < 30) return poissonSmall(rng, lam);
+  return Math.max(0, Math.round(lam + Math.sqrt(lam)*gauss()));
+}
+
+/* Partial Fisher-Yates: draw k distinct indices from 0..n-1 without building
+   and shuffling the whole array when k is much smaller than n. */
+function sampleIndices(rng, n, k) {
+  const idx = new Int32Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  for (let i = 0; i < k; i++) {
+    const j = i + Math.floor(rng()*(n-i));
+    const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+  }
+  return idx.subarray(0, k);
+}
+
+/* ---------------- colour ----------------
+   Hue by golden angle so that consecutive founder ids are maximally far
+   apart on the wheel, which is what keeps 500 simultaneous bands legible.
+   Saturation and lightness are jittered a little per id so that two names
+   landing on a similar hue still separate. Cached because this is called
+   once per band per generation. */
+const colorCache = new Map();
+function nameColor(id) {
+  let c = colorCache.get(id);
+  if (c === undefined) {
+    const h = (id*137.508) % 360;
+    const s = 56 + ((id*37) % 16);
+    const l = 43 + ((id*53) % 19);
+    c = 'hsl(' + h.toFixed(1) + ' ' + s + '% ' + l + '%)';
+    colorCache.set(id, c);
+  }
+  return c;
+}
+/* Village-only variant: same hue, lightness driven by the man's wealth rank,
+   so the rich read as bright and the poor as nearly extinguished. */
+function nameColorLit(id, lit) {
+  const h = (id*137.508) % 360;
+  const s = 56 + ((id*37) % 16);
+  return 'hsl(' + h.toFixed(1) + ' ' + s + '% ' + (16 + 52*lit).toFixed(0) + '%)';
+}
+
+/* =======================================================================
+   THE MODELS
+
+   Both are re-implementations of the R functions neutral_run() and
+   wealth_run() in surname_fixation.Rmd, stepped one generation at a time so
+   the display can draw between steps.
+   ======================================================================= */
+
+function newSim(act, seed) {
+  const rng = mulberry32(seed);
+  const gauss = makeGaussian(rng);
+
+  const men = new Array(CONFIG.n0);
+  /* sortKey fixes each name's vertical position in the river. Founders are
+     keyed by id, so the initial stack is just 0..n0 in order. A newly coined
+     name inherits its father's key plus a tiny offset, which places it
+     immediately beside the lineage it split off from rather than dumped at
+     the bottom of the stack - the honest picture of a byname hardening into
+     a surname. */
+  const sortKey = new Map();
+  for (let i = 0; i < CONFIG.n0; i++) { men[i] = i; sortKey.set(i, i); }
+
+  let w = null;
+  if (act.wealth) {
+    /* Wealth is carried as log2. A quantity that repeatedly doubles or halves
+       overflows a double within a few hundred generations; in logs, doubling
+       is +1, halving is -1, and inheritance is subtraction. */
+    w = new Float64Array(CONFIG.n0);
+    for (let i = 0; i < CONFIG.n0; i++) w[i] = Math.log2(Math.max(100 + 25*gauss(), 1));
+  }
+
+  return {
+    act, seed, rng, gauss,
+    men, w,
+    nFem: CONFIG.n0,
+    gen: 0,
+    nextId: CONFIG.n0,
+    sortKey,
+    fresh: new Set(),        // names coined THIS generation, for the spark
+    done: false, outcome: null,
+    richness: CONFIG.n0, topShare: 1/CONFIG.n0
+  };
+}
+
+/* Survival probability linear in rank: bottom-ranked dies for certain, top
+   survives for certain, everyone else in between. Averages exactly 0.5,
+   which is why the wealth act needs the higher fertility. Ties are broken at
+   random so brothers with identical keys do not sort deterministically. */
+function rankSurvive(rng, keys) {
+  const n = keys.length;
+  const out = new Uint8Array(n);
+  if (n === 0) return out;
+  if (n < 2) { out[0] = rng() < 0.5 ? 1 : 0; return out; }
+  const idx = new Int32Array(n);
+  const jit = new Float64Array(n);
+  for (let i = 0; i < n; i++) { idx[i] = i; jit[i] = rng(); }
+  idx.sort((a, b) => (keys[a] - keys[b]) || (jit[a] - jit[b]));
+  for (let r = 0; r < n; r++) out[idx[r]] = rng() < r/(n-1) ? 1 : 0;
+  return out;
+}
+
+/* ---- Act 1 and 3: the neutral model ---- */
+function stepNeutral(s) {
+  const { rng, gauss, act } = s;
+  const N = CONFIG.N;
+  const M = s.men.length;
+  const C = Math.min(M, s.nFem);
+  if (C === 0) { s.done = true; s.outcome = 'extinction'; return; }
+
+  /* Everyone pairs off at random; the surplus of whichever sex is more
+     numerous simply does not reproduce. */
+  const pick = (C < M) ? sampleIndices(rng, M, C) : null;
+
+  const sons = [];
+  for (let c = 0; c < C; c++) {
+    const father = s.men[pick ? pick[c] : c];
+    /* Poisson(lam) children each independently a boy with probability 1/2
+       gives exactly Poisson(lam/2) sons, so daughters never have to be
+       simulated individually for the purpose of tracking names. */
+    const k = poissonSmall(rng, act.lam/2);
+    for (let j = 0; j < k; j++) sons.push(father);
+  }
+  const nDau = poissonBig(rng, gauss, act.lam*C/2);
+
+  if (sons.length === 0) { s.men = []; s.done = true; s.outcome = 'extinction'; return; }
+
+  /* Density regulation. Sampling a fixed number of survivors from a
+     Poisson-distributed pool makes reproduction exactly multinomial, which
+     is the definition of the Wright-Fisher model - so the classical theory
+     applies to this simulation directly. */
+  let kept = sons;
+  if (sons.length > N) {
+    const take = sampleIndices(rng, sons.length, N);
+    kept = new Array(N);
+    for (let i = 0; i < N; i++) kept[i] = sons[take[i]];
+  }
+
+  s.fresh.clear();
+  if (act.mu > 0) {
+    for (let i = 0; i < kept.length; i++) {
+      if (rng() < act.mu) {
+        const parentKey = s.sortKey.get(kept[i]);
+        const id = s.nextId++;
+        s.sortKey.set(id, parentKey + (rng() - 0.5)*1e-4);
+        kept[i] = id;
+        s.fresh.add(id);
+      }
+    }
+  }
+
+  s.men = kept;
+  s.nFem = Math.min(nDau, N);
+  s.gen++;
+}
+
+/* ---- Act 2: wealth-linked mortality ---- */
+function stepWealth(s) {
+  const { rng, act } = s;
+  const N = CONFIG.N;
+
+  /* Fortunes fluctuate: each man's inherited wealth doubles or halves before
+     he reproduces. In log2 that is +1 or -1. */
+  for (let i = 0; i < s.w.length; i++) s.w[i] += (rng() < 0.5 ? 1 : -1);
+
+  const M = s.men.length;
+  const C = Math.min(M, s.nFem);
+  if (C === 0) { s.done = true; s.outcome = 'extinction'; return; }
+  const pick = (C < M) ? sampleIndices(rng, M, C) : null;
+
+  const sonName = [], sonW = [], dadW = [];
+  const dauW = [];
+  for (let c = 0; c < C; c++) {
+    const f = pick ? pick[c] : c;
+    const fw = s.w[f], fn = s.men[f];
+    const ks = poissonSmall(rng, act.lam/2);
+    const kd = poissonSmall(rng, act.lam/2);
+    if (ks > 0) {
+      /* Primogeniture: each son gets twice what the next-younger brother
+         gets, so the i-th of k sons (eldest = 0) receives a fraction
+         2^(k-i-1) / (2^k - 1). In log2 that is an addition and a
+         subtraction, which is the whole reason for working in logs. */
+      const denom = Math.log2(Math.pow(2, ks) - 1);
+      for (let b = 0; b < ks; b++) {
+        sonName.push(fn);
+        sonW.push(fw + (ks - b - 1) - denom);
+        dadW.push(fw);                 // survival is ranked on the FATHER
+      }
+    }
+    for (let d = 0; d < kd; d++) dauW.push(fw);
+  }
+  if (sonName.length === 0) { s.men = []; s.done = true; s.outcome = 'extinction'; return; }
+
+  const aliveSons = rankSurvive(rng, dadW);
+  const aliveDau  = rankSurvive(rng, dauW);
+  let nDau = 0;
+  for (let i = 0; i < aliveDau.length; i++) nDau += aliveDau[i];
+
+  const survName = [], survW = [];
+  for (let i = 0; i < sonName.length; i++) {
+    if (aliveSons[i]) { survName.push(sonName[i]); survW.push(sonW[i]); }
+  }
+  if (survName.length === 0) { s.men = []; s.done = true; s.outcome = 'extinction'; return; }
+
+  /* Then, and only then, the random carrying-capacity cull. */
+  let keptName = survName, keptW = survW;
+  if (survName.length > N) {
+    const take = sampleIndices(rng, survName.length, N);
+    keptName = new Array(N); keptW = new Array(N);
+    for (let i = 0; i < N; i++) { keptName[i] = survName[take[i]]; keptW[i] = survW[take[i]]; }
+  }
+
+  s.men = keptName;
+  s.w = Float64Array.from(keptW);
+  s.nFem = Math.min(nDau, N);
+  s.gen++;
+}
+
+function stepSim(s) {
+  if (s.done) return;
+  if (s.act.wealth) stepWealth(s); else stepNeutral(s);
+  if (s.done) return;
+
+  /* Bookkeeping the display reads: how many names are left, and how much of
+     the population the commonest one holds. */
+  const counts = new Map();
+  for (const id of s.men) counts.set(id, (counts.get(id) || 0) + 1);
+  s.counts = counts;
+  s.richness = counts.size;
+  let top = 0;
+  for (const v of counts.values()) if (v > top) top = v;
+  s.topShare = s.men.length ? top/s.men.length : 0;
+
+  if (s.men.length === 0)                       { s.done = true; s.outcome = 'extinction'; }
+  else if (s.act.stopAtOne && s.richness <= 1)  { s.done = true; s.outcome = 'fixation'; }
+}
+
+/* Gini of wealth, for the diagnostics panel only. Computed on wealth
+   rescaled to the maximum so that 2^w cannot overflow. */
+function giniOf(w) {
+  if (!w || w.length === 0) return 0;
+  let mx = -Infinity;
+  for (let i = 0; i < w.length; i++) if (w[i] > mx) mx = w[i];
+  const x = Array.from(w, v => Math.pow(2, v - mx)).sort((a, b) => a - b);
+  const n = x.length;
+  let cum = 0, tot = 0;
+  for (let i = 0; i < n; i++) tot += x[i];
+  if (tot === 0) return 0;
+  for (let i = 0; i < n; i++) { cum += x[i]; x[i] = cum/tot; }
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += x[i];
+  return (n + 1 - 2*sum)/n;
+}
+
+/* =======================================================================
+   THE SURNAMES
+
+   Until now a name was only an id and a colour, which is fine while there
+   are five hundred of them and nothing could be labelled anyway. Once the
+   field is down to a handful the piece is about particular lineages, and a
+   band that says FLETCHER reads as a family in a way that a band of hue 213
+   never will.
+
+   WHY A LIST AND NOT GENERATED SYLLABLES. Invented names look invented -
+   they land in the uncanny gap where a viewer reads them as words and then
+   as nonsense. These are real surnames from across Europe, which is the
+   right catchment: the point being made about patrilineal inheritance is
+   not an English one, and a screen of nothing but Smith and Bailey would
+   quietly suggest that it is.
+
+   The list is longer than CONFIG.n0, so in a normal run every founding man
+   gets a DIFFERENT name and no two bands can ever be confused. It is
+   shuffled per run from the sim's seed, on a SEPARATE random stream from
+   the simulation itself - so the same seed gives the same names, and adding
+   names has not changed a single simulated generation.
+   ======================================================================= */
+const SURNAMES = [
+  /* England */
+  'Abbott','Ainsworth','Alcott','Allen','Ashby','Atwood','Bailey','Baker','Baldwin','Banks',
+  'Barlow','Barnes','Barrett','Bassett','Baxter','Beckett','Bell','Bennett','Bentley','Bishop',
+  'Blackwood','Blake','Bolton','Booth','Bradley','Brewster','Bridges','Brook','Buckley','Burgess',
+  'Burton','Butler','Caldwell','Carpenter','Carter','Chandler','Chapman','Clarke','Clayton','Coleman',
+  'Collins','Cooper','Copeland','Cotton','Cross','Dalton','Davenport','Dawson','Dixon','Draper',
+  'Dudley','Eastwood','Edmunds','Ellis','Emerson','Everett','Fairbanks','Faulkner','Fenwick','Fielding',
+  'Finch','Fletcher','Ford','Foster','Fowler','Fox','Gale','Gardner','Gibson','Godwin',
+  'Goodwin','Granger','Greenwood','Hadley','Hale','Hammond','Hancock','Harding','Hargrave','Harper',
+  'Hartley','Harvey','Hastings','Hathaway','Hawkins','Hayes','Heath','Henley','Hewitt','Hobbs',
+  'Holbrook','Holloway','Holt','Hopkins','Houghton','Howard','Hudson','Hughes','Huntley','Hurst',
+  'Ingram','Jennings','Kendall','Kimball','Kingsley','Kirby','Knowles','Lancaster','Langley','Larkin',
+  'Lawson','Lester','Lindley','Lockhart','Lowell','Ludlow','Mallory','Marlowe','Marshall','Mason',
+  'Mayfield','Meadows','Merrick','Middleton','Milburn','Milton','Morley','Mortimer','Norris','Norton',
+  'Oakley','Ogden','Osborne','Paxton','Peacock','Pemberton','Perry','Pickering','Pierce','Poole',
+  'Prescott','Preston','Radcliffe','Rawlings','Redfern','Reeves','Ridley','Rigby','Ripley','Rutherford',
+  'Salisbury','Sanders','Sargent','Sawyer','Selby','Sheldon','Sherwood','Skinner','Slater','Spencer',
+  'Stafford','Stanton','Sterling','Stockton','Strickland','Sutcliffe','Sutton','Talbot','Tanner','Thatcher',
+  'Thornton','Tremaine','Tucker','Underhill','Vickers','Wadsworth','Wakefield','Waller','Ward','Warwick',
+  'Webster','Westbrook','Wharton','Wheatley','Whitaker','Whitfield','Wickham','Wilkins','Winslow','Withers',
+  'Woodruff','Worthington','Yardley','Yates',
+  /* Scotland */
+  'Armstrong','Buchanan','Cameron','Campbell','Cochrane','Crawford','Cunningham','Douglas','Drummond','Duncan',
+  'Ferguson','Fraser','Galbraith','Gordon','Graham','Grant','Hamilton','Kerr','Lennox','Logan',
+  'MacAllister','MacDonald','MacGregor','MacLeod','Maxwell','Menzies','Moffat','Muir','Murray','Ogilvie',
+  'Ramsay','Rennie','Ross','Sinclair','Stewart','Sutherland','Urquhart','Wallace',
+  /* Ireland */
+  'Brennan','Byrne','Callahan','Casey','Cassidy','Connolly','Delaney','Dempsey','Donnelly','Donovan',
+  'Doyle','Fitzgerald','Flanagan','Gallagher','Hennessy','Kavanagh','Keegan','Kennedy','Lynch','Magee',
+  'Mulligan','Nolan','Quinlan','Rafferty','Riordan','Shanahan','Sheridan','Sullivan','Tierney',
+  /* Wales */
+  'Bevan','Gwynne','Llewellyn','Meredith','Morgan','Owen','Pritchard','Vaughan','Wynne',
+  /* Germany */
+  'Bachmann','Baumgartner','Becker','Behrens','Berger','Beyer','Brandt','Braun','Dietrich','Eberhardt',
+  'Engel','Fischer','Frank','Freitag','Fuchs','Gerber','Haas','Hartmann','Herzog','Hoffmann',
+  'Jaeger','Kaiser','Keller','Kirchner','Klein','Koch','Krause','Kruger','Lang','Lehmann',
+  'Lindemann','Maier','Neumann','Pfeiffer','Reinhardt','Richter','Roth','Sauer','Schmidt','Schneider',
+  'Scholz','Schreiber','Schulz','Schwarz','Seidel','Sommer','Stein','Vogel','Wagner','Weber',
+  'Werner','Winkler','Wolf','Zimmermann',
+  /* Netherlands and Flanders */
+  'Bakker','Beckers','Boonstra','Bos','Brouwer','Claes','Dekker','Dijkstra','Hendriks','Hoekstra',
+  'Jansen','Kuiper','Maes','Meijer','Mulder','Peeters','Rietveld','Smit','Timmermans','Verhoeven',
+  'Vermeulen','Visser','Vos','Wouters',
+  /* France */
+  'Allard','Aubert','Barbier','Beaumont','Bernard','Bertrand','Blanchard','Boucher','Bouvier','Caron',
+  'Chevalier','Clement','Corbin','Courtois','Delacroix','Delaunay','Deschamps','Dubois','Dufour','Dumas',
+  'Dupont','Durand','Fabre','Fontaine','Fournier','Garnier','Girard','Gosselin','Guerin','Hebert',
+  'Jourdain','Lafleur','Lambert','Langlois','Laurent','Leclerc','Lefebvre','Legrand','Lemaire','Leroy',
+  'Marceau','Marchand','Mercier','Moreau','Morel','Perrin','Petit','Picard','Poirier','Renaud',
+  'Rousseau','Roussel','Sauvage','Thibault','Villeneuve',
+  /* Italy */
+  'Agostini','Amato','Barbieri','Bellini','Benedetti','Bianchi','Bruno','Caputo','Carbone','Caruso',
+  'Castellano','Cattaneo','Colombo','Conti','Costa','Esposito','Fabbri','Farina','Ferrari','Ferraro',
+  'Fiore','Fontana','Gallo','Gatti','Gentile','Giordano','Grasso','Greco','Guerra','Leone',
+  'Lombardi','Longo','Mancini','Marchetti','Marino','Martini','Messina','Milani','Montanari','Moretti',
+  'Neri','Orlando','Pagano','Palumbo','Parisi','Pellegrini','Ricci','Rinaldi','Rizzo','Romano',
+  'Ruggiero','Russo','Santoro','Sartori','Serra','Silvestri','Testa','Valentini','Vitale','Zanetti',
+  /* Spain */
+  'Aguilar','Alvarez','Arroyo','Blanco','Bravo','Caballero','Calderon','Campos','Carrasco','Castillo',
+  'Cordero','Delgado','Escobar','Fuentes','Gallego','Garrido','Guerrero','Herrera','Hidalgo','Iglesias',
+  'Jimenez','Lozano','Medina','Mendoza','Molina','Montero','Navarro','Ortega','Pastor','Prieto',
+  'Quintana','Reyes','Rojas','Rubio','Salazar','Santana','Serrano','Suarez','Vargas','Velasco',
+  /* Portugal */
+  'Almeida','Alves','Antunes','Azevedo','Barbosa','Braga','Cardoso','Carvalho','Coelho','Correia',
+  'Cunha','Esteves','Faria','Ferreira','Figueiredo','Fonseca','Gomes','Lopes','Macedo','Marques',
+  'Matos','Mendes','Miranda','Moreira','Nunes','Oliveira','Pereira','Pinheiro','Pinto','Ramos',
+  'Ribeiro','Rocha','Soares','Tavares','Teixeira',
+  /* Poland */
+  'Baran','Bielski','Borowski','Chmielewski','Dabrowski','Duda','Gajewski','Glowacki','Jankowski','Jaworski',
+  'Kaczmarek','Kalinowski','Kaminski','Kowalczyk','Kowalski','Krawczyk','Lewandowski','Majewski','Malinowski','Michalski',
+  'Nowak','Olszewski','Pawlak','Piotrowski','Sikorski','Sobczak','Szymanski','Walczak','Wieczorek','Wisniewski',
+  'Witkowski','Wojcik','Zajac','Zielinski',
+  /* Bohemia and Slovakia */
+  'Benes','Cermak','Dvorak','Fiala','Havlicek','Horak','Hruska','Jelinek','Kolar','Kovac',
+  'Kral','Kucera','Marek','Masek','Novak','Pokorny','Prochazka','Ruzicka','Sedlacek','Svoboda',
+  'Urban','Vesely','Zeman',
+  /* Hungary */
+  'Balogh','Barta','Biro','Farkas','Fekete','Gaspar','Hajdu','Halasz','Horvath','Juhasz',
+  'Kelemen','Kiss','Kovacs','Lakatos','Molnar','Nagy','Olah','Papp','Szabo','Szalai',
+  'Takacs','Toth','Varga','Veres',
+  /* Scandinavia */
+  'Ahlgren','Andersson','Bakken','Berg','Bergstrom','Bjornson','Blomqvist','Dahl','Dahlberg','Eklund',
+  'Engstrom','Ericsson','Falk','Forsberg','Gustafsson','Hagen','Halvorsen','Hansen','Hedlund','Hellstrom',
+  'Holm','Ibsen','Jensen','Johansson','Karlsson','Kjellberg','Larsen','Lindberg','Lindgren','Lindqvist',
+  'Ljungberg','Lund','Lundgren','Madsen','Mortensen','Nilsson','Nordstrom','Nygaard','Olsen','Pedersen',
+  'Persson','Rasmussen','Rosenberg','Sandberg','Sjoberg','Skoglund','Solberg','Sorensen','Stromberg','Sundqvist',
+  'Svendsen','Thorsen','Vestergaard','Wallin','Westberg',
+  /* Finland */
+  'Aalto','Ahonen','Heikkila','Hiltunen','Jarvinen','Kallio','Karjalainen','Koivisto','Korhonen','Laine',
+  'Lahtinen','Makinen','Nieminen','Rantanen','Salminen','Toivonen','Virtanen',
+  /* Greece */
+  'Alexopoulos','Andreadis','Angelopoulos','Christou','Demetriou','Dimitriadis','Georgiou','Ioannou','Karagiannis','Katsaros',
+  'Konstantinou','Makris','Nikolaidis','Pappas','Petrou','Samaras','Stavrou','Theodorou','Vasiliou',
+  /* Russia and Ukraine */
+  'Andreyev','Antonov','Bondarenko','Chernov','Fedorov','Gordeyev','Ivanov','Kalinin','Kovalenko','Kozlov',
+  'Lebedev','Makarov','Melnyk','Morozov','Nikitin','Novikov','Orlov','Pavlenko','Petrov','Popov',
+  'Romanov','Savchenko','Semenov','Shevchenko','Sokolov','Stepanov','Tarasov','Vasiliev','Volkov','Zaitsev',
+  /* The Baltic */
+  'Balodis','Berzins','Kalnins','Kazlauskas','Ozols','Petrauskas','Saar','Tamm','Urbonas','Vaitkus'
+];
+
+/* A shuffled index into SURNAMES, one per run. Built on its OWN random
+   stream - mulberry32 seeded from the sim's seed, not the sim's own rng -
+   so that drawing names does not consume draws the simulation was going to
+   use. Same seed, same run, same names; and every seed before tonight still
+   produces exactly the generations it always did. */
+function makeNamePool(seed) {
+  const rng = mulberry32(seed ^ 0x9E3779B9);
+  const idx = new Int32Array(SURNAMES.length);
+  for (let i = 0; i < idx.length; i++) idx[i] = i;
+  for (let i = idx.length - 1; i > 0; i--) {
+    const j = Math.floor(rng()*(i + 1));
+    const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+  }
+  return idx;
+}
+
+/* Names coined during the invention act keep climbing past the end of the
+   list, so the id wraps. Those names are never labelled - the invention act
+   settles at about nineteen surnames and never reaches the threshold - so
+   the wrap is a guard against a crash, not a naming scheme. */
+function surnameFor(s, id) {
+  const pool = s.namePool;
+  return SURNAMES[pool[((id % SURNAMES.length) + SURNAMES.length) % SURNAMES.length]];
+}
+
+/* =======================================================================
+   CANVASES AND DRAWING
+   ======================================================================= */
+const riverCv   = document.getElementById('river');
+const villageCv = document.getElementById('village');
+const rctx = riverCv.getContext('2d');
+const vctx = villageCv.getContext('2d');
+const titleEl = document.getElementById('title');
+const tickEl  = document.getElementById('ticker');
+const infoEl  = document.getElementById('info');
+const curtain = document.getElementById('curtain');
+
+let W = 0, RH = 0, VH = 0, dpr = 1;
+let riverX = 0;              // next column's left edge in the BUFFER, CSS px
+let squashes = 0;            // how many times the buffer has halved
+let virtualX = 0;            // width the run would occupy if never squashed
+
+/* THE ZOOM, as one number between 0 and 1.
+   zoomFrom is where the view would start if the zoom were fully in - a
+   position on the un-squashed time axis, so a later halving of the buffer
+   moves the left and right edges together and the view does not drift.
+   zoomEase is how far in it is: 0 for the whole first part of an act, then
+   eased to 1 across the naming pause and left there. Keeping it as a single
+   scalar means presentRiver() is the only function that has to know the zoom
+   exists, and the animation is just a number changing. */
+let zoomFrom = 0, zoomEase = 0;
+
+/* Where the naming pause has got to. 'none' before it, 'zoom' while the view
+   slides, 'hold' while it sits named and still, 'done' for the rest of the
+   act - which is when the labels are live and tracking the bands. */
+const naming = { phase: 'none', t0: 0, startedAt: 0 };
+
+/* The river is painted into an OFF-SCREEN buffer and blitted to the visible
+   canvas scaled to fit. That indirection is what removes the flash.
+
+   Previously the buffer was the visible canvas, shown 1:1: when it filled, the
+   axis halved in place and the picture visibly jumped to half width, then grew
+   back. Blitting the USED portion to fill the screen instead means a halving
+   shrinks the content and the used width by the same factor, so the displayed
+   image is identical either side of it - the squash becomes invisible, and the
+   compression between squashes arrives a fraction of a percent at a time. */
+const histCv = document.createElement('canvas');
+const hctx = histCv.getContext('2d');
+
+function layout() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W  = window.innerWidth;
+  RH = Math.round(window.innerHeight*CONFIG.riverFrac);
+  VH = Math.round(window.innerHeight*CONFIG.villageFrac);
+
+  riverCv.style.width = W + 'px';   riverCv.style.height = RH + 'px';
+  riverCv.width  = Math.round(W*dpr);
+  riverCv.height = Math.round(RH*dpr);
+  rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  histCv.width  = Math.round(W*dpr);
+  histCv.height = Math.round(RH*dpr);
+  hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  villageCv.style.width = W + 'px'; villageCv.style.height = VH + 'px';
+  villageCv.style.top   = Math.round(window.innerHeight*CONFIG.villageTop) + 'px';
+  villageCv.width  = Math.round(W*dpr);
+  villageCv.height = Math.round(VH*dpr);
+  vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function clearRiver() {
+  rctx.setTransform(1, 0, 0, 1, 0, 0);
+  rctx.clearRect(0, 0, riverCv.width, riverCv.height);
+  rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  hctx.setTransform(1, 0, 0, 1, 0, 0);
+  hctx.clearRect(0, 0, histCv.width, histCv.height);
+  hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  riverX = 0; squashes = 0; virtualX = 0;
+  zoomFrom = 0; zoomEase = 0;
+  naming.phase = 'none';
+}
+
+/* Halve the time axis in place. drawImage with the canvas as its own source
+   is well defined - the source is snapshotted before the draw - so this needs
+   no scratch canvas. */
+function squashRiver() {
+  if (!histCv.width || !histCv.height) return;
+  hctx.setTransform(1, 0, 0, 1, 0, 0);
+  hctx.imageSmoothingEnabled = true;
+  hctx.drawImage(histCv, 0, 0, histCv.width, histCv.height,
+                         0, 0, histCv.width/2, histCv.height);
+  hctx.clearRect(histCv.width/2, 0, histCv.width/2, histCv.height);
+  hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  riverX = W/2;
+  squashes++;
+  // virtualX is deliberately NOT touched: it records how much TIME has been
+  // drawn, which a change of buffer resolution does not alter. Keeping it is
+  // what makes the blit below produce an identical picture across a squash.
+}
+
+/* Blit the used part of the buffer onto the visible canvas.
+   Until the run has produced a screen's worth of time the river grows
+   left-to-right at natural size; after that it fills the width and compresses
+   continuously. */
+function presentRiver() {
+  if (!histCv.width || !histCv.height) return;
+  /* The left edge of what is shown, on the buffer's own axis. Dividing by the
+     number of halvings is exact rather than approximate: riverX gains
+     colW/2^squashes per column while virtualX gains colW, so riverX IS
+     virtualX/2^squashes, and both edges of the window scale together. */
+  const scale = Math.pow(2, squashes);
+  const srcX  = Math.max(0, Math.min((zoomFrom*zoomEase)/scale, riverX));
+  const srcW  = riverX - srcX;
+
+  /* Before the zoom the river grows left to right at natural size and only
+     starts compressing once it has filled the screen. Across the zoom that
+     natural size is eased up to the full width, because after truncating the
+     opening the survivors are a SHORTER stretch of time - drawn at natural
+     size the picture would shrink at the exact moment it became worth
+     reading. Once eased in, destW is simply the whole width for ever. */
+  const natural = Math.min(W, virtualX);
+  const destW   = natural + (W - natural)*zoomEase;
+
+  rctx.setTransform(1, 0, 0, 1, 0, 0);
+  rctx.clearRect(0, 0, riverCv.width, riverCv.height);
+  if (srcW > 0 && destW > 0) {
+    rctx.imageSmoothingEnabled = true;
+    rctx.drawImage(histCv,
+                   Math.round(srcX*dpr), 0, Math.round(srcW*dpr), histCv.height,
+                   0, 0, Math.round(destW*dpr), riverCv.height);
+  }
+  rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+/* One column of the Muller plot. Bands are stacked in sortKey order and
+   scaled to the number of men alive, so the column always fills the height:
+   the picture is of SHARES, and a name pinching out means its neighbours
+   close over it. */
+function drawRiverColumn(s, colW) {
+  /* A CANVAS WITH NO AREA. Nothing here is meaningful at zero width, and
+     worse, `riverX >= W` is true immediately, so the column loop squashes the
+     buffer on every call and drawImage throws on a zero-sized source. That is
+     not hypothetical: a browser that lays the page out before the window has
+     a size reports innerWidth 0, the page dies on load, and the resize that
+     follows is what quietly repairs it. Bail out and let that resize restart
+     the act properly. */
+  if (W <= 0 || RH <= 0) return;
+  /* Column width shrinks with each halving of the buffer, which is what makes
+     the time axis UNIFORM. Draw new columns at full width instead and the
+     axis goes non-uniform: old generations keep getting halved while new ones
+     do not, so after seventeen squashes the opening 169 generations occupied
+     0.005 px - the collapse everyone came to see, squeezed off the left edge.
+     With this, every generation in the run always gets the same width. */
+  const cw = colW / Math.pow(2, squashes);
+  const order = Array.from(s.counts.keys())
+                     .sort((a, b) => s.sortKey.get(a) - s.sortKey.get(b));
+  const total = s.men.length;
+  let y = 0;
+  for (const id of order) {
+    const h = (s.counts.get(id)/total)*RH;
+    hctx.fillStyle = nameColor(id);
+    /* +0.6 on the height closes the hairline seams that appear between
+       adjacent bands once the widths fall below a pixel. */
+    hctx.fillRect(riverX, y, cw + 0.6, h + 0.6);
+    y += h;
+  }
+  /* A newly coined name gets one bright column so it reads as an event
+     rather than as a band that was always quietly there. */
+  if (s.fresh.size) {
+    let yy = 0;
+    for (const id of order) {
+      const h = (s.counts.get(id)/total)*RH;
+      if (s.fresh.has(id)) {
+        hctx.fillStyle = 'rgba(255,255,255,.85)';
+        hctx.fillRect(riverX, yy, Math.max(cw, 1.5), Math.max(h, 1.5));
+      }
+      yy += h;
+    }
+  }
+  riverX   += cw;      // buffer position, at the buffer's current resolution
+  virtualX += colW;    // time drawn, in un-squashed px - the axis the viewer sees
+  if (riverX >= W) squashRiver();
+  presentRiver();
+}
+
+/* The current generation as people. Men are sorted by surname so that a
+   lineage is a contiguous block, which is what makes the collapse read as
+   blocks fusing rather than as noise slowly losing colours. */
+function drawVillage(s) {
+  if (W <= 0 || VH <= 0) return;
+  vctx.clearRect(0, 0, W, VH);
+  const n = s.men.length;
+  if (n === 0) return;
+
+  const order = s.men.map((id, i) => i)
+                     .sort((a, b) => (s.sortKey.get(s.men[a]) - s.sortKey.get(s.men[b])) || (a - b));
+
+  /* Choose a grid close to the strip's aspect ratio, then let the cell size
+     follow. Solving cols*rows >= n with cols/rows = W/VH gives this. */
+  const cols = Math.max(1, Math.round(Math.sqrt(n*W/VH)));
+  const rows = Math.ceil(n/cols);
+  const cw = W/cols, ch = VH/rows;
+  const d  = Math.max(1.5, Math.min(cw, ch)*0.78);
+
+  /* Wealth act: brightness is the man's rank in the wealth distribution, so
+     the picture shows who is about to out-reproduce whom, not just who is
+     related to whom. */
+  let lit = null;
+  if (s.w) {
+    lit = new Float64Array(n);
+    const idx = Array.from({length: n}, (_, i) => i).sort((a, b) => s.w[a] - s.w[b]);
+    for (let r = 0; r < n; r++) lit[idx[r]] = n > 1 ? r/(n-1) : 1;
+  }
+
+  for (let k = 0; k < n; k++) {
+    const i  = order[k];
+    const id = s.men[i];
+    const cx = (k % cols)*cw + cw/2;
+    const cy = Math.floor(k/cols)*ch + ch/2;
+    vctx.fillStyle = lit ? nameColorLit(id, 0.25 + 0.75*lit[i]) : nameColor(id);
+    vctx.fillRect(cx - d/2, cy - d/2, d, d);
+    if (s.fresh.has(id)) {
+      vctx.strokeStyle = 'rgba(255,255,255,.9)';
+      vctx.lineWidth = 1.2;
+      vctx.strokeRect(cx - d/2 - 1.5, cy - d/2 - 1.5, d + 3, d + 3);
+    }
+  }
+}
+
+
+/* =======================================================================
+   NAMING THE SURVIVORS
+
+   Everything below only runs once the field is down to CONFIG.nameAt names.
+   ======================================================================= */
+
+/* The current column as a list of bands: the same stacking drawRiverColumn
+   uses, so a label's y really is the middle of the band it points at. */
+function bandLayout(s) {
+  const order = Array.from(s.counts.keys())
+                     .sort((a, b) => s.sortKey.get(a) - s.sortKey.get(b));
+  const total = s.men.length || 1;
+  const out = []; let y = 0;
+  for (const id of order) {
+    const h = (s.counts.get(id)/total)*RH;
+    out.push({ id, cy: y + h/2, share: s.counts.get(id)/total });
+    y += h;
+  }
+  return out;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+}
+
+/* Labels down the right-hand side, one per living name.
+
+   THE SIZE AND THE SPACING COME FROM THE SAME NUMBER, which is the whole
+   point of this function. The first design took the type size from the
+   viewport WIDTH and the minimum gap between labels from the river's HEIGHT.
+   Those are independent, so on a 16:9 4K screen it looked fine and at 1080p
+   seven seeds in twelve had labels sitting on top of each other. Here `fs` is
+   measured once, the gap is a multiple of `fs`, and if the labels still
+   cannot fit the height `fs` is reduced until they do - so the arithmetic
+   that decides they fit is the same arithmetic that draws them. */
+function drawBandLabels(s, alpha) {
+  if (!s || !s.men.length || alpha <= 0 || W <= 0 || RH <= 0) return;
+  const bands = bandLayout(s);
+  if (!bands.length) return;
+
+  let fs  = Math.max(13, Math.min(W*0.0125, 30));
+  let gap = fs*1.5;
+  const pad  = fs*0.6;
+  const room = RH - pad*2;
+  if (bands.length*gap > room) {              // only possible on a very short window
+    const k = room/(bands.length*gap);
+    fs *= k; gap = fs*1.5;
+  }
+  const half = fs*0.75;
+  const lo = pad + half, hi = RH - pad - half;
+
+  /* Push apart, then slide the whole stack back inside. Because the shrink
+     above guarantees the stack is no taller than the room available, one
+     downward separation pass and one shift is enough - there is no case left
+     where sliding up would reintroduce an overlap. */
+  const rows = bands.map(b => ({ b, y: Math.min(hi, Math.max(lo, b.cy)) }))
+                    .sort((p, q) => p.y - q.y);
+  for (let i = 1; i < rows.length; i++)
+    if (rows[i].y - rows[i-1].y < gap) rows[i].y = rows[i-1].y + gap;
+  const over = rows[rows.length-1].y - hi;
+  if (over > 0) for (const r of rows) r.y -= over;
+
+  rctx.save();
+  rctx.globalAlpha = Math.min(1, alpha);
+  rctx.font = '500 ' + fs.toFixed(1) + 'px ui-sans-serif, system-ui, sans-serif';
+  rctx.textBaseline = 'middle';
+  rctx.textAlign = 'right';
+  const right = W - fs*0.8;
+
+  for (const r of rows) {
+    const name  = surnameFor(s, r.b.id);
+    const tw    = rctx.measureText(name).width;
+    const chip  = fs*0.66;
+    const left  = right - tw - chip*2.1 - fs*0.5;
+
+    /* A leader only when the label had to move. Drawing one every time turns
+       a tidy column of names into a cat's cradle. */
+    if (Math.abs(r.y - r.b.cy) > fs*0.55) {
+      rctx.strokeStyle = 'rgba(226,236,248,.30)';
+      rctx.lineWidth = 1;
+      rctx.beginPath();
+      rctx.moveTo(left - fs*0.25, r.y);
+      rctx.lineTo(left - fs*1.5,  r.y);
+      rctx.lineTo(left - fs*2.4,  r.b.cy);
+      rctx.stroke();
+    }
+
+    /* A plate, because the bands underneath are saturated colour and white
+       text on a mid-tone band is the one thing that would make this
+       unreadable from the sofa. */
+    rctx.fillStyle = 'rgba(4,7,13,.74)';
+    roundRect(rctx, left, r.y - fs*0.78, (right + fs*0.5) - left, fs*1.56, fs*0.36);
+    rctx.fill();
+
+    rctx.fillStyle = nameColor(r.b.id);
+    rctx.fillRect(left + chip*0.55, r.y - chip/2, chip, chip);
+
+    rctx.fillStyle = 'rgba(234,242,252,.95)';
+    rctx.fillText(name, right, r.y);
+  }
+  rctx.restore();
+}
+
+/* Stop the run and change what the screen is about. */
+function startNaming(now) {
+  naming.phase = 'zoom';
+  naming.t0 = now;
+  naming.startedAt = now;
+
+  /* Keep the last stretch of the run and drop the rest. Fixed at the moment
+     the pause fires and never moved again: the time axis stays UNIFORM, which
+     is the property the whole squash-and-blit design exists to protect. A
+     window that kept re-trimming as the endgame ran would give later
+     generations more pixels than earlier ones, and the picture would no
+     longer be readable as time. */
+  zoomFrom = virtualX*(1 - CONFIG.zoomKeep);
+  zoomEase = 0;
+
+  setCaption(
+    'Eight names left, and now they have names. The view drops the opening scramble and follows only the survivors. '
+    + 'From here it is a random walk between a handful of families: the last few names take far longer to die than the first five hundred did.',
+    lastParams);
+}
+
+/* =======================================================================
+   THE CYCLE
+   ======================================================================= */
+let sim = null;
+let actIndex = 0, cycleIndex = 0;
+let actStart = 0, lastStepAt = 0, genDebt = 0;
+let finishedAt = 0;
+let paused = false, handingOff = false, transitioning = false;
+let lastParams = '';
+let fps = 0, lastFrame = performance.now();
+
+function showTitle(act) {
+  titleEl.querySelector('.name').textContent  = act.name;
+  titleEl.querySelector('.blurb').textContent = act.blurb;
+  titleEl.classList.add('show');
+  setTimeout(() => titleEl.classList.remove('show'), CONFIG.titleMs);
+
+  /* The title dissolves; this stays. Each band is one surname, its height its
+     share of the men alive. A name that pinches out is gone for good, because
+     nothing in a patrilineal system can bring it back. */
+  /* Kept, because the naming pause rewrites the sentence above it and the
+     parameters underneath are still true - it would be a shame to lose them
+     just to change the prose. */
+  lastParams =
+    `${CONFIG.n0} founding names  ·  ${CONFIG.N} men per generation  ·  `
+    + `${act.lam.toFixed(1)} children per couple  ·  `
+    + (act.mu > 0 ? `new names coined at ${(act.mu*100).toFixed(1)}% per birth` : 'no new names coined')
+    + (act.wealth ? '  ·  survival ranked by inherited wealth, eldest son takes half' : '  ·  survival independent of wealth')
+    + `  ·  seed ${sim ? sim.seed : '?'}`;
+  setCaption(
+    'Every man passes his surname to his sons and to no one else. Some men have no sons, so names die — and a dead name can never return. Each band is one surname; its thickness is its share of the living men.',
+    lastParams);
+}
+
+function startAct() {
+  const act = ACTS[actIndex];
+  sim = newSim(act, 1 + Math.floor(Math.random()*999998));
+  /* Which surname each founder carries. Belongs to the run, not to the page:
+     re-rolling the act re-rolls the names with it. */
+  sim.namePool = makeNamePool(sim.seed);
+  /* Seed the bookkeeping for generation zero so the first column and the
+     first ticker reading are correct rather than blank. */
+  sim.counts = new Map();
+  for (const id of sim.men) sim.counts.set(id, (sim.counts.get(id) || 0) + 1);
+  sim.richness = sim.counts.size;
+  let top0 = 0;
+  for (const v of sim.counts.values()) if (v > top0) top0 = v;
+  sim.topShare = top0/sim.men.length;
+
+  clearRiver();
+  vctx.clearRect(0, 0, W, VH);
+  actStart = performance.now();
+  lastStepAt = actStart;
+  genDebt = 0;
+  finishedAt = 0;
+  showTitle(act);
+  if (CONFIG.showTicker) tickEl.classList.add('show');
+  drawRiverColumn(sim, act.colW);
+  drawVillage(sim);
+  updateTicker();
+}
+
+/* Rate doubles every rampGens generations, up to a ceiling. Slow where the
+   action is dense, fast through the long grinding tail. */
+function gensPerSecond(act, gen) {
+  return Math.min(act.gpsMax, act.gpsMin*Math.pow(2, gen/act.rampGens));
+}
+
+function nextAct() {
+  if (transitioning) return;
+  transitioning = true;
+  curtain.classList.add('on');
+  setTimeout(() => {
+    actIndex++;
+    if (actIndex >= ACTS.length) {
+      actIndex = 0; cycleIndex++;
+      /* An EMPTY nextPage means there is nowhere to hand on to - which is what
+         build_github.py leaves behind when it cuts this page out of the wall's
+         rotation for publishing. Start again instead. */
+      if (!PINNED && cycleIndex >= CONFIG.cyclesPerTurn) {
+        if (CONFIG.nextPage) location.href = CONFIG.nextPage; else location.reload();
+        return;
+      }
+    }
+    startAct();
+    curtain.classList.remove('on');
+    transitioning = false;
+  }, CONFIG.fadeMs);
+}
+
+function updateTicker() {
+  if (!CONFIG.showTicker || !sim) return;
+  /* Deliberately one line. Two lines reached far enough up the screen to
+     collide with the bottom row of the village. */
+  tickEl.textContent =
+    sim.act.name.toLowerCase() +
+    '   ·   generation ' + sim.gen +
+    '   ·   ' + sim.richness + (sim.richness === 1 ? ' surname' : ' surnames') +
+    '   ·   commonest ' + Math.round(sim.topShare*100) + '%';
+}
+
+function updateInfo() {
+  if (!sim) return;
+  infoEl.textContent =
+    'act       ' + sim.act.name + '  (' + (actIndex+1) + '/' + ACTS.length + ')\n' +
+    'seed      ' + sim.seed + '\n' +
+    'gen       ' + sim.gen + '   rate ' + gensPerSecond(sim.act, sim.gen).toFixed(1) + '/s\n' +
+    'names     ' + sim.richness + ' / ' + CONFIG.n0 + '\n' +
+    'men       ' + sim.men.length + '   women ' + sim.nFem + '\n' +
+    'commonest ' + (sim.topShare*100).toFixed(1) + '%\n' +
+    (sim.w ? 'gini      ' + giniOf(sim.w).toFixed(2) + '\n' : '') +
+    'axis      1 gen = ' + (sim.act.colW*Math.min(1, W/Math.max(virtualX,1))).toFixed(3) + ' px on screen  (' + squashes + ' rescales)\n' +
+    'naming    ' + naming.phase + (zoomEase > 0 ? '   view starts at gen '
+        + Math.round(zoomFrom*zoomEase/sim.act.colW) : '') + '\n' +
+    'elapsed   ' + ((performance.now()-actStart)/1000).toFixed(0) + 's\n' +
+    'fps       ' + fps.toFixed(0) + (paused ? '  [PAUSED]' : '');
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dtms = now - lastFrame; lastFrame = now;
+  fps = fps ? fps*0.9 + (1000/dtms)*0.1 : 1000/dtms;
+  if (paused || handingOff || transitioning || !sim) return;
+
+  /* THE NAMING PAUSE. The simulation is stopped for the whole of this - only
+     the view moves - so nothing below runs until it is over. */
+  if (naming.phase === 'zoom' || naming.phase === 'hold') {
+    if (naming.phase === 'zoom') {
+      const k = Math.min(1, (now - naming.t0)/CONFIG.nameZoomMs);
+      zoomEase = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2)/2;   // ease in-out
+      presentRiver();
+      /* The names arrive in the second half of the slide, once the bands have
+         somewhere to be read against. */
+      drawBandLabels(sim, (k - 0.5)/0.5);
+      if (k >= 1) { zoomEase = 1; naming.phase = 'hold'; naming.t0 = now; }
+    } else {
+      presentRiver();
+      drawBandLabels(sim, 1);
+      if (now - naming.t0 > CONFIG.namePauseMs) {
+        naming.phase = 'done';
+        /* The pause must not be charged to the act's time budget, or a long
+           endgame would be cut short to pay for the beat that introduced it. */
+        actStart  += (now - naming.startedAt);
+        lastStepAt = now;
+        genDebt    = 0;
+      }
+    }
+    if (document.body.classList.contains('showinfo')) updateInfo();
+    return;
+  }
+
+  const act = sim.act;
+  const overTime = (now - actStart) > act.maxMs;
+
+  /* A finished act is held on screen so the outcome can be taken in, then
+     the next act begins. "Finished" is fixation, extinction, or the cap. */
+  if (sim.done || overTime) {
+    if (!finishedAt) { finishedAt = now; updateTicker(); }
+    if (now - finishedAt > CONFIG.holdMs) nextAct();
+    return;
+  }
+
+  /* Step in whole generations but accumulate the fractional remainder, so a
+     rate of 2.5 generations per second really is 2.5 and not 2 or 3. */
+  genDebt += (now - lastStepAt)/1000*gensPerSecond(act, sim.gen);
+  lastStepAt = now;
+  let steps = Math.floor(genDebt);
+  if (steps > 0) {
+    genDebt -= steps;
+    /* A guard against the browser handing us a huge dt after a stall: never
+       try to catch up more than a quarter second of simulation in one frame. */
+    steps = Math.min(steps, Math.ceil(act.gpsMax/4) + 1);
+    for (let k = 0; k < steps && !sim.done; k++) {
+      stepSim(sim);
+      if (!sim.done || sim.men.length) drawRiverColumn(sim, act.colW);
+      /* Cross the threshold and stop the frame there rather than running out
+         its remaining steps: by the tail of an act the rate is tens of
+         generations a second, and the pause is supposed to land ON the eight
+         names, not three names later. */
+      if (naming.phase === 'none' && !sim.done && sim.richness <= CONFIG.nameAt) {
+        startNaming(now);
+        break;
+      }
+    }
+    drawVillage(sim);
+    updateTicker();
+    if (naming.phase === 'done') drawBandLabels(sim, 1);
+  }
+  if (document.body.classList.contains('showinfo')) updateInfo();
+}
+
+addEventListener('resize', () => {
+  /* The river is a painted history that cannot be rescaled meaningfully, so
+     a resize restarts the act rather than stretching a lie across the screen.
+     On the Pi this fires once at startup and never again. */
+  layout();
+  if (sim) startAct();
+});
+
+addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': nextAct(); break;
+    case 'r': case 'R': startAct(); break;          // re-roll the current act
+    case 'p': case 'P': case ' ':
+      paused = !paused;
+      lastStepAt = performance.now();               // do not bank time while paused
+      updateInfo();
+      break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      if (/^[0-9]$/.test(e.key)) {
+        const score = e.key === '0' ? 10 : parseInt(e.key, 10);
+        console.log('[surnames] RATING STUB - score', score,
+                    'act', sim && sim.act.key, 'seed', sim && sim.seed);
+      }
+  }
+});
+
+layout();
+startAct();
+requestAnimationFrame(frame);
+</script>
+<script src="nav.js"></script>
+</body>
+</html>
