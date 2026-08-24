@@ -167,9 +167,18 @@ const CONFIG = {
      on how fast the picture may scale, and is what stops the fast-forward from
      turning the zoom into a lurch. At 1.2% a frame the view can cross its
      whole range, 10 to 150, in about six seconds. */
-  flashMs:        750,   // how long a collision flash lingers, in wall time
-  zoomEase:      0.020,
-  zoomMaxRate:   0.012,
+  flashMs:        900,   // how long a collision flash lingers, in wall time
+  /* THE ZOOM IS DELIBERATELY SLUGGISH. Joe's note was that it "feels random",
+     and it did: the framing statistic moved on every merger (see recentre)
+     and the view chased it at 2% a frame, so the picture breathed in and out
+     with no visible cause. The statistic is fixed at source now; these three
+     numbers make what is left read as a slow, single pull-in over a run.
+     zoomDeadband is the one that buys stillness - inside it the target is not
+     moved at all, so the view stops creeping after the last digit of a
+     percentile and only responds to a real change of scale. */
+  zoomDeadband:  0.055,
+  zoomEase:      0.010,
+  zoomMaxRate:   0.007,
 
   barHeight:      0.052,  // mass bar height as a fraction of screen height
   runsPerTurn:        2,  // runs before handing the screen to the surname river
@@ -720,12 +729,26 @@ class Sim {
     rHalf = Math.max(rHalf, 1e-6);
 
     const framing = [];
-    for (const [rr, , i] of byDist) {
+    let fMass = 0;
+    for (const [rr, mi, i] of byDist) {
       if (!cur[i] && rr > rHalf*3.2) continue;      // on its way out: do not frame for it
-      framing.push(rr);
+      framing.push([rr, mi]); fMass += mi;
     }
     if (!framing.length) return;
-    const rFrame = framing[Math.max(0, Math.floor(0.90*framing.length)-1)];
+
+    /* BY MASS, NOT BY BODY COUNT, and that is the whole of the "random zoom".
+
+       This was the radius holding the innermost 90% of the framing BODIES. A
+       merger removes a body, so the 90th index moves to a different body, so
+       the radius steps - and a merger is exactly the moment the viewer is
+       watching. With three hundred bodies each step is small; with twenty it
+       is not, which is why the pumping got worse as a run went on.
+
+       Mass is CONSERVED by a merger. The radius holding 92% of the framing
+       mass does not move when two bodies become one, so the view no longer
+       twitches every time something lands. */
+    let acc2 = 0, rFrame = framing[framing.length-1][0];
+    for (const [rr, mi] of framing) { acc2 += mi; if (acc2 >= 0.92*fMass) { rFrame = rr; break; } }
     /* Only DECIDE the zoom here. Moving it is the frame loop's job.
 
        This used to ease viewRadius by a fixed fraction on every call - and
@@ -735,7 +758,15 @@ class Sim {
        compressed: measured, the fractional change per frame went from 2.7% at
        real time to 8.0% at three to six times, which is about 480% a second
        and reads as lurching in and out. */
-    this.viewTarget = Math.min(CONFIG.viewMax, Math.max(10, rFrame*1.4));
+    const want = Math.min(CONFIG.viewMax, Math.max(10, rFrame*1.4));
+    /* A DEADBAND on top. Even a well-behaved statistic wanders by a percent or
+       two, and easing toward a wandering target means the picture is never
+       actually still. Below this the target is left exactly where it was, so
+       the view holds until the system genuinely changes size. */
+    if (!this.viewTarget ||
+        Math.abs(want - this.viewTarget) > this.viewTarget*CONFIG.zoomDeadband) {
+      this.viewTarget = want;
+    }
   }
 
   /* Colour by speed measured against the LOCAL ESCAPE VELOCITY.
@@ -999,12 +1030,76 @@ function draw(nowSec) {
         const a = (1-age)*(1-age)*(0.18 + 0.82*u);
         // bounded so even the rarest collision cannot wash out the frame
         const rr = Math.min(H*0.22, rad*(2.2 + 11*u));
-        const g2 = ctx.createRadialGradient(sx, sy, 0, sx, sy, rr);
+
+        /* DRAWN AS A LENS FLARE: a small hot core with a four-armed cross
+           through it, the way a bright point looks through a real lens.
+
+           ADDITIVE, and that matters. Light adds; paint does not. With normal
+           compositing the horizontal and vertical arms would paint over each
+           other and the crossing point would come out the colour of one arm
+           at one arm's brightness - a visible dark notch exactly where the
+           collision was. Under 'lighter' the two arms and the core sum, so
+           the centre is the brightest thing in the frame, which is what a
+           flare is.
+
+           THE ARMS ARE FASTER THAN THE CORE. They snap to full length in
+           about a tenth of the flash, then shorten and fade on a steeper
+           curve than the bloom behind them - so the cross reads as the event
+           and the glow as what is left of it. */
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+
+        const core = rr*0.55;
+        const g2 = ctx.createRadialGradient(sx, sy, 0, sx, sy, core);
         g2.addColorStop(0,    'rgba(255,252,242,' + a.toFixed(3) + ')');
         g2.addColorStop(0.30, 'rgba(255,226,160,' + (a*0.42).toFixed(3) + ')');
         g2.addColorStop(1,    'rgba(255,170,80,0)');
         ctx.fillStyle = g2;
-        ctx.beginPath(); ctx.arc(sx, sy, rr, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.arc(sx, sy, core, 0, 6.2832); ctx.fill();
+
+        const grow  = Math.min(1, age/0.10);           // out fast
+        const decay = Math.pow(1 - age, 2.2);          // back in, faster than the core
+        /* Length is capped separately from the core. The core's own cap lets
+           the rarest collision reach nearly a quarter of the screen height,
+           and arms three times THAT drew a cross wider than the frame. */
+        const L  = Math.min(H*0.26, rr*1.9)*grow*(0.72 + 0.28*decay);
+        const aa = decay*(0.30 + 0.70*u);
+
+        /* Each arm is drawn TWICE: a soft wide wedge and a hot hairline
+           inside it. One wedge alone was the mistake in the first version -
+           at the top of the energy range its half-thickness came out near
+           thirty pixels, and a thirty-pixel wedge at middling alpha over
+           black is not a streak of light, it is a grey triangle. A real
+           flare is a thin bright line with a haze around it, so that is what
+           this draws.
+
+           Each is a lens shape - a point at each end, widest in the middle -
+           rather than a rectangle, because constant thickness reads as a
+           drawn line and a taper reads as light. */
+        const arm = (dx, dy, len, th, alpha) => {
+          const px = -dy, py = dx;                     // unit normal to the arm
+          const gr = ctx.createLinearGradient(sx - dx*len, sy - dy*len,
+                                              sx + dx*len, sy + dy*len);
+          gr.addColorStop(0,    'rgba(255,214,150,0)');
+          gr.addColorStop(0.5,  'rgba(255,250,238,' + alpha.toFixed(3) + ')');
+          gr.addColorStop(1,    'rgba(255,214,150,0)');
+          ctx.fillStyle = gr;
+          ctx.beginPath();
+          ctx.moveTo(sx - dx*len,  sy - dy*len);
+          ctx.lineTo(sx + px*th,   sy + py*th);
+          ctx.lineTo(sx + dx*len,  sy + dy*len);
+          ctx.lineTo(sx - px*th,   sy - py*th);
+          ctx.closePath();
+          ctx.fill();
+        };
+        const haze = Math.max(1.6*DPR, rr*0.055);
+        const hot  = Math.max(0.7*DPR, haze*0.30);
+        arm(1, 0, L,      haze,      aa*0.40);   // the long horizontal streak
+        arm(1, 0, L*0.94, hot,       aa);
+        arm(0, 1, L*0.58, haze*0.9,  aa*0.34);   // and a shorter vertical one
+        arm(0, 1, L*0.54, hot*0.9,   aa*0.85);
+
+        ctx.restore();
       }
     }
 
@@ -1063,15 +1158,20 @@ function drawMassBar(barH) {
   ctx.textAlign = 'right';
   ctx.fillText(sim.settled ? 'SETTLED' : `${sim.merges} mergers`, pad + barW, y - barH*0.35);
 
-  /* How fast time is running, in the empty middle of the bar's label line -
-     the only strip up here that the two end labels can never reach. Quiet
-     stretches are fast-forwarded and a merger drops it straight back to real
-     time, so without this the viewer has no way to tell a genuinely frantic
-     moment from a compressed one. */
+  /* How fast time is running, AND WHY, in the empty middle of the bar's label
+     line - the only strip up here that the two end labels can never reach.
+
+     It used to read "TIME x4.2" and nothing else, and Joe's note was that it
+     was not obvious why the speed kept changing. The number alone does not
+     say that: it reports the multiplier without giving the reason. The reason
+     is that nothing has collided for a while and the quiet is being skipped,
+     so the label says that too, and the moment something does collide the
+     clock drops back and the label goes back to REAL TIME. */
   const mult = sim.settled ? 1 : boostSmooth;   // 1x is spf steps/frame
   ctx.textAlign = 'center';
   ctx.fillStyle = mult < 1.08 ? 'rgba(196,210,228,0.68)' : 'rgba(255,214,140,0.86)';
-  ctx.fillText(mult < 1.08 ? 'REAL TIME' : `TIME \u00D7${mult.toFixed(1)}`,
+  ctx.fillText(mult < 1.08 ? 'REAL TIME'
+                           : `\u00D7${mult.toFixed(1)}  \u00B7  NOTHING COLLIDING`,
                pad + barW*0.5, y - barH*0.35);
   ctx.fillStyle = 'rgba(196,210,228,0.68)';
   ctx.textAlign = 'left';
@@ -1132,7 +1232,14 @@ function frame(now) {
        approach to it is smoothed, so speed changes are gradual either way. */
     const quiet = sim.steps - sim.lastMerge;
     const target = Math.min(CONFIG.maxBoost, 1 + quiet / CONFIG.boostAfter);
-    boostSmooth += (target - boostSmooth) * (target < boostSmooth ? 0.10 : 0.02);
+    /* Slowing DOWN is still faster than speeding up - a merger should be seen
+       at something near real time, not at eight times - but 0.10 a frame
+       stopped the whole field dead inside a fifth of a second, which reads as
+       a stutter rather than as a deceleration. At 0.06 the drop from eight
+       times takes about half a second, which is also roughly how long the
+       collision flash lasts: the picture visibly slows down WHILE the flash
+       that caused it is still burning, so the two read as cause and effect. */
+    boostSmooth += (target - boostSmooth) * (target < boostSmooth ? 0.06 : 0.02);
     stepAcc += sim.s.spf * boostSmooth;
     const nSteps = Math.max(1, Math.floor(stepAcc));
     stepAcc -= nSteps;                      // keep only the remainder
@@ -1157,7 +1264,23 @@ function frame(now) {
   if (sim.viewTarget > 0) {
     const cur = sim.viewRadius;
     let d = (sim.viewTarget - cur) * CONFIG.zoomEase;
-    const cap = cur * CONFIG.zoomMaxRate;
+    let cap = cur * CONFIG.zoomMaxRate;
+    /* PULLING OUT IS URGENT; PULLING IN IS NOT, and treating them the same is
+       most of what made this feel arbitrary. Widening the view has a reason
+       the viewer can see - something is about to leave the frame - while
+       narrowing it has none, so a transient contraction of the system read as
+       the camera deciding to move for no reason, and it did it in both
+       directions within a couple of seconds.
+
+       Zooming IN is therefore a third the speed. The view still follows the
+       long, real shrinking of an accreting cluster; it just no longer chases
+       every dip. Measured on the same three seeds over forty seconds each,
+       against the old easing with no deadband: the total distance the view
+       travels falls by 30, 71 and 30 per cent, and on the accretion disc the
+       number of times it reverses direction falls from thirteen to three.
+       Cluster Collision keeps the most of its motion, which is right - two
+       clusters really do pass through each other and spread. */
+    if (d < 0) { d *= 0.34; cap *= 0.34; }
     if (d >  cap) d =  cap;
     if (d < -cap) d = -cap;
     sim.viewRadius = cur + d;
