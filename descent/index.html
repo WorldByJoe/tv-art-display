@@ -1,0 +1,2053 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Fastest Line</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; }
+  canvas#cv { display:block; width:100vw; height:100vh; }
+  * { cursor:none; }
+
+  /* ---- who is riding, and what do they know ---------------------------
+     Two chips, always visible top-left. The whole point of randomising the
+     rider and the knowledge mode is watching the difference between runs,
+     so the labels have to be legible from the couch. */
+  #who { position:fixed; left:2vw; top:3vh; z-index:9; display:flex; gap:.6em; }
+  #who .chip { font:600 clamp(11px,1.0vw,22px)/1 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.14em; text-transform:uppercase; color:#eef2f8;
+    background:rgba(8,11,18,.66); border:1px solid rgba(255,255,255,.22);
+    border-radius:.45em; padding:.62em .9em; backdrop-filter:blur(4px);
+    text-shadow:0 1px 6px rgba(0,0,0,.8); }
+  #who .chip .dot { display:inline-block; width:.62em; height:.62em; border-radius:50%;
+    margin-right:.55em; vertical-align:1%; }
+
+  /* ---- the action ticker ----------------------------------------------
+     One short line saying what the rider is DOING and one smaller line
+     saying WHY. This is how a spectator reads the rider's decisions. */
+  #ticker { position:fixed; left:0; right:0; bottom:12.5vh; z-index:9; text-align:center;
+    pointer-events:none; }
+  #ticker .act { font:600 clamp(15px,1.7vw,38px)/1.15 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.2em; text-transform:uppercase; color:rgba(240,245,252,.95);
+    text-shadow:0 2px 12px rgba(0,0,0,.85); }
+  #ticker .why { margin-top:.35em; font:400 clamp(11px,1.0vw,22px)/1.3 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.08em; color:rgba(210,222,238,.72); text-shadow:0 2px 10px rgba(0,0,0,.85); }
+
+  /* ---- intro / finish card --------------------------------------------
+     Same glass-card look as the other wall pieces. */
+  #card { position:fixed; right:3.5vw; top:50%; transform:translateY(-50%) translateX(3vw);
+    z-index:10; width:min(36vw,660px); opacity:0; pointer-events:none;
+    transition:opacity 1.1s ease-out, transform 1.1s ease-out;
+    background:linear-gradient(135deg, rgba(10,14,22,.92), rgba(10,14,22,.76));
+    border:1px solid rgba(255,255,255,.14); border-radius:.55em;
+    padding:1.4em 1.6em; backdrop-filter:blur(7px);
+    box-shadow:0 10px 46px rgba(0,0,0,.6);
+    font:300 clamp(12px,1.05vw,24px)/1.45 ui-sans-serif,system-ui,sans-serif; color:#e8edf5; }
+  #card.show { opacity:1; transform:translateY(-50%) translateX(0); }
+  #card .pk { font-weight:300; font-size:1.8em; line-height:1.15; letter-spacing:.06em; }
+  #card .sub { margin-top:.3em; font-family:ui-monospace,Menlo,monospace; font-size:.72em;
+    color:rgba(205,218,236,.78); letter-spacing:.04em; }
+  #card .rows { margin-top:.8em; font-family:ui-monospace,Menlo,monospace; font-size:.78em;
+    color:rgba(228,236,247,.9); white-space:pre; line-height:1.65; }
+  #card canvas { display:block; margin-top:.9em; width:100%; border-radius:.35em;
+    background:rgba(255,255,255,.045); }
+  #card .surfbar { display:flex; height:.55em; margin-top:.9em; border-radius:.3em; overflow:hidden;
+    border:1px solid rgba(255,255,255,.12); }
+  #card .surfkey { margin-top:.4em; font-family:ui-monospace,Menlo,monospace; font-size:.62em;
+    color:rgba(200,212,230,.65); letter-spacing:.02em; }
+
+  /* ---- caption bar, matching the rest of the wall ---------------------- */
+  #caption { position:fixed; left:0; right:0; bottom:0; z-index:8; text-align:center;
+    background:linear-gradient(to top, rgba(3,5,10,.88) 0%, rgba(3,5,10,.62) 55%, rgba(3,5,10,0) 100%);
+    padding:1.5em 0 .65em 0; pointer-events:none; }
+  #caption .what { font:300 clamp(12px,1.1vw,24px)/1.3 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.24em; text-transform:uppercase; color:rgba(235,241,249,.88); }
+  #caption .params { margin-top:.25em; font:400 clamp(9px,.75vw,16px)/1.3 ui-monospace,Menlo,monospace;
+    letter-spacing:.05em; color:rgba(205,216,232,.5); }
+
+  #info { position:fixed; left:2vw; bottom:9vh; z-index:11; display:none;
+    font:500 clamp(11px,.9vw,17px)/1.5 ui-monospace,Menlo,monospace;
+    color:#dfe6ee; background:rgba(0,0,0,.66); padding:.7em 1em; border-radius:.4em;
+    border:1px solid rgba(255,255,255,.15); white-space:pre; }
+  body.showinfo #info { display:block; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="who"></div>
+<div id="ticker"><div class="act"></div><div class="why"></div></div>
+<div id="card"></div>
+<div id="caption"><div class="what">The Fastest Line</div><div class="params"></div></div>
+<div id="info"></div>
+<script>
+'use strict';
+/* ===========================================================================
+   THE FASTEST LINE - a mountain bike finds its quickest way down a mountain.
+
+   Every run invents a fresh trail: a bench cut across a hillside that
+   traverses, switchbacks, rolls and plunges through changing dirt - hardpack,
+   loose-over-hard, deep loose, loam, two sizes of gravel, rock slab - with
+   rocks and half-buried boulders in the riding line, cambered or bermed
+   corners, and edges that simply return to the hillside.
+
+   The rider is simulated, not scripted. A planner chooses the line (where to
+   be across the trail width) and the speed plan (when to pedal, when to
+   brake) from physics: a traction circle on each surface, banking, weight
+   transfer limits on braking (the endo limit), air drag by body posture, and
+   suspension-filtered roughness. Two things are rolled per run and shown on
+   screen:
+
+     RIDER      pro  (strong, brave, precise)  vs  weekend (weaker, careful)
+     KNOWLEDGE  knows the trail (plans the whole line in advance, like a race
+                run on a practiced track)  vs  on-sight (can only plan as far
+                as they can SEE - so they must always be able to slow enough
+                before the trail disappears around a corner or over a crest)
+
+   The planned line is painted on the trail ahead of the rider, coloured by
+   intention: red = braking, green = pedaling, white = coasting. In on-sight
+   mode the painted line stops where the sight line stops.
+
+   Keys: n new trail · p pause · c camera (chase/rider/side) · m re-run same
+   trail in the other knowledge mode · r re-run with the other rider ·
+   i info · t physics self-test · arrows rotate wall pages.
+   URL params: ?seed=123&rider=pro|weekend&mode=known|onsight&vert=400
+   &cam=chase|fp|side&ts=1&pin
+   (?pin keeps re-running instead of handing the wall on, the same as the
+    other pages; without it one descent is one turn of the rotation.)
+   =========================================================================== */
+
+/* ---- rotation navigation (remote D-pad) -------------------------------- */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+/* ========================== tiny utilities ============================== */
+function xmur3(str){ let h=1779033703^str.length;
+  for(let i=0;i<str.length;i++){ h=Math.imul(h^str.charCodeAt(i),3432918353); h=h<<13|h>>>19; }
+  return function(){ h=Math.imul(h^(h>>>16),2246822507); h=Math.imul(h^(h>>>13),3266489909);
+    return (h^=h>>>16)>>>0; }; }
+function mulberry32(a){ return function(){ let t=a+=0x6D2B79F5;
+  t=Math.imul(t^t>>>15, t|1); t^=t+Math.imul(t^t>>>7, t|61); return ((t^t>>>14)>>>0)/4294967296; }; }
+let rand = Math.random;                       // rebound to the seeded stream per run
+const R01=()=>rand(), RR=(a,b)=>a+(b-a)*rand(), RI=(a,b)=>Math.floor(RR(a,b+1));
+const clamp=(v,a,b)=>v<a?a:(v>b?b:v), lerp=(a,b,t)=>a+(b-a)*t;
+const TAU=Math.PI*2, DEG=Math.PI/180;
+function smoothNoise1D(rng, n, wavelength, amp){    // value noise, cosine-eased
+  const k=Math.max(2,Math.ceil(n/wavelength)+2), knots=[];
+  for(let i=0;i<k;i++) knots.push((rng()*2-1)*amp);
+  const out=new Float32Array(n);
+  for(let i=0;i<n;i++){ const x=i/wavelength, j=Math.floor(x), t=x-j;
+    const e=.5-.5*Math.cos(Math.PI*t);
+    out[i]=knots[Math.min(j,k-1)]*(1-e)+knots[Math.min(j+1,k-1)]*e; }
+  return out;
+}
+const fmtTime=s=>{ const m=Math.floor(s/60), r=s-60*m; return m+':'+(r<10?'0':'')+r.toFixed(1); };
+const wrapA=a=>{ while(a>Math.PI)a-=TAU; while(a<-Math.PI)a+=TAU; return a; };
+
+/* ========================== configuration =============================== */
+const Q = new URLSearchParams(location.search);
+const CONFIG = {
+  ds: 1.0,                 // metres between trail stations (the sim's spatial grid)
+  drawDist: 250,           // how far ahead the renderer bothers to look, metres
+  corridor: 15,            // hillside drawn this far to each side of the trail
+  introSec: 8, countSec: 3, finishSec: 13,
+  g: 9.81,
+  rho: 1.02,               // thin air - these mountains sit at altitude
+  wheelR: 0.368,           // 29" wheel with a tyre on it
+  wheelbase: 1.22,
+  vmaxAbs: 26,             // sanity ceiling, m/s (94 km/h) - nobody outruns this on dirt
+  vgear: 14.2,             // m/s. Past ~51 km/h the legs spin out; pedaling adds nothing
+  suspension: 0.35,        // how much of surface roughness the full-sus 29er eats
+                           // before it reaches the tyres' grip (bigger = worse bike)
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,  // where the wall goes when a run finishes
+  /* A BACKSTOP, AND IT LIVES OUTSIDE THE ANIMATION LOOP ON PURPOSE.
+
+     The only hand-off is at the end of a run, inside frame() - so anything
+     that throws inside frame() takes the requestAnimationFrame chain down with
+     it AND the hand-off with that, and the wall parks on a frozen still frame
+     until somebody power-cycles the television. A deadline checked inside the
+     loop would be just as dead. A setTimeout is not.
+
+     Eleven minutes is deliberately far beyond any real run - the longest of
+     thirty-two measured was 7.4 minutes of riding plus 24 s of card and
+     countdown - because a backstop that fires during a genuine descent would
+     cut the rider off mid-mountain, which looks like a crash rather than a
+     rescue. This is for when the page is dead, not for pacing. */
+  runDeadline: 660000,
+};
+/* THE SAME POLARITY AS EVERY OTHER PAGE ON THE WALL: hand on when the run is
+   over, and only stay if you are asked to. It was the other way round - it
+   looped for ever unless ?wall=1 was passed - which meant that putting this
+   page into the rotation without remembering that one flag would have parked
+   the whole wall on it permanently. `?pin` keeps it looping, exactly as
+   plume.html?pin and surnames.html?pin do. */
+const PINNED = /[?&]pin\b/.test(location.search);
+let deadlineTimer = 0;      // see CONFIG.runDeadline - the escape from a dead frame loop
+/* Surfaces. mu = dry friction coefficient tyre-on-surface, crr = rolling
+   resistance, rough = how violently it shakes the bike at speed (loses grip),
+   the colours are the trail paint. Values are trail-riding folklore numbers
+   sanity-checked against braking/cornering benchmarks (press t). */
+const SURFS = [
+  {id:0, name:'hardpack',      mu:.85, crr:.010, rough:.15, col:'#b5895a', spk:0        },
+  {id:1, name:'loose over hard',mu:.62, crr:.014, rough:.30, col:'#c8a06d', spk:'#a1794a'},
+  {id:2, name:'deep loose',    mu:.50, crr:.024, rough:.40, col:'#d4b183', spk:'#b28d5b'},
+  {id:3, name:'loam',          mu:.72, crr:.020, rough:.20, col:'#7a5b3e', spk:'#5f462f'},
+  {id:4, name:'fine gravel',   mu:.60, crr:.016, rough:.35, col:'#a9a49b', spk:'#7d7972'},
+  {id:5, name:'coarse gravel', mu:.55, crr:.022, rough:.55, col:'#8f8a83', spk:'#5f5b55'},
+  {id:6, name:'rock slab',     mu:.88, crr:.008, rough:.25, col:'#9aa0a8', spk:'#6f757e'},
+];
+/* The two riders. Power numbers are honest cycling physiology: CP is what
+   they can hold, sprint is a short burst drawing down the anaerobic tank W'.
+   gripUse is nerve - what fraction of the physically available traction the
+   PLANNER lets them lean on. The dynamics keep the full traction in reserve,
+   which is why surprises produce slides rather than instant disaster. */
+const RIDERS = {
+  pro:     { label:'PRO RIDER',    col:'#e5484d', massRider:78, cp:310, sprint:880, wprime:21000,
+             gripUse:.95, brakeSkill:.95, blindV:5.0, sightSafety:.94, replan:.35,
+             sightRead:1.15, muAssume:.60, lineNoise:.03, edgeMargin:.25,
+             rollA:6.8, rollB:11 },      // rolls a rock of height h at rollA - rollB*h m/s
+  weekend: { label:'WEEKEND RIDER',col:'#4c8dff', massRider:86, cp:195, sprint:520, wprime:9000,
+             gripUse:.78, brakeSkill:.80, blindV:3.2, sightSafety:.80, replan:.60,
+             sightRead:.85, muAssume:.50, lineNoise:.13, edgeMargin:.40,
+             rollA:5.0, rollB:10 },     // a 40 cm rock brings them nearly to a stop
+};
+const MASSBIKE = 15.5;
+/* Body postures: centre-of-gravity height (m above ground), where the CG sits
+   along the wheelbase (cgFromRear = fraction of wheelbase forward of the rear
+   axle), and drag area. Joe's spec: standing on the pedals except when
+   pedaling, seated then. Hips-back braking posture moves the CG well aft,
+   which is what buys the endo margin on steep ground. */
+const POSTURE = {
+  stand:{ cg:1.02, cgFromRear:.46, cda:.56 },
+  pedal:{ cg:0.98, cgFromRear:.48, cda:.50 },   // seated, spinning
+  tuck: { cg:0.90, cgFromRear:.50, cda:.38 },   // low and small on fast straights
+  brake:{ cg:0.96, cgFromRear:.32, cda:.60 },   // hips behind the saddle, arms long
+};
+/* THE PITCH-OVER LIMIT: the most BRAKE FORCE, per unit mass, the bike can take
+   before the rear wheel lifts.
+
+   THE SLOPE TERM CANCELS, and it used to be in here twice over. Take moments
+   about the front contact patch, with d_f the along-slope distance from the CG
+   back to that patch and h the CG height:
+
+     restoring   m g cos(th) d_f          the normal load, acting behind the patch
+     gravity     m g sin(th) h            the downhill pull at CG height, forward
+     inertia     m (F/m - g sin(th)) h    the reaction to the NET deceleration
+
+   The brake force itself acts at ground level, which is the pivot, so it has no
+   moment arm of its own. Setting rear load to zero:
+
+     g cos(th) d_f = h ( g sin(th) + F/m - g sin(th) ) = h F/m
+     F/m = g cos(th) d_f / h
+
+   - the sin(th) terms cancel exactly, because on a slope the bike is already
+   accelerating downhill and only the brake produces deceleration relative to
+   that. What lifts the rear is the inertial reaction to the brake force at CG
+   height, and nothing else.
+
+   This used to return g*(cos(th) d_f/h - sin(th)), which is the limit on NET
+   deceleration, not on brake force. Both callers use it the other way: the
+   planner takes min(traction, endo) and THEN writes net = brake - g sin(th)
+   (line ~768), and the sim clamps aBrake to it and then adds grav separately
+   (line ~884). So gravity was being taken off twice, and the error grows with
+   the gradient - on a 25% grade the cap came out 5.85 m/s^2 against a true
+   8.22, so the rider was held to 29% less braking than the bike has, on
+   exactly the steep ground where braking decides the line. */
+function endoCap(posture, th){
+  return CONFIG.g*Math.cos(th)*(1-posture.cgFromRear)*CONFIG.wheelbase/posture.cg;
+}
+
+/* HOW MUCH LATERAL ACCELERATION A CORNER CAN GIVE, once the camber is counted.
+   t = tan(bank angle): positive where the surface leans INTO the turn, which is
+   what a berm is, negative off-camber. The standard banked-turn result,
+
+     a_lat = g_n (mu + t) / (1 - mu t)
+
+   ONE expression, used by the planner when it sets the corner ceiling and by
+   the dynamics when they decide whether the tyres have let go. They used to
+   disagree: the planner used this, and the slide test used mu*g_n*(1 + 1.2 t),
+   a straight-line approximation that is lower for any real berm and far too
+   generous off-camber. So the planner would correctly judge that a bermed
+   corner could be held at speed, and the dynamics would then slide in it - and
+   a berm that does not hold is the one thing a berm is for. */
+function bankedLat(mue, gn, t){ return gn*(mue+t)/Math.max(1-mue*t, .22); }
+
+/* ============================= trail =================================== */
+/* The trail is built first as a centreline - position, heading, grade - by a
+   segment machine walking down a synthetic hillside, then dressed with width,
+   camber, berms, surfaces, rocks, boulders and trees. Everything downstream
+   (planner, physics, renderer) reads these per-station arrays. */
+let T = null;         // the trail
+let PLAN = null;      // the chosen line + speed plan
+let SIM = null;       // live rider state
+let RUN = null;       // run bookkeeping (state machine, stats)
+
+function genTrail(seedStr){
+  // The trail depends ONLY on the seed - never on who is riding it - so the
+  // same seed is a fair head-to-head between riders and knowledge modes
+  // (keys r and m re-run the identical trail).
+  const seedFn = xmur3(seedStr); rand = mulberry32(seedFn());
+  const vertTarget = Q.get('vert') ? +Q.get('vert') : RR(280,360);
+
+  const ds = CONFIG.ds;
+  const x=[],y=[],z=[],psiA=[],thetaA=[],segA=[];       // centreline + segment tag
+  let px_=0, py_=0, pz_=0, psi=RR(0,TAU), theta=0.10;
+  let drop=0, u=0;                                       // u = across-hill coordinate
+  let travDir = R01()<.5?1:-1;                           // which way we cross the hill
+  const uMax = RR(55,110);                               // how wide the hillside allows
+
+  // The hillside itself: fall-line azimuth drifts, steepness breathes.
+  const NMAXguess = Math.ceil(vertTarget/0.10)+600;
+  const fallDrift = smoothNoise1D(rand, NMAXguess, 600, 30*DEG);
+  const slopeNz  = smoothNoise1D(rand, NMAXguess, 260, .34);
+  const psiFall0 = psi + RR(-.6,.6);
+  const hillAt = i => clamp(.64 + slopeNz[Math.min(i,NMAXguess-1)], .36, .98); // tan(hill slope)
+  const fallAt = i => psiFall0 + fallDrift[Math.min(i,NMAXguess-1)];
+  /* A descending trail can never point back UP the mountain (outside the body
+     of a switchback turn itself). Confining the heading to a cone around the
+     fall line makes self-crossing trails impossible BY CONSTRUCTION - every
+     leg makes downhill progress, so two legs at the same spot on the map
+     would have to be at very different heights, which is exactly how real
+     switchback ladders work. Before this, maps sometimes tied themselves in
+     physically impossible knots. */
+  const MAXDEV = 81*DEG;
+
+  function pushStation(kappa, thetaTarget, segTag){
+    const i = x.length;
+    const dTh = clamp(thetaTarget-theta, -.028, .028); theta += dTh;   // grade eases, never snaps
+    psi += kappa*ds;
+    const psiF = fallAt(i);
+    if (segTag!==2){                          // 2 = SWITCH: the one place a trail sweeps past the cone
+      const dev=wrapA(psi-psiF);
+      if (Math.abs(dev)>MAXDEV) psi=psiF+Math.sign(dev)*MAXDEV;
+    }
+    const ch = Math.cos(theta);
+    px_ += ch*Math.cos(psi)*ds; py_ += ch*Math.sin(psi)*ds; pz_ -= Math.sin(theta)*ds;
+    drop += Math.sin(theta)*ds;
+    u += ch*Math.sin(psi-psiF)*ds;
+    x.push(px_); y.push(py_); z.push(pz_); psiA.push(psi); thetaA.push(theta); segA.push(segTag);
+  }
+
+  /* -- segment machine -- */
+  const SEG={TRAV:0,SBEND:1,SWITCH:2,CHUTE:3,ROLL:4,RUNOUT:5};
+  const switchbacks=[];    // [startIdx,endIdx,dir,bermH,R] for berms/surfacing later
+  const chutes=[];
+  let switchCool=0;        // stations until another switchback is allowed - real
+                           // trails breathe between hairpins; without this the
+                           // generator once tied itself into a knot of them
+  while(drop < vertTarget){
+    const i0=x.length, hill=hillAt(i0);
+    let type;
+    if (Math.abs(u) > uMax && switchCool<=0) type=SEG.SWITCH;
+    else { const r=R01();
+      type = r<.36?SEG.TRAV : r<.56?SEG.SBEND : r<.68?(hill>.5?SEG.CHUTE:SEG.TRAV)
+           : r<.84?SEG.ROLL : (switchCool<=0?SEG.SWITCH:SEG.TRAV); }
+    switchCool -= 1;
+
+    if (type===SEG.TRAV){
+      // grade wanders WITHIN a traverse too - flat rests, sudden steep pitches -
+      // so the speed plan has real texture, not one long constant slope
+      const len=RI(55,150), gr=clamp(RR(.05,.28), 0, hill*.85);
+      const wig = smoothNoise1D(rand, len, 22, .016);
+      const gnz = smoothNoise1D(rand, len, 45, .08);
+      for(let k=0;k<len;k++)
+        pushStation(wig[k], Math.atan(clamp(gr+gnz[k], .02, hill*.9)), SEG.TRAV);
+      switchCool-=len;
+    } else if (type===SEG.SBEND){
+      const n=RI(1,2);
+      for(let b=0;b<n;b++){
+        const R_=RR(9,24), gr=RR(.10,.22);
+        // pick the turn direction that keeps the heading inside the downhill cone
+        const d0=wrapA(psi-fallAt(x.length));
+        let dpsi=RR(38,80)*DEG*(R01()<.5?1:-1);
+        if (Math.abs(d0+dpsi)>1.3) dpsi=-dpsi;
+        if (Math.abs(d0+dpsi)>1.35) dpsi=Math.sign(dpsi)*Math.max(.2,1.3-Math.abs(d0));
+        const len=Math.round(Math.abs(dpsi)*R_/ds), k0=Math.sign(dpsi)/R_;
+        for(let k=0;k<len;k++) pushStation(k0, Math.atan(clamp(gr,0,hill*.85)), SEG.SBEND);
+        switchCool-=len;
+      }
+    } else if (type===SEG.SWITCH){
+      // A real switchback: brake zone in, tight arc that flattens at the apex,
+      // accelerate out. It sweeps from this side of the downhill cone to the
+      // other side - however far that actually is from the current heading -
+      // so the exit leg is guaranteed to head back across the hill, never up it.
+      const berm = R01()<.5;
+      const R_ = berm? RR(3.4,6.5) : RR(2.6,5.0);
+      const lead=RI(8,14);
+      for(let k=0;k<lead;k++) pushStation(0, Math.atan(RR(.12,.18)), SEG.TRAV);
+      const d0=wrapA(psi-fallAt(x.length));
+      const dir = d0>0? -1 : 1;                       // turn back across the fall line
+      const dpsi = Math.abs(d0) + RR(50,80)*DEG;      // land 50-80° onto the other side
+      const s0=x.length;
+      const len=Math.max(4,Math.round(dpsi*R_/ds)), k0=dir/R_;
+      for(let k=0;k<len;k++){
+        const tfrac=k/len, apex=1-Math.abs(tfrac-.5)*2;       // 0 at ends, 1 mid
+        pushStation(k0, Math.atan(lerp(.14,.08,apex)), SEG.SWITCH);
+      }
+      switchbacks.push([s0, x.length, dir, berm? RR(.28,.55): 0, R_]);
+      const tail=RI(30,70), gr=clamp(RR(.12,.22),0,hill*.85);
+      for(let k=0;k<tail;k++) pushStation(0, Math.atan(gr), SEG.TRAV);
+      travDir = -travDir;
+      switchCool = RI(50,120);
+    } else if (type===SEG.CHUTE){
+      // a chute plunges NEAR the fall line - steer onto it first, then drop.
+      // (a 35% grade while traversing across the hill would be geometric nonsense)
+      const d0=wrapA(psi-fallAt(x.length));
+      const steer=Math.round(Math.abs(d0)*8/ds);
+      for(let k=0;k<steer;k++) pushStation(-Math.sign(d0)/8, Math.atan(.16), SEG.SBEND);
+      const len=RI(16,40), gr=clamp(RR(.26,.38), 0, hill*.95);
+      const s0=x.length;
+      for(let k=0;k<len;k++) pushStation(RR(-.004,.004), Math.atan(gr), SEG.CHUTE);
+      chutes.push([s0,x.length]);
+      switchCool-=len;
+    } else { // ROLLERS
+      const len=RI(30,70), base=RR(.11,.17), wl=RR(8,14);
+      for(let k=0;k<len;k++)
+        pushStation(0, Math.atan(clamp(base+.09*Math.sin(k/wl*TAU),-.03,hill*.85)), SEG.ROLL);
+      switchCool-=len;
+    }
+    if (x.length>26000) break;   // never happens; belt and braces
+  }
+  for(let k=0;k<28;k++) pushStation(0, Math.atan(Math.max(0,.10-.004*k)), SEG.RUNOUT);
+  const N=x.length;
+
+  /* -- smooth heading/grade a touch, then derive curvatures -- */
+  const kapH=new Float32Array(N), kapV=new Float32Array(N), kapSm=new Float32Array(N);
+  for(let i=1;i<N-1;i++){ kapH[i]=(psiA[i+1]-psiA[i-1])/(2*ds); kapV[i]=(thetaA[i+1]-thetaA[i-1])/(2*ds); }
+  for(let i=0;i<N;i++){ let s2=0,c2=0;
+    for(let j=Math.max(0,i-4);j<=Math.min(N-1,i+4);j++){ s2+=kapH[j]; c2++; }
+    kapSm[i]=s2/c2; }   // smoothed curvature: the renderer needs it to vary continuously
+
+  /* -- dress the trail: width, camber, berms, uphill side -- */
+  const width=new Float32Array(N), sig0=new Float32Array(N), bermH=new Float32Array(N),
+        bermSide=new Int8Array(N), uphill=new Int8Array(N), hillS=new Float32Array(N),
+        cupH=new Float32Array(N);
+  const wNz = smoothNoise1D(rand, N, 90, .45);
+  const camNz = smoothNoise1D(rand, N, 60, 1);
+  const cupNz = smoothNoise1D(rand, N, 75, 1);
+  for(let i=0;i<N;i++){
+    width[i] = clamp(1.55 + wNz[i], 0.95, 2.4);
+    const psiF = psiFall0 + fallDrift[Math.min(i,NMAXguess-1)];
+    // uphill lies to the left if the left normal points up-slope
+    uphill[i] = Math.cos((psiA[i]+Math.PI/2)-(psiF+Math.PI)) > 0 ? 1 : -1;
+    hillS[i] = hillAt(i);
+    // Camber: gentle outslope by default (trails shed water), stretches of
+    // properly steep off-camber, and the odd insloped groove. sig0 = dz/dn
+    // across the tread. Outslope FALLS toward the downhill side, i.e. z RISES
+    // toward the uphill side: positive outDeg -> sig0 has uphill's sign.
+    const c = camNz[i];
+    let outDeg;
+    if      (c >  .60) outDeg = 10 + 8*(c-.60)/.40;     // genuinely steep off-camber, 10-18°
+    else if (c < -.58) outDeg = -(3 + 5*(-c-.58)/.42);  // insloped groove, tilted into the hill
+    else               outDeg = 2.5 + 6*Math.abs(c);    // everyday outslope
+    sig0[i] = Math.tan(outDeg*DEG) * uphill[i];
+    // stretches of CUPPED tread - a worn groove whose walls bank both edges.
+    // A cupped trail mostly levels its own camber (water and wheels carved it)
+    if (cupNz[i] > .45){ cupH[i] = .12 + .3*(cupNz[i]-.45)/.55; sig0[i]*=.35; }
+  }
+  for(const [a,b,dir,h,R_] of switchbacks){
+    for(let i=Math.max(0,a-4); i<Math.min(N,b+4); i++){
+      width[i]=Math.min(2.9, width[i]+.7);
+      cupH[i]=0;                                         // a berm or open corner, never a groove
+      if (h>0){ bermH[i]=h*Math.min(1,(i-a+4)/6,(b+4-i)/6); bermSide[i]=-dir; sig0[i]*=.3; }
+      else sig0[i]*=.5;                                  // flat switchback, just less outslope
+    }
+  }
+
+  /* -- surfaces: patches drawn from a mood that follows the terrain -- */
+  const surf=new Uint8Array(N);
+  { let i=0;
+    while(i<N){
+      const len=RI(8,50), seg=segA[i], hill=hillS[i];
+      let pick;
+      const r=R01();
+      if (seg===SEG.CHUTE)      pick = r<.4?2 : r<.7?6 : 5;
+      else if (bermH[i]>0)      pick = r<.75?0 : 1;
+      else if (hill>.6)         pick = r<.3?1 : r<.5?2 : r<.7?6 : r<.85?5 : 0;
+      else                      pick = r<.34?0 : r<.54?1 : r<.68?3 : r<.8?4 : r<.9?2 : 6;
+      for(let k=0;k<len && i<N;k++,i++) surf[i]=pick;
+    } }
+  const mu0=new Float32Array(N), crr=new Float32Array(N), rough=new Float32Array(N);
+  for(let i=0;i<N;i++){ const s=SURFS[surf[i]]; mu0[i]=s.mu; crr[i]=s.crr; rough[i]=s.rough; }
+  // ease surface property steps over ~2 m so the physics never sees a cliff
+  for(let p=0;p<2;p++) for(let i=1;i<N-1;i++){
+    mu0[i]=(mu0[i-1]+2*mu0[i]+mu0[i+1])/4; crr[i]=(crr[i-1]+2*crr[i]+crr[i+1])/4;
+    rough[i]=(rough[i-1]+2*rough[i]+rough[i+1])/4; }
+
+  /* -- rocks in the riding surface ------------------------------------------
+     Four kinds, and a regional "rockiness" mood so the trail alternates
+     between genuinely rocky stretches and clean dirt:
+       small   - baby heads, the line sidesteps them when cheap
+       block   - BIG rideable rock (up to ~40 cm / 16"), partial width: the
+                 rider must CHOOSE - roll over it slowly, or thread the gap
+       step    - big rock the full width of the trail: over is the only way
+       boulder - taller than a wheel will roll; always ridden around        */
+  const rocks=[];                       // {i,n,r,rAlong,h,kind,pts[]}
+  const rockBucket=new Array(N).fill(null);
+  const rockNz = smoothNoise1D(rand, N, 180, 1);
+  let lastBig=-40, garden=0;
+  for(let i=6;i<N-40;i++){
+    const s=surf[i], inChute=segA[i]===SEG.CHUTE;
+    const region=rockNz[i];             // >0.22 rocky country, < -0.15 clean dirt
+    if (region < -.15) { garden=0; continue; }
+    const rocky = region > .22;
+    if (garden<=0 && R01()< (rocky? .010 : .003)) garden=RI(10,40);
+    const inGarden=garden-->0;
+    const pSmall= (inGarden? .6
+      : .02 + (s===5?.10:0)+(s===2?.05:0)+(s===6?.04:0)+(inChute?.10:0)) * (rocky?1.5:1);
+    const pBig=((rocky? .012 : .004) + (inChute?.006:0) + (inGarden?.010:0))
+               * (i-lastBig>8?1:0);
+    if (R01()<pSmall){
+      const r=inGarden? RR(.07,.20) : RR(.09,.26);
+      const n=RR(-(width[i]/2-.15-r), width[i]/2-.15-r);
+      addRock(i,n,r,r,r*RR(.4,.7),'small');
+      if (inGarden && R01()<.4){
+        const r2=RR(.07,.18);
+        addRock(i, RR(-(width[i]/2-.15-r2), width[i]/2-.15-r2), r2, r2, r2*RR(.4,.7), 'small');
+      }
+    }
+    if (R01()<pBig){
+      const pick=R01();
+      if (pick<.42){                     // block: big but a gap remains
+        const maxR=(width[i]-.65)/2;
+        if (maxR>=.28){
+          const r=Math.min(RR(.3,.75), maxR);
+          const side=R01()<.5?1:-1, n=side*(width[i]/2 - r*RR(.75,1.0));
+          addRock(i,n,r,r*RR(.7,1.05),RR(.15,.41),'block'); lastBig=i;
+        }
+      } else if (pick<.72){              // step: wall-to-wall, up to 16" tall
+        const rk=addRock(i,0,width[i]/2*.93,RR(.35,.75),RR(.15,.41),'step');
+        rk.choice='over'; lastBig=i;
+      } else {                           // boulder: too tall to roll, gap guaranteed
+        const maxR=(width[i]-.72)/2;
+        if (maxR>=.3){
+          const r=Math.min(RR(.32,.9), maxR);
+          const side=R01()<.5?1:-1, n=side*(width[i]/2 - r*.72);
+          addRock(i,n,r,r*RR(.7,1.05),r*RR(.55,.85)+.15,'boulder'); lastBig=i;
+        }
+      }
+    }
+  }
+  function addRock(i,n,rAcross,rAlong,h,kind){
+    const k=RI(6,8), pts=[];
+    for(let j=0;j<k;j++){ const a=j/k*TAU;
+      pts.push([Math.cos(a)*rAlong*RR(.75,1.1), Math.sin(a)*rAcross*RR(.8,1.08)]); }
+    const rk={i, n, r:rAcross, rAlong, h, kind, pts};
+    rocks.push(rk); (rockBucket[i] ||= []).push(rk);
+    return rk;
+  }
+
+  /* -- trees: scenery, and honest speed cues in the rider's peripheral vision.
+        A tree must not land on ANY leg of the trail - between switchbacks the
+        neighbouring legs pass within a few metres, so check them all. -- */
+  const trees=[];
+  for(let i=0;i<N;i+=RI(2,5)){
+    if (R01()<.62){
+      const side=R01()<.5?1:-1, off=side*(width[i]/2+RR(2.5,CONFIG.corridor+6));
+      const s=Math.sin(psiA[i]), c=Math.cos(psiA[i]);
+      const tx=x[i]-s*off, ty=y[i]+c*off;
+      let clear=true;
+      for(let j=Math.max(0,i-260); j<Math.min(N,i+260); j+=2){
+        const near=Math.abs(j-i)<26;   // own stations: only reject if ON the tread
+        const dx=tx-x[j], dy=ty-y[j];
+        const rr2=Math.pow(width[j]/2+(near?.5:1.6),2);
+        if (!near || Math.abs(j-i)>=8)
+          if (dx*dx+dy*dy < rr2){ clear=false; break; }
+      }
+      if (!clear) continue;
+      const zg = zOffRaw(i, off, width, sig0, bermH, bermSide, uphill, hillS, cupH);
+      trees.push({i, n:off, zg, h:RR(4,10), kind:R01()<.8?0:1});
+    }
+  }
+
+  /* -- sight distance: how far can an eye 1.55 m over station i see down the
+        trail? Blocked by accumulated turning (the cutbank or trees on the
+        inside of a bend) or by a crest (terrain rising into the sight line). */
+  const sight=new Float32Array(N);
+  for(let i=0;i<N;i++){
+    const eye=z[i]+1.55; let acc=0, maxSl=-99, d=0, j=i;
+    const bendCap = 1.15;               // radians of heading change until you've lost it
+    while(j<N-1 && d<220){
+      j++; d+=ds; acc+=Math.abs(psiA[j]-psiA[j-1]);
+      // seeing INTO the hill (turn toward the uphill side) cuts off faster
+      const towardUp = Math.sign(kapH[j])===uphill[j];
+      if (acc > (towardUp? .75 : 1.5)) break;
+      const slTgt=(z[j]+.35-eye)/d, slTer=(z[j]+0.0-eye)/d;
+      if (slTgt < maxSl-.004) break;
+      if (slTer > maxSl) maxSl=slTer;
+    }
+    sight[i]=d;
+  }
+
+  const totLen=N*ds, totDrop=z[0]-z[N-1];
+  const name = trailName();
+  return {N, ds, x,y,z, psi:psiA, theta:thetaA, seg:segA, kapH,kapV,kapSm, width, sig0, bermH,
+          bermSide, uphill, hillS, cupH, surf, mu0, crr, rough, rocks, rockBucket, trees, sight,
+          totLen, totDrop, name, seed:seedStr, switchbacks, chutes,
+          finishIdx: N-6};
+}
+
+/* Height of the ground at lateral offset n from station i's centreline.
+   Inside the tread: camber plus (maybe) a berm rising toward the outside.
+   Off the uphill edge: a cutbank climbing steeper than the hill, then the
+   hill itself. Off the downhill edge: the hillside falling away. */
+function zOffRaw(i, n, width, sig0, bermH, bermSide, uphill, hillS, cupH){
+  const hw=width[i]/2;
+  const bs=bermSide[i], bh=bermH[i], ch=cupH? cupH[i]:0;
+  function tread(nn){
+    let v=nn*sig0[i];
+    if (ch>0){ const f=nn/hw; v+=ch*f*f; }        // cupped groove: both edges bank
+    if (bh>0){ const bw=hw*1.1, start=hw-bw;      // berm occupies the outer band
+      const q=nn*bs;
+      if (q>start){ const f=(q-start)/bw; v+=bh*f*f; } }
+    return v;
+  }
+  if (n>=-hw && n<=hw) return tread(n);
+  const edge=Math.sign(n)*hw, over=Math.abs(n)-hw, base=tread(edge);
+  if (Math.sign(n)===uphill[i]){
+    const cut=Math.min(over,2.2), rest=over-cut;
+    return base + cut*hillS[i]*1.35 + rest*hillS[i];
+  }
+  return base - over*hillS[i];
+}
+function zOff(i,n){ return zOffRaw(i,n,T.width,T.sig0,T.bermH,T.bermSide,T.uphill,T.hillS,T.cupH); }
+function latSlope(i,n){ return (zOff(i,Math.min(n+.12, T.width[i]/2+3)) - zOff(i,Math.max(n-.12,-T.width[i]/2-3)))/.24; }
+function stationPoint(i,n,out){   // world position of (station, lateral offset)
+  const s=Math.sin(T.psi[i]), c=Math.cos(T.psi[i]);
+  out[0]=T.x[i]-s*n; out[1]=T.y[i]+c*n; out[2]=T.z[i]+zOff(i,n); return out;
+}
+
+function trailName(){
+  const A=['Granite','Bitterroot','Rimrock','Larkspur','Deadwood','Sawtooth','Hermit',
+    'Redtail','Bristlecone','Quartz','Coyote','Marmot','Cinder','Talus','Whiskey',
+    'Lupine','Ptarmigan','Grouse','Cache','Jackpine'];
+  const B=['Spur','Chute','Draw','Gulch','Traverse','Plunge','Slide','Notch','Bench',
+    'Cutoff','Staircase','Corners','Cascade','Ridge','Line'];
+  return A[RI(0,A.length-1)]+' '+B[RI(0,B.length-1)];
+}
+
+/* ============================= planner ================================== */
+/* Two stages, the classic racing-line decomposition:
+   1) the LINE: lateral offset n(s), found by straighten-and-clamp - pull each
+      point toward the chord of its neighbours in world space (that literally
+      minimises curvature) and clamp to the tread minus margins, minus boulder
+      exclusions. Low-grip stations pull harder toward straight (a wide line
+      is worth more where the dirt is loose).
+   2) the SPEED PLAN over that line: a cornering speed ceiling at every
+      station from the traction circle + banking + crest unweighting, then a
+      backward pass (can I slow down in time?) and a forward pass (how hard
+      can I actually accelerate: pedaling, gravity, drag, grip).
+   On-sight mode runs the same two stages, but only over the stations the
+   rider can currently SEE, and the backward pass starts from "be at blind-
+   corner speed by the end of what I can see". That single constraint is the
+   whole psychology of riding blind. */
+
+function planLine(rider, i0, i1, nInit, iters=140){
+  const N=T.N, lo=new Float32Array(N), hi=new Float32Array(N);
+  for(let i=0;i<N;i++){
+    const hw=T.width[i]/2 - rider.edgeMargin;
+    lo[i]=-hw; hi[i]=hw;
+    const k=T.kapH[i];
+    if (Math.abs(k)>1e-4){          // never fold the line past a hairpin's centre
+      const nMax=.7/Math.abs(k);
+      if (k>0) hi[i]=Math.min(hi[i], nMax); else lo[i]=Math.max(lo[i],-nMax);
+    }
+  }
+  const n = nInit? Float32Array.from(nInit) : new Float32Array(N);
+  const P=new Float64Array(N*2);
+  const setP=i=>{ const s=Math.sin(T.psi[i]), c=Math.cos(T.psi[i]);
+    P[2*i]=T.x[i]-s*n[i]; P[2*i+1]=T.y[i]+c*n[i]; };
+  for(let i=i0;i<=i1;i++) setP(i);
+
+  /* Big rocks: the line CHOICE. For each block, compare the speed of rolling
+     straight over it (technique-limited by its height) against threading the
+     gap beside it (width-limited). Whichever is faster wins, the loser is
+     remembered for the ghost-line display, and the choice sticks for the whole
+     run - in on-sight mode it is made the moment the rock comes into view.
+     Boulders are too tall to roll: always around. Steps span the whole trail:
+     always over. */
+  const bigs=T.rocks.filter(r=>r.kind!=='small' && r.i>=i0 && r.i<=i1);
+  for(const rk of bigs){
+    if (rk.decided) continue;
+    rk.decided=true;
+    const hw2=T.width[rk.i]/2;
+    const gapL=hw2-(rk.n+rk.r), gapR=(rk.n-rk.r)+hw2;
+    const side= gapL>=gapR? 1:-1, gap=Math.max(gapL,gapR)-.26;
+    const gapMid= side>0? (rk.n+rk.r+hw2)/2 : (rk.n-rk.r-hw2)/2;
+    const vAr= gap<.45? .01 : gap<1.3? 1.8+2.6*gap : 8;
+    const vOv= rk.kind==='boulder'? 0 : Math.max(.8, rider.rollA - rider.rollB*rk.h);
+    if (rk.kind!=='step') rk.choice = vOv>vAr? 'over':'around';
+    rk.passSide=side; rk.vOv=vOv; rk.vAr=vAr;
+    rk.altN = rk.choice==='over'? (gap>.45? gapMid : null) : rk.n;   // the road not taken
+    const slow=Math.max(.4,Math.min(vOv||9,vAr)), fast=Math.max(vOv||.01,vAr);
+    rk.dtCost = rk.altN==null? null : Math.min(9.9, 6*(1/slow - 1/fast));
+  }
+  const arounds=bigs.filter(r=>r.choice==='around');
+
+  for(let it=0; it<iters; it++){
+    // rocks being ridden AROUND are hard exclusions on their remembered side
+    if (it%12===0) for(const rk of arounds){
+      const m=rk.r+ .26;
+      for(let i=Math.max(i0,rk.i-2); i<=Math.min(i1,rk.i+2); i++){
+        if (rk.passSide>0) lo[i]=Math.max(lo[i], rk.n+m); else hi[i]=Math.min(hi[i], rk.n-m);
+      }
+    }
+    for(let i=i0+1;i<i1;i++){
+      const mx=(P[2*(i-1)]+P[2*(i+1)])/2, my=(P[2*i-1]+P[2*i+3])/2;
+      const s=Math.sin(T.psi[i]), c=Math.cos(T.psi[i]);
+      let nt=(mx-T.x[i])*(-s)+(my-T.y[i])*c;              // project chord midpoint to lateral axis
+      const pull=.28*(1+(0.9-T.mu0[i]));                  // loose dirt begs for a straighter line
+      n[i]=clamp(n[i]+(nt-n[i])*Math.min(.7,pull), lo[i], hi[i]);
+      setP(i);
+    }
+    // small rocks: a gentle sidestep if the line is about to clip one
+    if (it>iters-30) for(const rk of (T.rocks)){
+      if (rk.kind!=='small' || rk.i<i0 || rk.i>i1) continue;
+      const d=n[rk.i]-rk.n;
+      if (Math.abs(d) < rk.r+.14){
+        const push=Math.sign(d||(R01()-.5))*(rk.r+.16-Math.abs(d));
+        n[rk.i]=clamp(n[rk.i]+push*.6, lo[rk.i], hi[rk.i]); setP(rk.i);
+      }
+    }
+  }
+  // the weekend rider does not hold a perfect line (full plan only - adding
+  // fresh noise at every on-sight replan would make the line boil)
+  if (rider.lineNoise>0.05 && i0===0){
+    const nz=smoothNoise1D(rand, i1-i0+1, 12, rider.lineNoise);
+    for(let i=i0+2;i<i1-1;i++) n[i]=clamp(n[i]+nz[i-i0], lo[i], hi[i]);
+  }
+  return n;
+}
+
+function muEff(i, v, rider){
+  // roughness robs grip as speed rises; the suspension gives most of it back
+  const r=T.rough[i]*CONFIG.suspension;
+  return T.mu0[i]*(1 - r*Math.min(v/25,1));
+}
+function crestFactor(i, v){
+  // going light over a crest (kapV>0 where grade steepens) unweights the tyres
+  return clamp(1 - v*v*T.kapV[i]/CONFIG.g, .3, 1.5);
+}
+
+function planSpeed(rider, n, i0, i1, vStart, vEnd, blind){
+  const N=T.N, m=rider.massRider+MASSBIKE, g=CONFIG.g;
+  const px=new Float64Array(N), py=new Float64Array(N), pz=new Float64Array(N);
+  for(let i=i0;i<=i1;i++){ const s=Math.sin(T.psi[i]), c=Math.cos(T.psi[i]);
+    px[i]=T.x[i]-s*n[i]; py[i]=T.y[i]+c*n[i]; pz[i]=T.z[i]+zOff(i,n[i]); }
+  const dsP=new Float32Array(N), kapP=new Float32Array(N), thP=new Float32Array(N),
+        bank=new Float32Array(N);
+  for(let i=i0+1;i<=i1;i++){ const dx=px[i]-px[i-1], dy=py[i]-py[i-1], dz=pz[i]-pz[i-1];
+    const dh=Math.hypot(dx,dy); dsP[i]=Math.hypot(dh,dz)||.01; thP[i]=Math.atan2(-dz,dh); }
+  dsP[i0]=dsP[i0+1]; thP[i0]=thP[i0+1];
+  for(let i=i0+1;i<i1;i++){
+    const ax=px[i]-px[i-1], ay=py[i]-py[i-1], bx=px[i+1]-px[i], by=py[i+1]-py[i];
+    const cross=ax*by-ay*bx, la=Math.hypot(ax,ay), lb=Math.hypot(bx,by);
+    const abx=px[i+1]-px[i-1], aby=py[i+1]-py[i-1];
+    kapP[i]= 2*cross/((la*lb*Math.hypot(abx,aby))||1e-6);
+  }
+  for(let i=i0;i<=i1;i++){
+    const sg=latSlope(i,n[i]);
+    bank[i]= Math.abs(kapP[i])>.002 ? clamp(-sg*Math.sign(kapP[i]), -.35, .85) : 0;
+  }
+
+  // 1) cornering ceiling. Also a CONTROL ceiling everywhere: past a certain
+  // speed on rough ground the bike is getting pitched around faster than a
+  // human can correct - that, not drag, is why mountain bikes never see the
+  // 90+ km/h a tucked road descent allows.
+  const vlim=new Float32Array(N);
+  for(let i=0;i<N;i++) vlim[i]=CONFIG.vmaxAbs*(1-T.rough[i]*.55);
+  const tag=new Array(N).fill('');
+  for(let i=i0;i<=i1;i++){
+    const k=Math.abs(kapP[i]);
+    if (k<1.2e-3) continue;
+    let v=Math.sqrt(g/(k||1e-6));
+    for(let it=0;it<2;it++){
+      const mue=muEff(i,v,rider)*rider.gripUse, fN=crestFactor(i,v);
+      v=Math.sqrt(Math.max(1, bankedLat(mue, g*Math.cos(thP[i])*fN, bank[i]) / k));
+    }
+    if (v<vlim[i]){ vlim[i]=v;
+      tag[i]= T.bermH[i]>0? 'railing the berm'
+        : T.seg[i]===2? (kapP[i]>0?'the left switchback':'the right switchback')
+        : bank[i]<-.02? 'an off-camber '+(kapP[i]>0?'left':'right')
+        : 'the '+(kapP[i]>0?'left':'right')+' turn'; }
+  }
+  // rocks slow the line: small ones it still clips, big ones it chose to roll,
+  // and tight gaps it chose to thread
+  for(const rk of T.rocks){ if (rk.i<i0||rk.i>i1) continue;
+    if (rk.kind==='small'){
+      if (Math.abs(n[rk.i]-rk.n)<rk.r+.12){
+        vlim[rk.i]=Math.min(vlim[rk.i], 7.5-8*rk.h); tag[rk.i]='rocks in the line'; }
+    } else if (rk.choice==='over'){
+      const vOv=Math.max(.8, rider.rollA - rider.rollB*rk.h);
+      for(let k=-1;k<=1;k++){ const j=rk.i+k;
+        if (j>=i0&&j<=i1&&vOv<vlim[j]){ vlim[j]=vOv;
+          tag[j]= rk.kind==='step'? 'the rock step':'rolling the big rock'; } }
+    } else if (rk.choice==='around' && rk.vAr<6){
+      for(let k=-1;k<=1;k++){ const j=rk.i+k;
+        if (j>=i0&&j<=i1&&rk.vAr<vlim[j]){ vlim[j]=rk.vAr; tag[j]='squeezing past the rock'; } }
+    } }
+  // widen every speed ceiling to its neighbours: entering a hairpin exactly AT
+  // the limit left no margin for the line-tracking wobble, so the pro slid in
+  // every single corner
+  { const vtmp=Float32Array.from(vlim);
+    for(let i=i0+1;i<i1;i++) vlim[i]=Math.min(vtmp[i-1],vtmp[i],vtmp[i+1]); }
+
+  // blind-riding constraint: always able to reach blind speed by end of sight
+  if (blind){
+    const iEnd=i1;
+    let v2=Math.pow(rider.blindV,2);
+    for(let i=iEnd;i>=i0;i--){
+      const muA=rider.muAssume;    // what the rider assumes of dirt they can't see
+      const aBr=Math.max(.4, muA*g*Math.cos(thP[i]) - g*Math.sin(thP[i]));
+      if (i<iEnd) v2 += 2*aBr*dsP[i+1];
+      // ride at only a FRACTION of the speed you could theoretically stop
+      // from - the pro shaves that margin close, the weekend rider leaves lots
+      vlim[i]=Math.min(vlim[i], Math.sqrt(v2)*rider.sightSafety);
+      if (vlim[i]*vlim[i]>=v2 && !tag[i]) tag[i]='sight line ends ahead';
+    }
+    vlim[iEnd]=Math.min(vlim[iEnd], rider.blindV);
+  }
+
+  // 2) backward pass - braking feasibility
+  const v=new Float32Array(N);
+  v[i1]=Math.min(vlim[i1], vEnd??vlim[i1]);
+  for(let i=i1-1;i>=i0;i--){
+    const vn=v[i+1];
+    const mue=muEff(i,vn,rider), fN=crestFactor(i,vn), gn=g*Math.cos(thP[i])*fN;
+    const latU=clamp(vn*vn*Math.abs(kapP[i])/(mue*gn||1e-6),0,.98);
+    const leftover=mue*gn*Math.sqrt(1-latU*latU)*rider.brakeSkill;
+    const endo=endoCap(POSTURE.brake, thP[i])*.95;
+    const brake=Math.min(leftover, Math.max(.3,endo));
+    const net=Math.max(.15, brake - g*Math.sin(thP[i]));   // gravity fights you the whole way down
+    v[i]=Math.min(vlim[i], Math.sqrt(vn*vn + 2*net*dsP[i+1]));
+  }
+  if (vStart!=null) v[i0]=Math.min(v[i0], vStart);
+
+  // 3) forward pass - power, gravity, drag, grip
+  const act=new Uint8Array(N);        // 0 coast 1 brake 2 pedal 3 tuck
+  const pw=new Float32Array(N);
+  let wp=rider.wprime;
+  for(let i=i0;i<i1;i++){
+    const vi=Math.max(1.2,v[i]);
+    const mue=muEff(i,vi,rider), fN=crestFactor(i,vi), gn=g*Math.cos(thP[i])*fN;
+    const latU=clamp(vi*vi*Math.abs(kapP[i])/(mue*gn||1e-6),0,.98);
+    const straight=Math.abs(kapP[i])<.02, fast=vi>11;
+    // would we like to pedal? only when the BACKWARD-pass ceiling (which already
+    // knows about every corner ahead) says the speed is allowed to rise - a real
+    // rider never sprints into a braking zone
+    // pedal whenever the LOCAL ceiling leaves room - even on the approach to a
+    // braking zone. That is genuine race craft (accelerate hard, brake late);
+    // the backward pass will overrule us exactly where braking must begin.
+    const headroom=vlim[i]-vi;
+    const canPedal= latU<.45 && vi<CONFIG.vgear && headroom>0.5 && vlim[i+1]>vi;
+    let P=0;
+    if (canPedal){
+      P=rider.cp;
+      if (headroom>2.5 && wp>1500){ P=rider.sprint; }
+      const dt=dsP[i+1]/vi;
+      wp += (P>rider.cp? -(P-rider.cp) : (rider.cp-P)*.35)*dt;
+      wp=clamp(wp,0,rider.wprime);
+      if (wp<=0) P=rider.cp;
+    }
+    const posture= P>40? POSTURE.pedal : (straight&&fast? POSTURE.tuck : POSTURE.stand);
+    const drag=.5*CONFIG.rho*posture.cda*vi*vi/m;
+    const roll=T.crr[i]*g*Math.cos(thP[i])*(1+T.rough[i]*.5);
+    const drive=Math.min(P/(m*vi), mue*gn*.5*Math.sqrt(1-latU*latU));
+    const aNet=g*Math.sin(thP[i]) + drive - drag - roll;
+    const v2=Math.min(vlim[i+1]*vlim[i+1], vi*vi+2*aNet*dsP[i+1]);
+    const braking=v2 < vi*vi + 2*(g*Math.sin(thP[i])-drag-roll)*dsP[i+1] - .35;
+    if (v2 < v[i+1]*v[i+1]) v[i+1]=Math.sqrt(Math.max(1,v2));
+    act[i]= braking?1 : (P>40?2 : (posture===POSTURE.tuck?3:0));
+    pw[i]=P;
+  }
+  let time=0; for(let i=i0+1;i<=i1;i++) time+=dsP[i]/Math.max(1,(v[i]+v[i-1])/2);
+  return {n, v, act, pw, kapP, thP, bank, dsP, px, py, pz, tag, i0, i1, time};
+}
+
+function planFull(rider){                      // "knows the trail": one global solve
+  const n=planLine(rider, 0, T.N-1, null);
+  return planSpeed(rider, n, 0, T.N-1, 0, 2, false);
+}
+
+/* ============================== the run ================================= */
+function makeSim(rider, mode){
+  return {
+    idx: 1, v: .8, n: PLAN.n[1], nVel: 0,
+    lean: 0, leanBike: 0, crank: 0, wheelA: 0,
+    posture: 'stand', postureW: {stand:1,pedal:0,tuck:0,brake:0},
+    aLat: 0, aLong: 0, brakeF: 0, pedalW: 0, brakeAf: 0, brakeAr: 0, rearLight: false,
+    sliding: false, slideT: 0,
+    slides: 0, distance: 0, time: 0,
+    tBrake: 0, tPedal: 0, tCoast: 0, maxV: 0, maxLean: 0,
+    replanAt: 0, sightIdx: mode==='onsight'? Math.max(15,Math.round(T.sight[1])) : T.N-1,
+    done: false,
+  };
+}
+
+function stepSim(dt){
+  const S=SIM, rider=RUN.rider, g=CONFIG.g, m=rider.massRider+MASSBIKE;
+  if (S.done) return;
+  let i=Math.min(Math.floor(S.idx), T.N-2);
+  const f=S.idx-i;
+  const gv=(a)=>a[i]*(1-f)+a[i+1]*f;
+
+  // --- on-sight: replan over what has just become visible ---------------
+  if (RUN.mode==='onsight' && S.time>=S.replanAt){
+    S.replanAt=S.time+rider.replan;
+    // sightRead: the pro reads terrain through corners and carries a longer
+    // effective sight line than the geometry alone; the nervous weekend rider
+    // trusts even less than they can see
+    const iEnd=Math.min(T.N-1, i+Math.max(12,Math.round(T.sight[i]*rider.sightRead)));
+    // warm-started and short, so it fits inside a frame without a stutter
+    const nW=planLine(rider, i, iEnd, PLAN.n, 36);
+    nW[i]=S.n;                                   // the plan starts where the bike IS
+    if (i+1<=iEnd) nW[i+1]=clamp(S.n+S.nVel*T.ds/Math.max(2,S.v), -3,3);
+    const isFinish=iEnd>=T.finishIdx;
+    const sub=planSpeed(rider, nW, i, iEnd, null, isFinish? 2 : rider.blindV, !isFinish);
+    for(let k=i;k<=iEnd;k++){ PLAN.n[k]=sub.n[k]; PLAN.v[k]=sub.v[k]; PLAN.act[k]=sub.act[k];
+      PLAN.pw[k]=sub.pw[k]; PLAN.kapP[k]=sub.kapP[k]; PLAN.thP[k]=sub.thP[k];
+      PLAN.bank[k]=sub.bank[k]; PLAN.dsP[k]=sub.dsP[k]; PLAN.tag[k]=sub.tag[k];
+      PLAN.px[k]=sub.px[k]; PLAN.py[k]=sub.py[k]; PLAN.pz[k]=sub.pz[k]; }
+    S.sightIdx=iEnd;
+  }
+
+  // --- longitudinal: chase the planned speed, capped by live physics -----
+  const vP=gv(PLAN.v), th=gv(PLAN.thP);
+  const aFF=(PLAN.v[i+1]*PLAN.v[i+1]-PLAN.v[i]*PLAN.v[i])/(2*Math.max(.5,PLAN.dsP[i+1]));
+  let aCmd=aFF + (vP-S.v)*2.2;
+  const mue=muEff(i,S.v,{...rider}), fN=crestFactor(i,S.v), gn=g*Math.cos(th)*fN;
+  const kap=gv(PLAN.kapP);
+  const aLatNeed=S.v*S.v*kap;
+  const cap=Math.max(.2, mue*gn);
+  const latU=clamp(Math.abs(aLatNeed)/cap, 0, 1.6);
+
+  // traction circle in real time: what's left for braking/driving?
+  const leftFrac=latU<1? Math.sqrt(1-Math.min(latU,1)**2) : 0;
+  const endo=endoCap(POSTURE.brake, th)*.95;
+  const brakeCap=Math.min(cap*leftFrac, Math.max(.25,endo));
+  const wantP=gv(PLAN.pw);
+  const driveCap=Math.min(wantP>0? wantP/(m*Math.max(2,S.v)) : 0, cap*.5*leftFrac,
+                          S.v>CONFIG.vgear?0:9);
+  const posture=S.posture;
+  const cda=POSTURE[posture].cda;
+  const drag=.5*CONFIG.rho*cda*S.v*S.v/m, roll=T.crr[i]*g*Math.cos(th)*(1+T.rough[i]*.5);
+  const grav=g*Math.sin(th);
+  let aBrake=0, aDrive=0;
+  if (aCmd < grav-drag-roll-.05) aBrake=clamp((grav-drag-roll)-aCmd, 0, brakeCap);
+  else aDrive=clamp(aCmd-(grav-drag-roll), 0, driveCap);
+  const aLong=grav+aDrive-aBrake-drag-roll;
+  S.v=Math.max(.5, S.v+aLong*dt);
+  S.brakeF=aBrake/Math.max(.3,brakeCap); S.pedalW=aDrive>0.01? wantP:0;
+  S.aLong=aLong;
+  // Front/rear brake split from the live wheel loads. Slope and deceleration
+  // both throw weight onto the front wheel; the rider biases the levers to
+  // match, so each tyre works at the same fraction of ITS OWN grip. Near the
+  // endo limit the rear carries almost nothing - and brakes almost none.
+  { const post=POSTURE[S.posture], h=post.cg, L=CONFIG.wheelbase;
+    /* THE SLOPE TERM CANCELS HERE TOO, for the same reason it does in
+       endoCap: take moments about the rear contact patch and gravity's
+       downhill pull at CG height is exactly offset by the inertial reaction to
+       it, because on a slope the bike is already accelerating downhill. What
+       actually moves load onto the front wheel is the RETARDING force, and
+       nothing else. It read (sin(th) + aBrake/g), which counted the gradient
+       twice over.
+
+       These two have to move together. The old wheel-load split was wrong in
+       exactly the way the old endo cap was wrong, so they agreed: the rear
+       load reached zero at precisely the cap the planner was using. Correcting
+       one without the other would leave the rear reported light - and the
+       brake bias thrown forward - well before the bike is anywhere near
+       lifting it. */
+    const shift=(aBrake/g)*h/L;                                 // load moved to the front
+    let nf=Math.cos(th)*post.cgFromRear + shift;                // per unit weight
+    let nr=Math.cos(th)*(1-post.cgFromRear) - shift;
+    if (nr<0) nr=0;
+    const tot=nf+nr||1;
+    S.brakeAf=aBrake*nf/tot; S.brakeAr=aBrake*nr/tot;
+    S.rearLight=nr<.06; }
+
+  // --- lateral: track the planned line; saturate = slide -----------------
+  const nP=gv(PLAN.n);
+  const om=6;
+  let nAcc=om*om*(nP-S.n)-2*om*S.nVel;
+  const aLatTot=aLatNeed + nAcc*.2;
+  S.aLat=aLatTot;
+  const over=Math.abs(aLatTot) - Math.max(.2, bankedLat(mue, gn, gv(PLAN.bank)));
+  if (over>0 && S.v>3){
+    if (!S.sliding){ S.sliding=true; S.slideT=0; S.slideCounted=false; }
+    S.slideT+=dt;
+    if (!S.slideCounted && S.slideT>.12){ S.slides++; S.slideCounted=true; }  // a real drift, not a twitch
+    S.n += -Math.sign(kap||aLatTot)*over*.05*dt*10;      // drifting toward the outside
+    S.v=Math.max(.5, S.v-.9*dt);                          // a slide scrubs speed
+  } else { S.sliding=false; }
+  S.nVel+=nAcc*dt; S.nVel*=.995;
+  S.n+=S.nVel*dt;
+  const hwLim=T.width[i]/2-.12;
+  if (S.n>hwLim){ S.n=hwLim; S.nVel=Math.min(0,S.nVel); }
+  if (S.n<-hwLim){ S.n=-hwLim; S.nVel=Math.max(0,S.nVel); }
+
+  // --- advance along the trail ------------------------------------------
+  const dsHere=Math.max(.5, PLAN.dsP[i+1]||1);
+  S.idx += S.v*dt/dsHere;
+  S.distance += S.v*dt;
+  S.time += dt;
+  S.maxV=Math.max(S.maxV,S.v);
+
+  // --- posture, lean, animation ------------------------------------------
+  let want= S.pedalW>40? 'pedal' : S.brakeF>.3? 'brake'
+          : (Math.abs(kap)<.02 && S.v>11)? 'tuck' : 'stand';
+  if (want!==S.posture){ S.postureT=(S.postureT||0)+dt; if (S.postureT>.25){ S.posture=want; S.postureT=0; } }
+  else S.postureT=0;
+  for(const k in S.postureW) S.postureW[k]=lerp(S.postureW[k], k===S.posture?1:0, Math.min(1,dt*6));
+
+  const leanTgt=Math.atan2(S.aLat, gn);
+  S.lean=lerp(S.lean, leanTgt, Math.min(1,dt*7));
+  const flat=T.bermH[i]>0? 0 : 1;
+  S.leanBike=lerp(S.leanBike, leanTgt*(1+.22*flat*Math.min(1,latU)), Math.min(1,dt*7));
+  S.maxLean=Math.max(S.maxLean, Math.abs(S.lean));
+  S.wheelA += S.v/CONFIG.wheelR*dt;
+  if (S.pedalW>0) S.crank += (S.pedalW>rider.cp? 1.55:1.25)*TAU*dt;
+
+  if (S.brakeF>.15) S.tBrake+=dt; else if (S.pedalW>40) S.tPedal+=dt; else S.tCoast+=dt;
+
+  // rolling over a big rock: absorb it - a crouch pulse the renderer shows
+  S.rockPulse=(S.rockPulse||0)*Math.max(0,1-5*dt);
+  { const rl=T.rockBucket[i];
+    if (rl) for(const rk of rl)
+      if (rk.kind!=='small' && rk.choice==='over' && Math.abs(S.idx-rk.i)<1.2){
+        if (S.rockPulse<.4) spawnDust(i);
+        S.rockPulse=1; } }
+
+  // dust + skid bookkeeping for the renderer
+  if ((S.sliding || (S.brakeF>.55 && T.rough[i]>.25)) && S.v>3) spawnDust(i);
+  if (S.sliding) addSkid(i);
+
+  if (S.idx>=T.finishIdx){ S.done=true; }
+}
+
+/* ============================ renderer ================================== */
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+let W=0,H=0,DPR=1;
+/* RENDER AT MOST 1680 PIXELS WIDE, WHATEVER THE SCREEN IS.
+
+   The intent was already right here and the arithmetic threw it away.
+   1680/innerWidth is a DOWNSCALE factor - 0.44 on the wall's 3840-wide
+   screen - and wrapping it in Math.max(1, ...) discarded it for every screen
+   WIDER than 1680, which is the only case it was for. The Pi was rendering
+   all 8.3 million pixels of a 4K frame.
+
+   Measured on the wall itself, same trail, same point in the run:
+
+       3840 wide    6.1 fps
+       1920 wide   11.2
+       1680 wide   12.8
+        960 wide   16.1
+
+   so this one expression is worth double the frame rate. Note what it is NOT:
+   the page's own drawing costs under 4 ms a frame at 1680 (drawWorld 3.6,
+   drawHUD 0.25, a whole physics step 0.001), so this is not slow code. It is
+   that Chromium on a Pi 5 cannot put a 4K canvas on the screen any faster
+   than about six times a second, and the only lever is to hand it fewer
+   pixels.
+
+   Nothing that has to stay sharp is affected. The canvas is stretched back to
+   full screen by CSS; the HUD is sized from the canvas height (u = H/900) so
+   it keeps its proportions exactly; and the chips, ticker, card and caption
+   are all DOM, drawn by the browser at full resolution.
+
+   A VIEWPORT OF ZERO. A browser that lays this page out before the window has
+   a size reports innerWidth 0, and 1680/0 is Infinity. The fallback keeps the
+   canvas a sane size until the resize that follows sorts it out. */
+function resize(){
+  const vw = innerWidth || 1920, vh = innerHeight || 1080;
+  DPR = Math.min(window.devicePixelRatio || 1, 1680/vw);
+  W = cv.width  = Math.max(1, Math.round(vw*DPR));
+  H = cv.height = Math.max(1, Math.round(vh*DPR));
+  cv.style.width = vw+'px'; cv.style.height = vh+'px';
+}
+addEventListener('resize', resize); resize();
+
+const CAMMODES=['chase','fp','side'];
+let camMode = Q.get('cam') && CAMMODES.includes(Q.get('cam')) ? Q.get('cam') : 'chase';
+const CAM={ pos:[0,0,0], yaw:0, pitch:0, roll:0, f:1, ready:false };
+const SUN=[Math.cos(300*DEG)*Math.cos(35*DEG), Math.sin(300*DEG)*Math.cos(35*DEG), Math.sin(35*DEG)];
+
+function camBasis(){
+  const cy=Math.cos(CAM.yaw), sy=Math.sin(CAM.yaw), cp=Math.cos(CAM.pitch), sp=Math.sin(CAM.pitch);
+  // forward, right, up in world coords
+  const fwd=[cy*cp, sy*cp, sp];
+  let rgt=[Math.cos(CAM.yaw-Math.PI/2), Math.sin(CAM.yaw-Math.PI/2), 0];
+  // up = right x forward (the other order points at the ground and the whole
+  // world renders upside down)
+  let up=[ rgt[1]*fwd[2]-rgt[2]*fwd[1], rgt[2]*fwd[0]-rgt[0]*fwd[2], rgt[0]*fwd[1]-rgt[1]*fwd[0] ];
+  // roll about forward axis
+  const cr=Math.cos(CAM.roll), sr=Math.sin(CAM.roll);
+  const r2=[rgt[0]*cr+up[0]*sr, rgt[1]*cr+up[1]*sr, rgt[2]*cr+up[2]*sr];
+  const u2=[up[0]*cr-rgt[0]*sr, up[1]*cr-rgt[1]*sr, up[2]*cr-rgt[2]*sr];
+  return {fwd, rgt:r2, up:u2};
+}
+let BAS=null;
+function proj(p, out){
+  const dx=p[0]-CAM.pos[0], dy=p[1]-CAM.pos[1], dz=p[2]-CAM.pos[2];
+  const zc=dx*BAS.fwd[0]+dy*BAS.fwd[1]+dz*BAS.fwd[2];
+  if (zc< .4){ out[2]=-1; return out; }
+  const xc=dx*BAS.rgt[0]+dy*BAS.rgt[1]+dz*BAS.rgt[2];
+  const yc=dx*BAS.up[0]+dy*BAS.up[1]+dz*BAS.up[2];
+  out[0]=W/2 + xc*CAM.f/zc; out[1]=H/2 - yc*CAM.f/zc; out[2]=zc; return out;
+}
+const _p=[[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]];
+const _w=[[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]];
+
+function shadeQuad(w0,w1,w2,w3, baseCol, amount){
+  // facet normal from the diagonals; lambert against the fixed sun
+  const d1=[w2[0]-w0[0],w2[1]-w0[1],w2[2]-w0[2]], d2=[w3[0]-w1[0],w3[1]-w1[1],w3[2]-w1[2]];
+  let nx=d1[1]*d2[2]-d1[2]*d2[1], ny=d1[2]*d2[0]-d1[0]*d2[2], nz=d1[0]*d2[1]-d1[1]*d2[0];
+  const L=Math.hypot(nx,ny,nz)||1; nx/=L;ny/=L;nz/=L; if (nz<0){nx=-nx;ny=-ny;nz=-nz;}
+  const lam=Math.max(0, nx*SUN[0]+ny*SUN[1]+nz*SUN[2]);
+  return shade(baseCol, .55+.45*lam*amount);
+}
+const colCache={};
+function shade(hex, k){
+  const key=hex+(k*40|0); if (colCache[key]) return colCache[key];
+  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  const c='rgb('+Math.round(r*k)+','+Math.round(g*k)+','+Math.round(b*k)+')';
+  return colCache[key]=c;
+}
+function quad(a,b,c,d, col, outline){
+  if (a[2]<0||b[2]<0||c[2]<0||d[2]<0) return;
+  ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.lineTo(c[0],c[1]); ctx.lineTo(d[0],d[1]);
+  ctx.closePath(); ctx.fillStyle=col; ctx.fill();
+  if (outline){ ctx.strokeStyle=outline; ctx.lineWidth=Math.max(.5,1.1*DPR*Math.min(1,60/a[2])); ctx.stroke(); }
+}
+
+/* dust + skids */
+const dust=[]; const skids=[];
+function spawnDust(i){
+  if (dust.length>240) return;
+  const p=stationPoint(Math.min(i,T.N-1), SIM.n, [0,0,0]);
+  for(let k=0;k<2;k++)
+    dust.push({x:p[0]+RR(-.2,.2), y:p[1]+RR(-.2,.2), z:p[2]+.1,
+      vx:RR(-1,1)-Math.cos(T.psi[i])*SIM.v*.25, vy:RR(-1,1)-Math.sin(T.psi[i])*SIM.v*.25,
+      vz:RR(.6,2.2), age:0, life:RR(.4,.9)});
+}
+function addSkid(i){
+  const t=performance.now()/1000;
+  if (skids.length && t-skids[skids.length-1].t<.04) return;
+  const p=stationPoint(Math.min(i,T.N-1), SIM.n, [0,0,0]);
+  skids.push({x:p[0],y:p[1],z:p[2]+.02,t});
+  if (skids.length>260) skids.shift();
+}
+
+function updateCamera(dt){
+  const S=SIM, i=Math.min(Math.floor(S.idx), T.N-2);
+  const rp=stationPoint(i, S.n, [0,0,0]);
+  let tgtPos, tgtLook, roll=0;
+  if (camMode==='chase'){
+    // sit 7 m behind the rider ALONG THE TRAIL DIRECTION - extrapolated, so the
+    // camera still hangs back properly in the first metres of the run
+    const ia=Math.min(T.N-1, i+9);
+    const pa=stationPoint(ia, 0, [0,0,0]);
+    const dx=pa[0]-rp[0], dy=pa[1]-rp[1], dL=Math.hypot(dx,dy)||1;
+    // in tight bends, hang back less and float higher - seven metres back in a
+    // switchback puts the camera inside the cutbank of the leg above, and the
+    // (correctly-occluding) hillside then hides the rider entirely
+    const kb=Math.abs(T.kapSm[i]);
+    const back=clamp(7*(1-kb*2.8), 3.2, 7);
+    tgtPos=[rp[0]-dx/dL*back, rp[1]-dy/dL*back, rp[2]+2.6+Math.min(1.8,kb*6)];
+    // never let a crest between camera and rider swallow the rider: float the
+    // camera up until it clears everything in the gap
+    for(let k=Math.max(0,i-8); k<=Math.min(T.N-1,i+3); k++)
+      if (tgtPos[2] < T.z[k]+2.0) tgtPos[2]=T.z[k]+2.0;
+    tgtLook=[(rp[0]*.35+pa[0]*.65),(rp[1]*.35+pa[1]*.65),(rp[2]*.35+pa[2]*.65)+1.0];
+    roll=S.leanBike*.30;
+  } else if (camMode==='fp'){
+    tgtPos=[rp[0],rp[1],rp[2]+1.62];
+    const ia=Math.min(T.N-1,i+14), pa=stationPoint(ia, PLAN.n[ia]||0, [0,0,0]);
+    tgtLook=[pa[0],pa[1],pa[2]+.9]; roll=S.leanBike*.8;
+  } else {                    // side: stand off on the downhill side, tracking
+    const side=-T.uphill[i];
+    const off=stationPoint(i, side*9, [0,0,0]);
+    tgtPos=[off[0],off[1],Math.max(off[2]+2.2, rp[2]+1.4)];
+    const ia=Math.min(T.N-1,i+5), pa=stationPoint(ia,0,[0,0,0]);
+    tgtLook=[(rp[0]+pa[0])/2,(rp[1]+pa[1])/2,(rp[2]+pa[2])/2+.8];
+  }
+  const k=CAM.ready? Math.min(1, dt*4.2) : 1;
+  CAM.pos[0]=lerp(CAM.pos[0],tgtPos[0],k); CAM.pos[1]=lerp(CAM.pos[1],tgtPos[1],k);
+  CAM.pos[2]=lerp(CAM.pos[2],tgtPos[2],k);
+  const dx=tgtLook[0]-CAM.pos[0], dy=tgtLook[1]-CAM.pos[1], dz=tgtLook[2]-CAM.pos[2];
+  const yawT=Math.atan2(dy,dx), pitchT=Math.atan2(dz,Math.hypot(dx,dy));
+  let dYaw=yawT-CAM.yaw; while(dYaw>Math.PI)dYaw-=TAU; while(dYaw<-Math.PI)dYaw+=TAU;
+  CAM.yaw+= CAM.ready? dYaw*Math.min(1,dt*4.2) : dYaw;
+  CAM.pitch=lerp(CAM.pitch,pitchT,k);
+  CAM.roll=lerp(CAM.roll,roll,Math.min(1,dt*3.5));
+  CAM.f=H/(2*Math.tan(31*DEG));
+  CAM.ready=true;
+  BAS=camBasis();
+}
+
+/* --- backdrop: sky + three ridge silhouettes with yaw parallax ---------- */
+let ridges=null;
+function genBackdrop(){
+  ridges=[];
+  const layers=[{amp:.10,base:.30,col:'#8fa5bd'},{amp:.16,base:.40,col:'#74899f'},{amp:.24,base:.52,col:'#566a7d'}];
+  for(const L of layers){
+    const pts=new Float32Array(256);
+    let v=0; for(let i=0;i<256;i++){ v=v*.92+(rand()-.5)*.12; pts[i]=v; }
+    let mx=0; for(let i=0;i<256;i++) mx=Math.max(mx,Math.abs(pts[i]));
+    for(let i=0;i<256;i++) pts[i]/=mx||1;
+    ridges.push({pts, ...L});
+  }
+}
+function drawBackdrop(){
+  const horizon=H/2 + CAM.pitch*CAM.f;      // small-angle: fine for our pitches
+  const skyG=ctx.createLinearGradient(0,0,0,Math.max(horizon,1));
+  skyG.addColorStop(0,'#bcd6ec'); skyG.addColorStop(.7,'#e8ddc4'); skyG.addColorStop(1,'#f2e2c2');
+  ctx.fillStyle=skyG; ctx.fillRect(0,0,W,Math.max(horizon,0)+2);
+  // sun
+  const sunAz=300*DEG; let dAz=sunAz-CAM.yaw; while(dAz>Math.PI)dAz-=TAU; while(dAz<-Math.PI)dAz+=TAU;
+  const sx=W/2 - dAz*CAM.f/1, sy=horizon - .35*CAM.f*.55;
+  ctx.globalAlpha=.85; ctx.fillStyle='#fff3d8';
+  ctx.beginPath(); ctx.arc(sx,sy,H*.045,0,TAU); ctx.fill(); ctx.globalAlpha=1;
+  /* CLOSE THE RIDGES AT THE HORIZON, NOT AT THE BOTTOM OF THE SCREEN.
+
+     Each ridge used to be closed at (W,H) and (0,H), so all three of them
+     filled the whole band from their own silhouette down to the bottom edge -
+     and then the haze rect below, and the world on top of that, painted every
+     one of those pixels again. Nothing about the picture changes; it was
+     simply drawn three times over and thrown away. Measured on the wall at
+     about 19.5 Mpx of fill per frame against a screen that only holds 8.3,
+     and this is a software rasteriser. */
+  for(const Rg of ridges){
+    ctx.beginPath(); ctx.moveTo(0,horizon);
+    for(let px=0; px<=W; px+=Math.max(4,W/160)){
+      const az=CAM.yaw + (px-W/2)/CAM.f;
+      const j=((az/TAU%1)+1)%1*255;
+      const j0=j|0, ft=j-j0;
+      const hgt=Rg.pts[j0]*(1-ft)+Rg.pts[(j0+1)&255]*ft;
+      ctx.lineTo(px, horizon - (Rg.base*.35+hgt*Rg.amp)*H*.5);
+    }
+    ctx.lineTo(W,horizon); ctx.closePath(); ctx.fillStyle=Rg.col; ctx.fill();
+  }
+  // ground haze below horizon so gaps between strips never flash sky
+  ctx.fillStyle='#5d6f58';
+  { const gy=Math.max(0,Math.min(H,horizon)); ctx.fillRect(0,gy,W,H-gy); }
+}
+
+/* --- the world, far to near --------------------------------------------- */
+const LATS=[-1,-0.4,0,0.4,1];      // cross-section sample fractions of half-width
+function drawWorld(){
+  const S=SIM, iR=clamp(Math.floor(S.idx),1,T.N-2);
+  const i1=Math.min(T.N-2, iR+CONFIG.drawDist), i0=Math.max(1, iR-14);
+  // choose strides: fine near, coarse far
+  const strips=[];
+  let i=i1;
+  while(i>i0){
+    const d=i-iR;
+    let st= d>150? 6 : d>110? 4 : d>50? 2 : 1;
+    // hairpins need fine tessellation whatever the distance, or the corridor
+    // quads sweep across the inside of the turn in giant wedges
+    const k=Math.abs(T.kapH[i]);
+    if (k>.06) st=1; else if (k>.025) st=Math.min(st,2);
+    strips.push([Math.max(i0,i-st), i]);
+    i-=st;
+  }
+  // Painter's algorithm needs strips sorted by DISTANCE FROM THE CAMERA, not
+  // by position along the trail: where the trail bends back on itself (every
+  // switchback) trail-order is the wrong order, and the losers appeared as
+  // nonsensical shards of hillside floating over the scene.
+  for(const s2 of strips){ const m=(s2[0]+s2[1])>>1;
+    const dx=T.x[m]-CAM.pos[0], dy=T.y[m]-CAM.pos[1], dz=T.z[m]-CAM.pos[2];
+    s2[2]=dx*dx+dy*dy+dz*dz; }
+  strips.sort((p,q)=>q[2]-p[2]);
+  const treeByStation=RUN.treeIdx;   // Map station->trees, built per run
+  const sightEnd = RUN.mode==='onsight'? SIM.sightIdx : Math.min(T.N-2, iR+70);
+
+  for(const [a,b] of strips){
+    drawStrip(a,b);
+    // rocks & trees living on this strip (draw after their ground)
+    for(let k=a;k<b;k++){
+      const rl=T.rockBucket[k]; if (rl) for(const rk of rl) drawRock(rk);
+      const tl=treeByStation.get(k); if (tl) for(const tr of tl) drawTree(tr);
+    }
+    if (b>=T.finishIdx-1 && a<=T.finishIdx-1) drawFinish();
+    // the painted line: intention made visible
+    if (b>iR && a<sightEnd) drawPlanRibbon(Math.max(a,iR+1), Math.min(b,sightEnd));
+    if (RUN.mode==='onsight' && a<=sightEnd && b>sightEnd) drawSightMark(sightEnd);
+    if (k2in(a,b,iR) && camMode!=='fp') drawRider();
+  }
+  drawGhosts(iR, sightEnd);
+  drawSkids(iR);
+  drawDust();
+}
+
+/* The road NOT taken. Near each big rock where a real choice existed, the
+   rejected option is sketched as a dashed grey line with the time it would
+   have cost - so a spectator can see that the rider weighed both and took
+   the smarter one. */
+function drawGhosts(iR, sightEnd){
+  ctx.setLineDash([7,7]); ctx.lineCap='butt';
+  for(let j=iR+2;j<Math.min(sightEnd, iR+55, T.N-10);j++){
+    const rl=T.rockBucket[j]; if (!rl) continue;
+    for(const rk of rl){
+      if (rk.kind==='small' || rk.altN==null || rk.dtCost==null || rk.dtCost<.05) continue;
+      let started=false;
+      ctx.strokeStyle='rgba(235,240,246,.55)';
+      ctx.beginPath();
+      for(let k=-9;k<=9;k++){
+        const i2=rk.i+k; if (i2<1||i2>=T.N-1) continue;
+        const w=Math.pow(Math.cos(k/9*Math.PI/2),2);          // smooth swerve bump
+        const nn=lerp(PLAN.n[i2], rk.altN, w);
+        const p=stationPoint(i2, nn, [0,0,0]); p[2]+=.06;
+        proj(p,_p[0]); if (_p[0][2]<0){ started=false; continue; }
+        ctx.lineWidth=clamp(.2*CAM.f/_p[0][2], 1.2, 6);
+        if (!started){ ctx.moveTo(_p[0][0],_p[0][1]); started=true; }
+        else ctx.lineTo(_p[0][0],_p[0][1]);
+      }
+      ctx.stroke();
+      const lp=stationPoint(rk.i, rk.altN, [0,0,0]); lp[2]+=rk.h+.55;
+      proj(lp,_p[0]);
+      if (_p[0][2]>0 && _p[0][2]<80){
+        const fs=Math.max(10, .5*CAM.f/_p[0][2]);
+        ctx.setLineDash([]);
+        ctx.font=`600 ${fs}px ui-sans-serif`; ctx.textAlign='center';
+        ctx.fillStyle='rgba(12,15,22,.55)';
+        const txt='+'+rk.dtCost.toFixed(1)+'s';
+        const tw=ctx.measureText(txt).width;
+        ctx.fillRect(_p[0][0]-tw/2-fs*.3, _p[0][1]-fs*.95, tw+fs*.6, fs*1.3);
+        ctx.fillStyle='rgba(240,244,250,.9)';
+        ctx.fillText(txt, _p[0][0], _p[0][1]);
+        ctx.setLineDash([7,7]);
+      }
+    }
+  }
+  ctx.setLineDash([]);
+}
+function k2in(a,b,i){ return i>=a && i<b; }
+
+function drawStrip(a,b){
+  const ca=cross(a), cb=cross(b);
+  // hillside: downhill apron, tread (4 quads), uphill cutbank
+  for(let k=0;k<LATS.length-1;k++){
+    const w0=ca[k], w1=ca[k+1], w2=cb[k+1], w3=cb[k];
+    proj(w0,_p[0]); proj(w1,_p[1]); proj(w2,_p[2]); proj(w3,_p[3]);
+    const sid=T.surf[a];
+    const col=shadeQuad(w0,w1,w2,w3, SURFS[sid].col, 1);
+    quad(_p[0],_p[1],_p[2],_p[3], col, null);
+    // gravel speckle: cheap, seeded per station so it doesn't boil
+    const spk=SURFS[sid].spk;
+    if (spk && _p[0][2]<70 && _p[0][2]>0){
+      const rng=mulberry32(a*7919+k*127);
+      const nDots=sid===5?4: sid===4?3: 2;
+      ctx.fillStyle=spk;
+      for(let d=0;d<nDots;d++){
+        const fx=rng(), fy=rng();
+        const px=_p[0][0]+(_p[1][0]-_p[0][0])*fx+(_p[3][0]-_p[0][0])*fy;
+        const py=_p[0][1]+(_p[1][1]-_p[0][1])*fx+(_p[3][1]-_p[0][1])*fy;
+        const rr=(sid===5?.09:.045)*CAM.f/_p[0][2];
+        ctx.fillRect(px,py,Math.max(1,rr),Math.max(1,rr));
+      }
+    }
+  }
+  drawApron(a,b,ca,cb, -1); drawApron(a,b,ca,cb, 1);
+}
+const crossCache=new Map();
+let crossCacheFrame=-1;
+function cross(i){
+  if (crossCacheFrame!==RUN.frame){ crossCache.clear(); crossCacheFrame=RUN.frame; }
+  let c=crossCache.get(i); if (c) return c;
+  c=[];
+  const hw=T.width[i]/2;
+  for(const L of LATS) c.push(stationPoint(i, L*hw, [0,0,0]));
+  crossCache.set(i,c);
+  return c;
+}
+/* How far the hillside skirt may extend on this side of this station. On the
+   inside of a bend it must stop short of the turn centre - and it has to vary
+   CONTINUOUSLY (via the smoothed curvature), because a hard on/off threshold
+   left step discontinuities that read as torn shards of landscape. */
+function apronReach(i, side){
+  const k=T.kapSm[i];
+  if (side===Math.sign(k||1) && Math.abs(k)>.008)
+    return Math.min(CONFIG.corridor, Math.max(2.5, .75/Math.abs(k)));
+  return CONFIG.corridor;
+}
+function drawApron(a,b,ca,cb, side){
+  // side=-1 right/downhill-or-uphill depending on uphill[]; just extend both ways
+  const hwA=T.width[a]/2, hwB=T.width[b]/2;
+  const reachA=apronReach(a,side), reachB=apronReach(b,side);
+  const cutA=Math.min(side===T.uphill[a]?2.2:4, reachA), cutB=Math.min(side===T.uphill[a]?2.2:4, reachB);
+  const spans=[[cutA,cutB,true],[reachA,reachB,false]];
+  let prevA=ca[side<0?0:LATS.length-1], prevB=cb[side<0?0:LATS.length-1];
+  for(const [dA,dB,nearBand] of spans){
+    const wA=stationPoint(a, side*(hwA+dA), [0,0,0]);
+    const wB=stationPoint(b, side*(hwB+dB), [0,0,0]);
+    proj(prevA,_p[0]); proj(wA,_p[1]); proj(wB,_p[2]); proj(prevB,_p[3]);
+    const grass= side===T.uphill[a]&&nearBand? '#8a6a4d' : '#6f7f57';
+    quad(_p[0],_p[1],_p[2],_p[3], shadeQuad(prevA,wA,wB,prevB, grass, 1), null);
+    prevA=wA; prevB=wB;
+  }
+  // tread edge line - reads as the worn lip of the bench
+  proj(ca[side<0?0:LATS.length-1],_p[0]); proj(cb[side<0?0:LATS.length-1],_p[1]);
+  if (_p[0][2]>0&&_p[1][2]>0){ ctx.strokeStyle='rgba(40,30,20,.35)';
+    ctx.lineWidth=Math.max(.6,1.4*DPR*Math.min(1,40/_p[0][2]));
+    ctx.beginPath(); ctx.moveTo(_p[0][0],_p[0][1]); ctx.lineTo(_p[1][0],_p[1][1]); ctx.stroke(); }
+}
+
+function drawPlanRibbon(a,b){
+  // the rider's INTENTION, painted on the dirt: red where the plan brakes,
+  // green where it pedals, white where it just carries speed. Drawn as a
+  // cased stroke so it reads on any surface colour.
+  ctx.lineCap='round';
+  for(let i=a;i<b;i++){
+    const p0=stationPoint(i, PLAN.n[i], [0,0,0]); p0[2]+=.05;
+    const p1=stationPoint(i+1, PLAN.n[i+1], [0,0,0]); p1[2]+=.05;
+    proj(p0,_p[0]); proj(p1,_p[1]);
+    if (_p[0][2]<0||_p[1][2]<0) continue;
+    const act=PLAN.act[i];
+    const wpx=clamp(.34*CAM.f/_p[0][2], 2, 15);
+    ctx.strokeStyle='rgba(15,12,10,.45)'; ctx.lineWidth=wpx+2.5;
+    ctx.beginPath(); ctx.moveTo(_p[0][0],_p[0][1]); ctx.lineTo(_p[1][0],_p[1][1]); ctx.stroke();
+    ctx.strokeStyle= act===1?'rgba(255,72,58,.9)': act===2?'rgba(64,236,140,.9)':'rgba(250,250,240,.85)';
+    ctx.lineWidth=wpx;
+    ctx.beginPath(); ctx.moveTo(_p[0][0],_p[0][1]); ctx.lineTo(_p[1][0],_p[1][1]); ctx.stroke();
+  }
+}
+function drawSightMark(i){
+  const p=stationPoint(i,PLAN.n[i]||0,[0,0,0]); p[2]+=.6;
+  proj(p,_p[0]); if (_p[0][2]<0) return;
+  const r=Math.max(3, .35*CAM.f/_p[0][2]);
+  ctx.fillStyle='rgba(255,255,255,.75)';
+  ctx.font=`${Math.max(10,r*2.4)}px ui-sans-serif`; ctx.textAlign='center';
+  ctx.fillText('?', _p[0][0], _p[0][1]);
+}
+
+const _rockTop=[0,0,0];
+function drawRock(rk){
+  const base=stationPoint(rk.i, rk.n, [0,0,0]);
+  const s=Math.sin(T.psi[rk.i]), c=Math.cos(T.psi[rk.i]);
+  const n=Math.min(rk.pts.length,8);
+  for(let j=0;j<n;j++){
+    const [ax,ay]=rk.pts[j];
+    _w[j][0]=base[0]+c*ax-s*ay; _w[j][1]=base[1]+s*ax+c*ay; _w[j][2]=base[2];
+    proj(_w[j], _p[j]); if (_p[j][2]<0) return;
+  }
+  // ground footprint (dark), then a lit cap raised by h toward the sun side
+  const dark = rk.kind==='boulder'? '#54575f' : rk.kind==='small'? '#63656d' : '#5b5e66';
+  const lit  = rk.kind==='boulder'? '#8b8f9c' : rk.kind==='small'? '#8f9097' : '#989ca6';
+  ctx.beginPath();
+  for(let j=0;j<n;j++){ const P=_p[j]; j?ctx.lineTo(P[0],P[1]):ctx.moveTo(P[0],P[1]); }
+  ctx.closePath();
+  ctx.fillStyle=dark; ctx.fill();
+  ctx.strokeStyle='rgba(20,20,25,.5)'; ctx.lineWidth=1; ctx.stroke();
+  proj([base[0]+.3*rk.h*SUN[0], base[1]+.3*rk.h*SUN[1], base[2]+rk.h], _rockTop);
+  if (_rockTop[2]<0) return;
+  // big rideable rocks keep a flatter, wider cap (they read as slabs, and the
+  // painted line rides straight across them)
+  const capPull = rk.kind==='small'? .6 : .42;
+  ctx.beginPath();
+  for(let j=0;j<n;j++){
+    const P=_p[j];
+    const px2=P[0]*(1-capPull)+_rockTop[0]*capPull, py2=P[1]*(1-capPull)+_rockTop[1]*capPull;
+    j?ctx.lineTo(px2,py2):ctx.moveTo(px2,py2);
+  }
+  ctx.closePath(); ctx.fillStyle=lit; ctx.fill();
+}
+
+function drawTree(tr){
+  const base=[0,0,0]; stationPoint(tr.i, tr.n, base); base[2]=T.z[tr.i]+tr.zg;
+  proj(base,_p[0]); if (_p[0][2]<0 || _p[0][2]>260) return;
+  const top=[base[0],base[1],base[2]+tr.h]; proj(top,_p[1]); if (_p[1][2]<0) return;
+  const wpx=tr.h*.28*CAM.f/_p[0][2];
+  if (tr.kind===0){                       // conifer: trunk + two stacked triangles
+    ctx.strokeStyle='#4a3826'; ctx.lineWidth=Math.max(1,wpx*.12);
+    ctx.beginPath(); ctx.moveTo(_p[0][0],_p[0][1]); ctx.lineTo(_p[1][0],_p[1][1]); ctx.stroke();
+    for(let s2=0;s2<2;s2++){
+      const y0=lerp(_p[0][1],_p[1][1], .25+.35*s2), y1=lerp(_p[0][1],_p[1][1], .8+.2*s2);
+      const w2=wpx*(1-.35*s2);
+      ctx.beginPath(); ctx.moveTo(_p[0][0]-w2,y0); ctx.lineTo(_p[0][0]+w2,y0); ctx.lineTo(_p[0][0],y1);
+      ctx.closePath(); ctx.fillStyle=s2? '#3c5a42':'#2e4634'; ctx.fill();
+    }
+  } else {                                // aspen: pale trunk, round crown
+    ctx.strokeStyle='#cfd4c6'; ctx.lineWidth=Math.max(1,wpx*.1);
+    ctx.beginPath(); ctx.moveTo(_p[0][0],_p[0][1]); ctx.lineTo(_p[1][0],_p[1][1]); ctx.stroke();
+    ctx.fillStyle='#7fa34c'; ctx.beginPath();
+    ctx.arc(_p[1][0], _p[1][1]+wpx*.4, wpx*.85, 0, TAU); ctx.fill();
+  }
+}
+
+function drawFinish(){
+  const i=T.finishIdx-1, hw=T.width[i]/2;
+  const l=stationPoint(i,-hw-.3,[0,0,0]), r=stationPoint(i,hw+.3,[0,0,0]);
+  const lt=[l[0],l[1],l[2]+2.6], rt=[r[0],r[1],r[2]+2.6];
+  proj(l,_p[0]); proj(r,_p[1]); proj(lt,_p[2]); proj(rt,_p[3]);
+  if (_p[0][2]<0||_p[1][2]<0) return;
+  ctx.strokeStyle='#dadfe6'; ctx.lineWidth=Math.max(1.5, .06*CAM.f/_p[0][2]);
+  ctx.beginPath(); ctx.moveTo(_p[0][0],_p[0][1]); ctx.lineTo(_p[2][0],_p[2][1]);
+  ctx.moveTo(_p[1][0],_p[1][1]); ctx.lineTo(_p[3][0],_p[3][1]); ctx.stroke();
+  const bh2=Math.max(8,.5*CAM.f/_p[0][2]);
+  quad(_p[2],_p[3],[_p[3][0],_p[3][1]+bh2,_p[3][2]],[_p[2][0],_p[2][1]+bh2,_p[2][2]],'#20242c',null);
+  const mid=[(_p[2][0]+_p[3][0])/2,(_p[2][1]+_p[3][1])/2];
+  ctx.fillStyle='#f2f4f8'; ctx.textAlign='center';
+  ctx.font=`700 ${Math.max(8,.34*CAM.f/_p[0][2])}px ui-sans-serif`;
+  ctx.fillText('FINISH', mid[0], mid[1]+bh2*.72);
+}
+
+function drawSkids(iR){
+  const t=performance.now()/1000;
+  ctx.lineCap='round';
+  for(let k=skids.length-1;k>0;k--){
+    const s0=skids[k-1], s1=skids[k];
+    const age=t-s1.t; if (age>8) continue;
+    proj([s0.x,s0.y,s0.z],_p[0]); proj([s1.x,s1.y,s1.z],_p[1]);
+    if (_p[0][2]<0||_p[1][2]<0) continue;
+    if (Math.hypot(s1.x-s0.x,s1.y-s0.y)>2) continue;
+    ctx.strokeStyle=`rgba(35,25,18,${.5*(1-age/8)})`;
+    ctx.lineWidth=Math.max(1,.09*CAM.f/_p[0][2]);
+    ctx.beginPath(); ctx.moveTo(_p[0][0],_p[0][1]); ctx.lineTo(_p[1][0],_p[1][1]); ctx.stroke();
+  }
+}
+function drawDust(){
+  for(let k=dust.length-1;k>=0;k--){
+    const d=dust[k]; if ((d.age+=RUN.dtFrame)>d.life){ dust.splice(k,1); continue; }
+    d.x+=d.vx*RUN.dtFrame; d.y+=d.vy*RUN.dtFrame; d.z+=d.vz*RUN.dtFrame; d.vz-=4*RUN.dtFrame;
+    proj([d.x,d.y,d.z],_p[0]); if (_p[0][2]<0) continue;
+    const a=1-d.age/d.life;
+    ctx.fillStyle=`rgba(190,168,135,${.35*a})`;
+    const r=Math.max(1,(.12+.25*d.age)*CAM.f/_p[0][2]);
+    ctx.beginPath(); ctx.arc(_p[0][0],_p[0][1],r,0,TAU); ctx.fill();
+  }
+}
+
+/* --- the rider ----------------------------------------------------------- */
+function drawRider(){
+  const S=SIM, i=clamp(Math.floor(S.idx),1,T.N-2);
+  const base=stationPoint(i, S.n, [0,0,0]);
+  const psi=T.psi[i], th=PLAN.thP[i]||T.theta[i];
+  const t=[Math.cos(psi)*Math.cos(th), Math.sin(psi)*Math.cos(th), -Math.sin(th)];   // forward
+  let l=[-Math.sin(psi), Math.cos(psi), 0];                                          // left
+  let k=[t[1]*l[2]-t[2]*l[1], t[2]*l[0]-t[0]*l[2], t[0]*l[1]-t[1]*l[0]];              // up
+  // lean rotates l,k about t (positive lean = toward +n/left for left turns)
+  function leanAxes(phi){
+    // positive phi = leaning toward +n (the rider's LEFT), which is where the
+    // centripetal acceleration points in a left-hand turn. Getting this sign
+    // wrong makes the rider hang off the OUTSIDE of every corner.
+    const cs=Math.cos(phi), sn=Math.sin(phi);
+    return [[l[0]*cs-k[0]*sn, l[1]*cs-k[1]*sn, l[2]*cs-k[2]*sn],
+            [k[0]*cs+l[0]*sn, k[1]*cs+l[1]*sn, k[2]*cs+l[2]*sn]];
+  }
+  const [lb,kb]=leanAxes(S.leanBike), [lr,kr]=leanAxes(S.lean);
+  const Pt=(ft,fl,fk,ax)=>{ const L=ax===1?lb:lr, K=ax===1?kb:kr;
+    return [base[0]+t[0]*ft+L[0]*fl+K[0]*fk, base[1]+t[1]*ft+L[1]*fl+K[1]*fk,
+            base[2]+t[2]*ft+L[2]*fl+K[2]*fk]; };
+
+  // shadow first: the contact cue that makes the bike sit ON the dirt
+  proj(base,_p[0]);
+  if (_p[0][2]>0){ const r=1.1*CAM.f/_p[0][2];
+    ctx.fillStyle='rgba(10,8,5,.30)'; ctx.beginPath();
+    ctx.ellipse(_p[0][0],_p[0][1], r, r*.28, 0, 0, TAU); ctx.fill(); }
+
+  const wR=CONFIG.wheelR, wb=CONFIG.wheelbase;
+  // posture blend
+  const w0=S.postureW;
+  const drop2=.14*(S.rockPulse||0);          // absorbing a rock: whole body sinks
+  const bl=(a,b2,c2,d2)=>a*w0.stand+b2*w0.pedal+c2*w0.tuck+d2*w0.brake;
+  const hip=Pt(bl(-.12,-.20,-.10,-.34), 0, bl(1.00,.95,.92,.96)-drop2, 2);
+  const sho=Pt(bl(.14,.10,.22,.02), 0, bl(1.28,1.24,1.06,1.20)-drop2*1.2, 2);
+  const head=Pt(bl(.24,.20,.34,.12), 0, bl(1.43,1.39,1.17,1.34)-drop2*1.2, 2);
+  const bars=Pt(.42, 0, 1.02, 1);
+  const rw=Pt(-wb/2,0,wR,1), fw=Pt(wb/2,0,wR,1), bb=Pt(0,0,.32,1);
+  const saddle=Pt(-.16,0,.90,1);
+  // cranks/feet
+  const ca2=S.pedalW>0? S.crank : 0;
+  const footL=Pt(.17*Math.cos(ca2), .12, .32-.17*Math.sin(ca2)*(S.pedalW>0?1:.15), 1);
+  const footR=Pt(-.17*Math.cos(ca2), -.12, .32+.17*Math.sin(ca2)*(S.pedalW>0?1:.15), 1);
+
+  function wheel(cw, spin){
+    const pts=[];
+    for(let j=0;j<12;j++){ const a=j/12*TAU;
+      const off=Pt(0,0,0,1);
+      pts.push(proj([cw[0]+(t[0]*Math.cos(a)+kb[0]*Math.sin(a))*wR,
+                     cw[1]+(t[1]*Math.cos(a)+kb[1]*Math.sin(a))*wR,
+                     cw[2]+(t[2]*Math.cos(a)+kb[2]*Math.sin(a))*wR],[0,0,0]));
+    }
+    if (pts.some(p=>p[2]<0)) return;
+    ctx.strokeStyle='#171a1e'; ctx.lineWidth=Math.max(2,.075*CAM.f/pts[0][2]);
+    ctx.beginPath(); pts.forEach((p,j)=>j?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));
+    ctx.closePath(); ctx.stroke();
+    const c2=proj(cw,[0,0,0]);
+    ctx.lineWidth=Math.max(1,.02*CAM.f/c2[2]); ctx.strokeStyle='#3c434c';
+    for(let sN=0;sN<3;sN++){ const a=spin+sN*TAU/3;
+      const e=proj([cw[0]+(t[0]*Math.cos(a)+kb[0]*Math.sin(a))*wR*.92,
+                    cw[1]+(t[1]*Math.cos(a)+kb[1]*Math.sin(a))*wR*.92,
+                    cw[2]+(t[2]*Math.cos(a)+kb[2]*Math.sin(a))*wR*.92],[0,0,0]);
+      if (e[2]>0){ ctx.beginPath(); ctx.moveTo(c2[0],c2[1]); ctx.lineTo(e[0],e[1]); ctx.stroke(); }
+    }
+  }
+  wheel(rw, S.wheelA); wheel(fw, S.wheelA*1.02);
+
+  function seg(a,b2,wd,col){
+    proj(a,_p[0]); proj(b2,_p[1]); if (_p[0][2]<0||_p[1][2]<0) return;
+    ctx.strokeStyle=col; ctx.lineCap='round';
+    ctx.lineWidth=Math.max(1.5, wd*CAM.f/_p[0][2]);
+    ctx.beginPath(); ctx.moveTo(_p[0][0],_p[0][1]); ctx.lineTo(_p[1][0],_p[1][1]); ctx.stroke();
+  }
+  const frameCol=RUN.rider.col;
+  seg(rw,bb,.05,frameCol); seg(bb,saddle,.05,frameCol); seg(saddle,Pt(.3,0,.95,1),.045,frameCol);
+  seg(Pt(.3,0,.95,1),fw,.045,frameCol); seg(bb,Pt(.3,0,.95,1),.05,frameCol);
+  seg(Pt(.42,-.24,1.02,1),Pt(.42,.24,1.02,1),.05,'#20242a');       // bars
+  // legs with a hint of knee
+  const kneeL=[(hip[0]+footL[0])/2+lr[0]*.06+t[0]*.1,(hip[1]+footL[1])/2+lr[1]*.06+t[1]*.1,(hip[2]+footL[2])/2+.06];
+  const kneeR=[(hip[0]+footR[0])/2-lr[0]*.06+t[0]*.1,(hip[1]+footR[1])/2-lr[1]*.06+t[1]*.1,(hip[2]+footR[2])/2+.06];
+  seg(hip,kneeL,.06,'#23262b'); seg(kneeL,footL,.05,'#23262b');
+  seg(hip,kneeR,.06,'#1b1e22'); seg(kneeR,footR,.05,'#1b1e22');
+  seg(hip,sho,.085,'#2b3038');                                     // torso
+  seg(sho,Pt(.42,-.2,1.02,1),.045,'#2b3038'); seg(sho,Pt(.42,.2,1.02,1),.045,'#2b3038');
+  // head + helmet in team colour
+  proj(head,_p[0]);
+  if (_p[0][2]>0){ const r=.10*CAM.f/_p[0][2];
+    ctx.fillStyle='#c9a184'; ctx.beginPath(); ctx.arc(_p[0][0],_p[0][1],r,0,TAU); ctx.fill();
+    ctx.fillStyle=frameCol; ctx.beginPath(); ctx.arc(_p[0][0],_p[0][1]-r*.25,r*1.05,Math.PI,0); ctx.fill(); }
+}
+
+/* ============================== HUD ===================================== */
+function drawHUD(){
+  const S=SIM, i=clamp(Math.floor(S.idx),0,T.N-1);
+  const u=H/900;                       // HUD scale unit
+  ctx.save();
+  // panel
+  ctx.fillStyle='rgba(8,11,18,.55)';
+  roundRect(18*u, H-208*u, 648*u, 186*u, 12*u); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.16)'; ctx.lineWidth=1; roundRect(18*u,H-208*u,648*u,186*u,12*u); ctx.stroke();
+
+  // speed
+  const mph=S.v*2.23694, kmh=S.v*3.6;
+  ctx.fillStyle='#f2f5fa'; ctx.textAlign='left';
+  ctx.font=`300 ${64*u}px ui-sans-serif`; ctx.fillText(mph.toFixed(0), 40*u, H-118*u);
+  ctx.font=`400 ${17*u}px ui-sans-serif`; ctx.fillStyle='rgba(220,230,244,.6)';
+  ctx.fillText('mph', 40*u, H-94*u);
+  ctx.fillText(kmh.toFixed(0)+' km/h', 40*u, H-70*u);
+  const gr=Math.tan(PLAN.thP[i]||0)*100;
+  const sg=latSlope(i,S.n), camDeg=Math.abs(Math.atan(sg)/DEG);
+  const camDir= T.bermH[i]>0? 'berm' : T.cupH[i]>0? 'cupped'
+    : (Math.sign(sg)===T.uphill[i]? 'out':'in');
+  ctx.fillText('grade '+gr.toFixed(0)+'%', 40*u, H-46*u);
+  ctx.fillText('camber '+camDeg.toFixed(0)+'° '+camDir, 40*u, H-24*u);
+
+  // The tyre-grip circle. The ring is ALL the grip this surface offers at this
+  // speed; the amber dot is how much is being spent, and in which direction -
+  // sideways for cornering, downward for braking. Dot on the ring = sliding.
+  const cx=238*u, cy2=H-116*u, R0=60*u;
+  ctx.strokeStyle='rgba(255,255,255,.14)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(cx-R0*1.05,cy2); ctx.lineTo(cx+R0*1.05,cy2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx,cy2-R0*1.05); ctx.lineTo(cx,cy2+R0*1.05); ctx.stroke();
+  const capG=muEff(i,S.v,RUN.rider)*Math.cos(PLAN.thP[i]||0)*crestFactor(i,S.v);
+  ctx.strokeStyle= S.sliding? '#ff5546':'rgba(120,220,160,.8)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(cx,cy2,R0*Math.min(1.05,capG/1.1),0,TAU); ctx.stroke();
+  const dx=clamp(-S.aLat/CONFIG.g/1.1,-1.05,1.05)*R0;
+  const dyB=clamp(((S.brakeAf||0)+(S.brakeAr||0))/CONFIG.g/1.1,0,1.05)*R0;
+  ctx.fillStyle=S.sliding? '#ff5546' : '#ffd166';
+  ctx.beginPath(); ctx.arc(cx+dx,cy2+dyB,6*u,0,TAU); ctx.fill();
+  ctx.fillStyle='rgba(220,230,244,.6)'; ctx.font=`400 ${12*u}px ui-sans-serif`; ctx.textAlign='center';
+  ctx.fillText('tire grip: ring = limit', cx, H-50*u);
+  ctx.fillText('⟷ turning   ↓ braking', cx, H-34*u);
+
+  // front / rear brake force, split by the live wheel loads, plus leg power.
+  // Watch the split slide forward on steep ground and hard stops - and the
+  // rear bar die entirely just before an endo would happen.
+  bar(330*u, 'F', S.brakeAf/6.5, '#ff5546', null);
+  bar(368*u, 'R', S.brakeAr/6.5, S.rearLight? '#ffd166':'#ff8a5c',
+      S.rearLight? 'rear light!':null);
+  bar(430*u, 'PWR', S.pedalW/RUN.rider.sprint, '#57e08f',
+      S.pedalW>0? Math.round(S.pedalW)+'W':null);
+  function bar(bx,label,frac,col,note){
+    const bh=104*u, bw=24*u, by=H-178*u;
+    ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(bx,by,bw,bh);
+    ctx.fillStyle=col; const h2=clamp(frac,0,1)*bh; ctx.fillRect(bx,by+bh-h2,bw,h2);
+    ctx.fillStyle='rgba(220,230,244,.55)'; ctx.font=`400 ${12*u}px ui-sans-serif`; ctx.textAlign='center';
+    ctx.fillText(label, bx+bw/2, H-56*u);
+    if (note){ ctx.fillStyle='#ffe3b0'; ctx.fillText(note, bx+bw/2, by-6*u); }
+  }
+  ctx.fillStyle='rgba(220,230,244,.45)'; ctx.font=`400 ${11*u}px ui-sans-serif`; ctx.textAlign='center';
+  ctx.fillText('brakes', 349*u, H-40*u);
+  // lean dial - to the right of the power bar, with clear air between them
+  const lx=572*u, ly=H-116*u, LR2=54*u;
+  ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.arc(lx,ly,LR2,Math.PI,0); ctx.stroke();
+  const ph=clamp(S.lean,-1.1,1.1);
+  ctx.strokeStyle='#ffd166'; ctx.lineWidth=3*u;
+  ctx.beginPath(); ctx.moveTo(lx,ly);
+  // +lean = left turn = needle tips to the LEFT of the dial, matching the view
+  ctx.lineTo(lx-Math.sin(ph)*LR2*.92, ly-Math.cos(ph)*LR2*.92); ctx.stroke();
+  ctx.fillStyle='rgba(220,230,244,.55)'; ctx.font=`400 ${12*u}px ui-sans-serif`;
+  ctx.fillText('lean '+Math.abs(ph/DEG).toFixed(0)+'°', lx, H-38*u);
+
+  // surface chip: what the tyres are on, its friction, its rolling drag
+  const sid=T.surf[i], sc=SURFS[sid];
+  ctx.fillStyle=sc.col; roundRect(40*u, H-196*u, 16*u, 16*u, 3*u); ctx.fill();
+  ctx.fillStyle='rgba(235,242,250,.85)'; ctx.textAlign='left'; ctx.font=`500 ${15*u}px ui-sans-serif`;
+  ctx.fillText(sc.name+'   μ '+T.mu0[i].toFixed(2)+' · crr '+T.crr[i].toFixed(3), 64*u, H-183*u);
+
+  // elevation profile with progress
+  const pw2=380*u, ph2=54*u, px2=W-pw2-30*u, py2=H-ph2-26*u;
+  ctx.fillStyle='rgba(8,11,18,.55)'; roundRect(px2-12*u,py2-12*u,pw2+24*u,ph2+24*u,10*u); ctx.fill();
+  ctx.beginPath();
+  for(let k2=0;k2<T.N;k2+=8){
+    const xx=px2+k2/T.N*pw2, yy=py2+ (1-(T.z[k2]-T.z[T.N-1])/(T.z[0]-T.z[T.N-1]))*ph2;
+    k2?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);
+  }
+  ctx.strokeStyle='rgba(230,238,248,.7)'; ctx.lineWidth=1.6; ctx.stroke();
+  const fx2=px2+S.idx/T.N*pw2, fy2=py2+(1-(T.z[i]-T.z[T.N-1])/(T.z[0]-T.z[T.N-1]))*ph2;
+  ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(fx2,fy2,4.5*u,0,TAU); ctx.fill();
+  ctx.fillStyle='rgba(220,230,244,.6)'; ctx.font=`400 ${13*u}px ui-monospace,Menlo,monospace`;
+  ctx.textAlign='right';
+  ctx.fillText(fmtTime(S.time)+'   '+Math.max(0,(T.z[i]-T.z[T.N-1])).toFixed(0)+' m to go', px2+pw2, py2-18*u);
+  ctx.restore();
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+/* ================= ticker: say what the rider is doing ================== */
+let tickerHold=0, tickerAct='', tickerWhy='';
+function updateTicker(dt){
+  tickerHold-=dt;
+  const S=SIM, i=clamp(Math.floor(S.idx),0,T.N-2);
+  let act='', why='';
+  // find the constraint we are currently riding toward
+  let limIdx=-1;
+  for(let k=i;k<Math.min(T.N-1,i+60);k++){ if (PLAN.v[k]<S.v-0.8){ limIdx=k; break; } }
+  const limTag= limIdx>=0? (PLAN.tag[limIdx]||'') : '';
+  // a big rock just ahead is a SPOTLIGHT moment: name the choice being made
+  let rockNear=null, rockDist=0;
+  for(let k=0;k<16 && !rockNear;k++){
+    const rl=T.rockBucket[i+k]; if (!rl) continue;
+    for(const rk of rl) if (rk.kind!=='small' && rk.decided!==undefined){ rockNear=rk; rockDist=k; break; }
+  }
+  const cm=rockNear? Math.round(rockNear.h*100) : 0;
+  if (S.sliding){ act='DRIFTING'; why='grip ran out — riding it out'; }
+  else if (rockNear && rockDist<3 && rockNear.choice==='over'){
+    act='ROLLING THE ROCK'; why=cm+' cm of rock under the wheels'; }
+  else if (rockNear && rockNear.kind==='boulder'){
+    act='PICKING A LINE'; why='around the boulder — far too big to roll'; }
+  else if (rockNear && rockNear.choice==='over'){
+    act='PICKING A LINE'; why= rockNear.dtCost!=null
+      ? `over the ${cm} cm rock — around would cost +${rockNear.dtCost.toFixed(1)}s`
+      : `squaring up — the ${cm} cm step spans the whole trail`; }
+  else if (rockNear && rockNear.choice==='around'){
+    act='PICKING A LINE'; why=`around the big rock — rolling ${cm} cm would cost +${(rockNear.dtCost||0).toFixed(1)}s`; }
+  else if (S.brakeF>.75){ act='HARD ON THE BRAKES'; why=limTag? 'setting up for '+limTag : ''; }
+  else if (S.brakeF>.2 && Math.abs(S.aLat)>2.5){ act='TRAIL-BRAKING'; why=limTag? 'easing into '+limTag:''; }
+  else if (S.brakeF>.2){ act='BRAKING'; why=limTag? 'for '+limTag : (RUN.mode==='onsight'&&PLAN.tag[Math.min(T.N-1,limIdx<0?i:limIdx)]==='sight line ends ahead'?'can’t see past the corner':''); }
+  else if (S.pedalW>RUN.rider.cp+60){ act='SPRINTING'; why='open trail — free speed'; }
+  else if (S.pedalW>40){ act='PEDALING'; why='adding speed while it’s cheap'; }
+  else if (S.posture==='tuck'){ act='TUCKED'; why='nothing to do but be small'; }
+  else if (Math.abs(S.aLat)>4.5 && T.bermH[i]>0){ act='RAILING THE BERM'; why='the bank is holding the speed'; }
+  else if (Math.abs(S.aLat)>4.5){ act='LEANED OVER'; why='carrying speed through '+(PLAN.kapP[i]>0?'a left':'a right'); }
+  else { act='OFF THE BRAKES'; why='letting the hill do the work'; }
+  if (tickerHold<=0 && (act!==tickerAct||why!==tickerWhy)){
+    tickerAct=act; tickerWhy=why; tickerHold=.8;
+    document.querySelector('#ticker .act').textContent=act;
+    document.querySelector('#ticker .why').textContent=why;
+  }
+}
+
+/* ====================== run manager + cards ============================= */
+const whoEl=document.getElementById('who'), cardEl=document.getElementById('card');
+const capEl=document.querySelector('#caption .params');
+
+function newRun(opts={}){
+  const seed = opts.seed ?? (Q.get('seed') && !RUN ? Q.get('seed') : String((Math.random()*1e9)|0));
+  let riderKey = opts.rider ?? (Q.get('rider') && !RUN ? Q.get('rider') : (Math.random()<.5?'pro':'weekend'));
+  if (!(riderKey in RIDERS)) riderKey='pro';
+  let mode = opts.mode ?? (Q.get('mode') && !RUN ? Q.get('mode') : (Math.random()<.5?'known':'onsight'));
+  if (mode!=='known'&&mode!=='onsight') mode='known';
+  const rider=RIDERS[riderKey];
+
+  T=genTrail(String(seed));
+  genBackdrop();
+  // planner: full solve for "knows the trail"; on-sight starts with a centreline
+  // guess (it will replan from sight as it rides) but needs SOMETHING for frame 1
+  const t0=performance.now();
+  PLAN=planFull(rider);
+  const planMs=performance.now()-t0;
+  if (mode==='onsight'){
+    // wipe the omniscient speed plan; the rider will replan from sight as they go
+    const blind=planSpeed(rider, PLAN.n, 0, Math.max(20,Math.round(T.sight[0])), 0, rider.blindV, true);
+    for(let k=0;k<=blind.i1;k++){ PLAN.v[k]=blind.v[k]; PLAN.act[k]=blind.act[k]; PLAN.tag[k]=blind.tag[k]; }
+  }
+  const predicted=mode==='known'? PLAN.time : null;
+
+  RUN={ seed:String(seed), riderKey, rider, mode, state:'intro', clock:0,
+        predicted, planMs, frame:0, dtFrame:0, treeIdx:new Map(), stats:null };
+  for(const tr of T.trees){ const b=RUN.treeIdx.get(tr.i)||[]; b.push(tr); RUN.treeIdx.set(tr.i,b); }
+  SIM=makeSim(rider,mode);
+  dust.length=0; skids.length=0;
+  CAM.ready=false;
+  clearTimeout(deadlineTimer);
+  deadlineTimer=setTimeout(()=>{
+    /* Same fallback as the end-of-run hand-off: build_github.py empties
+       nextPage for the published copy, and a standalone page that has hung
+       still wants rescuing - it just starts again instead of moving on. */
+    if (PINNED) return;
+    if (CONFIG.nextPage) location.href=CONFIG.nextPage; else location.reload();
+  }, CONFIG.runDeadline);
+  /* The ticker keeps a SHADOW of what it last wrote, so it only touches the
+     DOM when the narration actually changes. That shadow is module-level and
+     survives a new run, while the finish branch blanks the DOM text - so if a
+     fresh run opened on the same line the old one closed with, the comparison
+     said "no change", the write was skipped, and the narration stayed empty
+     until the rider happened to do something different. Only reachable in the
+     ?pin loop, which is exactly where anyone tuning this sits and watches. */
+  tickerHold=0; tickerAct=''; tickerWhy='';
+
+  // chips
+  whoEl.innerHTML=
+    `<div class="chip"><span class="dot" style="background:${rider.col}"></span>${rider.label}</div>`+
+    `<div class="chip"><span class="dot" style="background:${mode==='known'?'#ffd166':'#9aa7ff'}"></span>`+
+    (mode==='known'?'KNOWS THE TRAIL':'RIDING ON-SIGHT')+`</div>`;
+  capEl.textContent=`${T.name} · ${(T.totLen/1000).toFixed(1)} km · ${T.totDrop.toFixed(0)} m of descent · seed ${seed}`;
+  showIntroCard();
+  console.log(`[descent] seed ${seed}  ${riderKey}/${mode}  len ${(T.totLen/1000).toFixed(2)} km`+
+    `  drop ${T.totDrop.toFixed(0)} m  plan ${planMs.toFixed(0)} ms`+
+    (predicted? `  predicted ${fmtTime(predicted)}`:''));
+}
+
+function surfBreakdown(){
+  const tot=new Array(SURFS.length).fill(0);
+  for(let i=0;i<T.N;i++) tot[T.surf[i]]++;
+  return tot.map((c,id)=>({id, frac:c/T.N})).filter(s=>s.frac>.02);
+}
+function drawCardMap(canvas, colorBySpeed){
+  const c2=canvas.getContext('2d'), w2=canvas.width=460, h2=canvas.height=250;
+  let xmin=1e9,xmax=-1e9,ymin=1e9,ymax=-1e9;
+  for(let i=0;i<T.N;i++){ xmin=Math.min(xmin,T.x[i]); xmax=Math.max(xmax,T.x[i]);
+    ymin=Math.min(ymin,T.y[i]); ymax=Math.max(ymax,T.y[i]); }
+  const sc=Math.min((w2-30)/(xmax-xmin||1),(h2-30)/(ymax-ymin||1));
+  const mx=i=>15+(T.x[i]-xmin)*sc + (w2-30-(xmax-xmin)*sc)/2;
+  const my=i=>h2-15-(T.y[i]-ymin)*sc - (h2-30-(ymax-ymin)*sc)/2;
+  if (colorBySpeed){
+    for(let i=1;i<T.N;i++){
+      const v=PLAN.v[i], f2=clamp((v-3)/14,0,1);
+      c2.strokeStyle=`rgb(${Math.round(90+165*f2)},${Math.round(160-40*f2)},${Math.round(220-160*f2)})`;
+      c2.lineWidth=2.2; c2.beginPath(); c2.moveTo(mx(i-1),my(i-1)); c2.lineTo(mx(i),my(i)); c2.stroke();
+    }
+  } else {
+    c2.strokeStyle='rgba(230,238,248,.5)'; c2.lineWidth=2; c2.setLineDash([5,5]);
+    c2.beginPath(); for(let i=0;i<T.N;i+=3) i?c2.lineTo(mx(i),my(i)):c2.moveTo(mx(i),my(i));
+    c2.stroke(); c2.setLineDash([]);
+  }
+  c2.fillStyle='#57e08f'; c2.beginPath(); c2.arc(mx(0),my(0),5,0,TAU); c2.fill();
+  c2.fillStyle='#ff5546'; c2.beginPath(); c2.arc(mx(T.N-1),my(T.N-1),5,0,TAU); c2.fill();
+}
+function showIntroCard(){
+  const avgGr=(T.totDrop/T.totLen*100);
+  const sb=surfBreakdown();
+  cardEl.innerHTML=`<div class="pk">${T.name}</div>
+    <div class="sub">${(T.totLen/1000).toFixed(1)} km · ${T.totDrop.toFixed(0)} m of descent · avg ${avgGr.toFixed(0)}% · ${T.rocks.filter(r=>r.kind!=='small').length} big rocks</div>
+    <div class="rows">${RUN.rider.label.toLowerCase()} · ${RUN.mode==='known'
+      ? 'has ridden this trail — full line planned\npredicted time '+fmtTime(RUN.predicted)
+      : 'has never seen this trail\nwill ride only as fast as the sight line allows'}</div>
+    <div class="surfbar">${sb.map(s=>`<div style="flex:${s.frac};background:${SURFS[s.id].col}"></div>`).join('')}</div>
+    <div class="surfkey">${sb.map(s=>SURFS[s.id].name+' '+(s.frac*100).toFixed(0)+'%').join(' · ')}</div>
+    <canvas></canvas>`;
+  drawCardMap(cardEl.querySelector('canvas'), RUN.mode==='known');
+  cardEl.classList.add('show');
+}
+function showFinishCard(){
+  const S=SIM, tot=S.time;
+  const pct=x=>(100*x/Math.max(.01,S.tBrake+S.tPedal+S.tCoast)).toFixed(0)+'%';
+  cardEl.innerHTML=`<div class="pk">${fmtTime(tot)}</div>
+    <div class="sub">${T.name} · ${RUN.rider.label.toLowerCase()} · ${RUN.mode==='known'?'knew the trail':'rode it on sight'}${
+      RUN.predicted? ' · plan said '+fmtTime(RUN.predicted):''}</div>
+    <div class="rows">avg ${(S.distance/tot*2.23694).toFixed(1)} mph  (${(S.distance/tot*3.6).toFixed(1)} km/h)
+top ${(S.maxV*2.23694).toFixed(0)} mph · max lean ${(S.maxLean/DEG).toFixed(0)}°
+braking ${pct(S.tBrake)} · pedaling ${pct(S.tPedal)} · coasting ${pct(S.tCoast)}
+slides ${S.slides}</div>
+    <canvas></canvas>`;
+  drawCardMap(cardEl.querySelector('canvas'), true);
+  cardEl.classList.add('show');
+}
+
+/* countdown paint (over the world, no DOM) */
+function drawCountdown(){
+  const left=CONFIG.countSec - (RUN.clock-CONFIG.introSec);
+  const nnn=Math.ceil(left);
+  ctx.fillStyle='rgba(0,0,0,.25)'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='rgba(245,248,252,.95)'; ctx.textAlign='center';
+  ctx.font=`200 ${H*.3}px ui-sans-serif`;
+  ctx.fillText(nnn>0? String(nnn):'GO', W/2, H/2+H*.1);
+}
+
+/* =========================== main loop ================================== */
+let paused=false, last=performance.now();
+const TS = Q.get('ts')? +Q.get('ts') : 1;
+function frame(now){
+  const dtReal=Math.min(.1,(now-last)/1000); last=now;
+  const dt=paused?0:dtReal*TS;
+  RUN.frame++; RUN.dtFrame=dtReal;
+  RUN.clock+=dt;
+
+  if (RUN.state==='intro'){
+    // hold on the start; the card carries the information
+    updateCamera(dtReal*.4);
+    if (RUN.clock>=CONFIG.introSec){ RUN.state='count'; }
+  } else if (RUN.state==='count'){
+    updateCamera(dtReal);
+    if (RUN.clock>=CONFIG.introSec+CONFIG.countSec){
+      RUN.state='run'; cardEl.classList.remove('show');
+    }
+  } else if (RUN.state==='run'){
+    // fixed physics steps; render at whatever rate the machine gives us
+    const steps=Math.max(1,Math.round(dt/(1/120)));
+    for(let k=0;k<steps;k++) stepSim(dt/steps);
+    updateCamera(dtReal);
+    updateTicker(dtReal);
+    if (SIM.done){ RUN.state='finish'; RUN.finishAt=RUN.clock; showFinishCard();
+      document.querySelector('#ticker .act').textContent='';
+      document.querySelector('#ticker .why').textContent='';
+      console.log(`[descent] finished ${fmtTime(SIM.time)}  avg ${(SIM.distance/SIM.time*3.6).toFixed(1)} km/h  slides ${SIM.slides}`);
+    }
+  } else if (RUN.state==='finish'){
+    updateCamera(dtReal*.3);
+    if (RUN.clock-RUN.finishAt>=CONFIG.finishSec){
+      if (!PINNED){
+        /* An EMPTY nextPage means there is nowhere to hand on to, which is
+           what build_github.py leaves behind when it cuts a page out of the
+           rotation for publishing. Start again instead. */
+        if (CONFIG.nextPage) location.href=CONFIG.nextPage; else location.reload();
+        return;
+      }
+      cardEl.classList.remove('show');
+      setTimeout(()=>newRun(), 60);
+    }
+  }
+
+  drawBackdrop();
+  drawWorld();
+  if (RUN.state==='run'||RUN.state==='finish') drawHUD();
+  if (RUN.state==='count') drawCountdown();
+  updateInfo(dtReal);
+  requestAnimationFrame(frame);
+}
+
+let fpsAcc=0,fpsN=0,fpsShow=0;
+function updateInfo(dt){
+  fpsAcc+=dt;fpsN++;
+  if (fpsAcc>.5){ fpsShow=fpsN/fpsAcc; fpsAcc=0;fpsN=0; }
+  if (!document.body.classList.contains('showinfo')) return;
+  const i=clamp(Math.floor(SIM.idx),0,T.N-1);
+  document.getElementById('info').textContent=
+`seed ${RUN.seed}  ${RUN.riderKey}/${RUN.mode}  cam ${camMode}
+fps ${fpsShow.toFixed(0)}  plan ${RUN.planMs.toFixed(0)} ms
+v ${ (SIM.v*3.6).toFixed(1) } km/h  μ ${T.mu0[i].toFixed(2)}  rough ${T.rough[i].toFixed(2)}
+sight ${T.sight[i].toFixed(0)} m  slides ${SIM.slides}
+t ${fmtTime(SIM.time)}${RUN.predicted? '  pred '+fmtTime(RUN.predicted):''}
+keys: n new · m other mode · r other rider · c cam · p pause · t self-test`;
+}
+
+/* ====================== physics self-test (t) =========================== */
+/* Analytic checks the sim must not drift away from. Results go to the
+   console and are summarised in the info overlay. */
+function selfTest(){
+  const out=[];
+  const g=CONFIG.g;
+  // 1) braking distance, flat hardpack, from 40 km/h
+  { const mu=.85, v0=40/3.6, aEndo=endoCap(POSTURE.brake,0)*.95;
+    const a=Math.min(mu*g, aEndo), dAn=v0*v0/(2*a);
+    let v=v0,d=0; while(v>0.1){ v-=Math.min(mu*g,aEndo)* .002; d+=v*.002; }
+    out.push(['braking 40 km/h hardpack', dAn.toFixed(1)+' m', d.toFixed(1)+' m',
+              Math.abs(d-dAn)/dAn<.08]); }
+  // 2) cornering ceiling r=6 m flat hardpack
+  { const mu=.85*.95, r=6, vAn=Math.sqrt(mu*g*r);
+    out.push(['corner r=6m hardpack', (vAn*3.6).toFixed(1)+' km/h','(formula)',
+              vAn>6.0&&vAn<8.0]); }
+  // 3) terminal speed, 15% slab, tucked - raw drag physics, before the
+  //    rough-ground control ceiling caps what a human can actually hold
+  { const m=93.5, cda=POSTURE.tuck.cda, th=Math.atan(.15);
+    let v=5; for(let k=0;k<8000;k++){ const a=g*Math.sin(th)-.5*CONFIG.rho*cda*v*v/m-.008*g*Math.cos(th); v+=a*.01; }
+    const ctrl=CONFIG.vmaxAbs*(1-SURFS[6].rough*.55)*3.6;
+    out.push(['terminal 15% slab (drag-only '+(v*3.6).toFixed(0)+')',
+              'ridden cap '+ctrl.toFixed(0)+' km/h','expect 75-85', ctrl>74&&ctrl<86]); }
+  // 4) whole-run averages across seeds (plan integral, pro/known)
+  { const keep={T,PLAN,RUN,SIM};
+    let ok=true, note=[];
+    for(const s of ['101','202','303']){
+      T=genTrail(s); const p=planFull(RIDERS.pro);
+      const avg=T.totLen/p.time*3.6; note.push(avg.toFixed(0));
+      if (avg<14||avg>42) ok=false;
+    }
+    ({T,PLAN,RUN,SIM}=keep);
+    out.push(['run avg speed seeds 101/202/303', note.join('/')+' km/h','expect 14-42',ok]); }
+  /* 5) THE PITCH-OVER CAP MUST DEPEND ON THE SLOPE ONLY THROUGH cos(th).
+
+     This one exists because of a bug that lived here undetected. endoCap
+     returned the limit on NET deceleration while all three of its callers used
+     it as a limit on BRAKE FORCE, so gravity came off twice and the rider was
+     held to 29% less braking than the bike has on a 25% grade.
+
+     Note what does NOT catch it: asserting that the wheel-load split reaches
+     zero rear load exactly at endoCap. That invariant held perfectly the whole
+     time, because the load split carried the same spurious sin(th) - the two
+     were consistently wrong together, which is precisely why nobody noticed.
+     It takes an INDEPENDENT statement of the physics to find it, and this is
+     one: moments about the front contact patch leave the brake-force cap
+     proportional to the normal load and nothing else, so dividing it by
+     cos(th) has to give the same number on every gradient. */
+  { const post=POSTURE.brake, th=Math.atan(.25);
+    const flat=endoCap(post,0), steep=endoCap(post,th)/Math.cos(th);
+    out.push(['endo cap varies with cos(slope) only',
+              flat.toFixed(2)+' m/s\u00B2', steep.toFixed(2)+' m/s\u00B2',
+              Math.abs(flat-steep)<1e-6]); }
+
+  console.table(out.map(o=>({test:o[0], expected:o[1], got:o[2], pass:o[3]})));
+  const fails=out.filter(o=>!o[3]).length;
+  console.log(`[descent] self-test: ${out.length-fails}/${out.length} passed`);
+  return out;
+}
+/* headless run for tuning: plan-time for any seed/rider/mode (mode 'known' only) */
+window.simulateHeadless=function(seed, riderKey){
+  const keep={T,PLAN};
+  T=genTrail(String(seed));
+  const p=planFull(RIDERS[riderKey]);
+  const res={seed, rider:riderKey, len:T.totLen, drop:T.totDrop, time:p.time,
+    avgKmh:T.totLen/p.time*3.6, maxKmh:Math.max(...p.v)*3.6};
+  ({T,PLAN}=keep);
+  return res;
+};
+
+/* ============================ keys ====================================== */
+addEventListener('keydown',(e)=>{
+  switch(e.key){
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); break;
+    case 'n': case 'N': newRun(); break;
+    case 'm': case 'M': newRun({seed:RUN.seed, rider:RUN.riderKey,
+      mode:RUN.mode==='known'?'onsight':'known'}); break;
+    case 'r': case 'R': newRun({seed:RUN.seed, mode:RUN.mode,
+      rider:RUN.riderKey==='pro'?'weekend':'pro'}); break;
+    case 'c': case 'C': camMode=CAMMODES[(CAMMODES.indexOf(camMode)+1)%CAMMODES.length]; break;
+    case 'p': case 'P': case ' ': paused=!paused; break;
+    case 't': case 'T': selfTest(); break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      /* The same rating stub the other pages carry, so a score pressed on the
+         remote lands in the log with the seed that produced it - which is the
+         only way to get back to a run worth keeping. */
+      if (/^[0-9]$/.test(e.key)){
+        const score = e.key === '0' ? 10 : parseInt(e.key, 10);
+        console.log('[descent] RATING STUB - score', score, 'seed', RUN && RUN.seed,
+                    RUN && RUN.riderKey, RUN && RUN.mode);
+      }
+  }
+});
+
+newRun();
+requestAnimationFrame(frame);
+</script>
+<script src="nav.js"></script>
+</body>
+</html>
