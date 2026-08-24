@@ -1387,7 +1387,16 @@ function drawWorld(){
     // the painted line: intention made visible
     if (b>iR && a<sightEnd) drawPlanRibbon(Math.max(a,iR+1), Math.min(b,sightEnd));
     if (RUN.mode==='onsight' && a<=sightEnd && b>sightEnd) drawSightMark(sightEnd);
-    if (k2in(a,b,iR) && camMode!=='fp') drawRider();
+    /* THE VANISHING REAR WHEEL. Strips paint far-to-near, and in a chase view
+       the ground BEHIND the rider is NEARER the camera - so it painted after
+       him, straight over the bottom of the rear wheel, which physically hangs
+       over that ground (its centre is 0.6 m behind the rider's station). The
+       bike is therefore painted at the depth of station iR-2: everything the
+       wheels actually overlap paints first, while genuinely nearer terrain
+       (the cutbank between camera and rider in a hairpin) still occludes.
+       The shadow stays with the ground directly beneath the bike. */
+    if (k2in(a,b,iR) && camMode!=='fp') drawRiderShadow();
+    if (k2in(a,b,Math.max(1,iR-2)) && camMode!=='fp') drawRider();
   }
   drawGhosts(iR, sightEnd);
   drawSkids(iR);
@@ -1656,18 +1665,44 @@ function drawDust(){
 }
 
 /* --- the rider ----------------------------------------------------------- */
+/* Where the bike stands. Three rules, each learned from watching a tyre sink
+   into the dirt:
+   (1) Stand on the RENDERED ground, not the mathematical one. The renderer
+       draws the tread as straight chords between stations and between five
+       lateral samples; on curved cross-sections (cup, berm) the true surface
+       runs BELOW those chords, so placing the bike on the true surface put
+       the rims under the drawn ground. Interpolating the two station points
+       at the rider's own n IS the drawn chord, so contact is exact - and the
+       bike stops hopping forward in one-metre steps as a bonus.
+   (2) A leaned wheel hangs over the BANK side - sample the ground there too
+       and stand on whichever is higher.
+   (3) Soft surfaces are allowed to swallow some tyre ON PURPOSE: deep loose
+       buries ~4 cm, fine gravel ~2, everything else rides a whisker clear.
+       (Joe's point - sinking is honest there, and only there.)             */
+function riderBasePos(){
+  const S=SIM, i=clamp(Math.floor(S.idx),1,T.N-2), f2=clamp(S.idx-i,0,1);
+  const b0=stationPoint(i, S.n, [0,0,0]);
+  const b1=stationPoint(Math.min(i+1,T.N-1), S.n, [0,0,0]);
+  const base=[lerp(b0[0],b1[0],f2), lerp(b0[1],b1[1],f2), lerp(b0[2],b1[2],f2)];
+  const nS=clamp(S.n + Math.sin(S.leanBike)*CONFIG.wheelR*.85,
+                 -T.width[i]/2-2, T.width[i]/2+2);
+  const sp=surfAt(i,S.n);
+  const sink= sp.id===2? .045 : sp.id===4? .02 : 0;
+  base[2] += Math.max(0, zOff(i,nS)-zOff(i,S.n)) + .03 - sink;
+  return {i, base};
+}
+/* The shadow is painted with the ground UNDER the bike (the rider strip), the
+   bike itself two stations NEARER in the paint order - see drawWorld. */
+function drawRiderShadow(){
+  const {base}=riderBasePos();
+  proj(base,_p[0]);
+  if (_p[0][2]>0){ const r=1.1*CAM.f/_p[0][2];
+    ctx.fillStyle='rgba(10,8,5,.30)'; ctx.beginPath();
+    ctx.ellipse(_p[0][0],_p[0][1], r, r*.28, 0, 0, TAU); ctx.fill(); }
+}
 function drawRider(){
-  const S=SIM, i=clamp(Math.floor(S.idx),1,T.N-2);
-  const base=stationPoint(i, S.n, [0,0,0]);
-  /* Keep the tyres OUT of the dirt. The bike is drawn about the contact point
-     at the rider's centreline n - but when it leans, the wheel's volume swings
-     sideways, and on a banked surface (berm, cup wall) the ground RISES on
-     exactly that side, so the rim used to bury itself in the face of the bank.
-     Sample the ground where the leaned wheel actually hangs and stand the bike
-     on whichever is higher, plus a whisker of tyre clearance. */
-  { const nS=clamp(S.n + Math.sin(S.leanBike)*CONFIG.wheelR*.85,
-                   -T.width[i]/2-2, T.width[i]/2+2);
-    base[2] += Math.max(0, zOff(i,nS)-zOff(i,S.n)) + .025; }
+  const S=SIM;
+  const {i, base}=riderBasePos();
   const psi=T.psi[i], th=PLAN.thP[i]||T.theta[i];
   const t=[Math.cos(psi)*Math.cos(th), Math.sin(psi)*Math.cos(th), -Math.sin(th)];   // forward
   let l=[-Math.sin(psi), Math.cos(psi), 0];                                          // left
@@ -1685,12 +1720,6 @@ function drawRider(){
   const Pt=(ft,fl,fk,ax)=>{ const L=ax===1?lb:lr, K=ax===1?kb:kr;
     return [base[0]+t[0]*ft+L[0]*fl+K[0]*fk, base[1]+t[1]*ft+L[1]*fl+K[1]*fk,
             base[2]+t[2]*ft+L[2]*fl+K[2]*fk]; };
-
-  // shadow first: the contact cue that makes the bike sit ON the dirt
-  proj(base,_p[0]);
-  if (_p[0][2]>0){ const r=1.1*CAM.f/_p[0][2];
-    ctx.fillStyle='rgba(10,8,5,.30)'; ctx.beginPath();
-    ctx.ellipse(_p[0][0],_p[0][1], r, r*.28, 0, 0, TAU); ctx.fill(); }
 
   const wR=CONFIG.wheelR, wb=CONFIG.wheelbase;
   // posture blend
