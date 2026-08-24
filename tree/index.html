@@ -228,6 +228,10 @@ const CONFIG = {
   fadeMs:        1400,
   titleMs:       9000,
   runsPerTurn:      1,
+  /* The ring closes through descent.html, which then hands back to the
+     mosaic. Keep this in step with the ROTATION array above - the arrows
+     walk that list, this is what the wall follows on its own, and if the
+     two disagree the remote and the clock take different routes. */
   nextPage: '' /* standalone: nowhere to hand on to; start again */,
   deadlineSlack:  1.6,     // hand off unconditionally past runMs * this
   fitMin:        0.34,     // share of frame height a seedling gets
