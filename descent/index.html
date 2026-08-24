@@ -478,6 +478,43 @@ function genTrail(seedStr){
     mu0[i]=(mu0[i-1]+2*mu0[i]+mu0[i+1])/4; crr[i]=(crr[i-1]+2*crr[i]+crr[i+1])/4;
     rough[i]=(rough[i-1]+2*rough[i]+rough[i+1])/4; }
 
+  /* -- LATERAL heterogeneity: stripes and patches WITHIN the trail width ----
+     The opening stretch of every ride keeps each surface as one clean band
+     across the whole tread, so the viewer learns the colour code. From about
+     a third of the way down, mixed zones appear: either a worn STRIPE of a
+     contrasting surface snaking down the tread (a gravel wash, a slick
+     rut), or discrete PATCHES alternating side to side. Grip now differs
+     ACROSS the width, so the line solver has a real reason to be on one side
+     rather than the other - which is the point.                            */
+  const bId=new Uint8Array(N).fill(255), bLo=new Float32Array(N), bHi=new Float32Array(N);
+  { let i=Math.round(N*RR(.28,.40));                     // homogeneous until here
+    while(i<N-60){
+      if (R01()<.5){ i+=RI(25,90); continue; }           // plain stretch between zones
+      const len=RI(18,60), baseS=surf[i];
+      const cands=[0,1,2,3,4,5,6].filter(s2=>s2!==baseS && Math.abs(SURFS[s2].mu-SURFS[baseS].mu)>=.10);
+      if (!cands.length){ i+=20; continue; }
+      const guest=cands[RI(0,cands.length-1)];
+      const stripe=R01()<.62;                            // else side-to-side patches
+      const cNz=smoothNoise1D(rand, len, 22, .5);
+      const half=RR(.28,.5);                             // stripe half-width, metres
+      let side=R01()<.5?1:-1, left=RI(4,9);
+      for(let k=0;k<len && i<N-40;k++,i++){
+        if (bermH[i]>0) continue;                        // berms stay readable
+        const hw=width[i]/2;
+        if (stripe){
+          const cc=clamp(cNz[k],-.45,.45)*hw;
+          bId[i]=guest;
+          bLo[i]=Math.max(-hw*.94, cc-Math.min(half,hw*.42));
+          bHi[i]=Math.min( hw*.94, cc+Math.min(half,hw*.42));
+        } else {
+          if (--left<=0){ side=-side; left=RI(4,9); }    // discrete patch, then swap sides
+          bId[i]=guest;
+          if (side>0){ bLo[i]=cNz[k]*.3; bHi[i]=hw*.94; }
+          else       { bLo[i]=-hw*.94;  bHi[i]=cNz[k]*.3; }
+        }
+      }
+    } }
+
   /* -- rocks in the riding surface ------------------------------------------
      Four kinds, and a regional "rockiness" mood so the trail alternates
      between genuinely rocky stretches and clean dirt:
@@ -586,7 +623,8 @@ function genTrail(seedStr){
   const totLen=N*ds, totDrop=z[0]-z[N-1];
   const name = trailName();
   return {N, ds, x,y,z, psi:psiA, theta:thetaA, seg:segA, kapH,kapV,kapSm, width, sig0, bermH,
-          bermSide, uphill, hillS, cupH, surf, mu0, crr, rough, rocks, rockBucket, trees, sight,
+          bermSide, uphill, hillS, cupH, surf, mu0, crr, rough, bId, bLo, bHi,
+          rocks, rockBucket, trees, sight,
           totLen, totDrop, name, seed:seedStr, switchbacks, chutes,
           finishIdx: N-6};
 }
@@ -713,6 +751,21 @@ function planLine(rider, i0, i1, nInit, iters=140){
         n[rk.i]=clamp(n[rk.i]+push*.6, lo[rk.i], hi[rk.i]); setP(rk.i);
       }
     }
+    // surface stripes: standing on a slick stripe with grippier dirt an arm's
+    // length away is a mistake no rider makes - drift off it (or ONTO a stripe
+    // that is grippier than the base tread)
+    if (it>iters-30) for(let i=i0+2;i<i1-1;i++){
+      const b=T.bId[i]; if (b===255) continue;
+      const dMu=SURFS[b].mu - T.mu0[i];
+      const inB = n[i]>=T.bLo[i] && n[i]<=T.bHi[i];
+      const mid=(T.bLo[i]+T.bHi[i])/2;
+      if (inB && dMu < -.06){
+        const edge= n[i]>=mid? T.bHi[i]+.18 : T.bLo[i]-.18;
+        n[i]=clamp(n[i]+(edge-n[i])*.3, lo[i], hi[i]); setP(i);
+      } else if (!inB && dMu > .06 && Math.abs(mid-n[i])<.9){
+        n[i]=clamp(n[i]+(mid-n[i])*.18, lo[i], hi[i]); setP(i);
+      }
+    }
   }
   // the weekend rider does not hold a perfect line (full plan only - adding
   // fresh noise at every on-sight replan would make the line boil)
@@ -723,10 +776,21 @@ function planLine(rider, i0, i1, nInit, iters=140){
   return n;
 }
 
-function muEff(i, v, rider){
+/* Surface properties at a POINT (station, lateral offset) - the base band
+   unless a stripe/patch covers that offset. This is what makes lateral
+   heterogeneity real: everything downstream that knows its n asks here. */
+function surfAt(i, n){
+  const b=T.bId[i];
+  if (b!==255 && n>=T.bLo[i] && n<=T.bHi[i]){ const s=SURFS[b];
+    return {mu:s.mu, crr:s.crr, rough:s.rough, id:b}; }
+  return {mu:T.mu0[i], crr:T.crr[i], rough:T.rough[i], id:T.surf[i]};
+}
+function muEff(i, v, rider, n){
   // roughness robs grip as speed rises; the suspension gives most of it back
-  const r=T.rough[i]*CONFIG.suspension;
-  return T.mu0[i]*(1 - r*Math.min(v/25,1));
+  const sp = n===undefined? null : surfAt(i,n);
+  const mu0 = sp? sp.mu : T.mu0[i], rg = sp? sp.rough : T.rough[i];
+  const r=rg*CONFIG.suspension;
+  return mu0*(1 - r*Math.min(v/25,1));
 }
 function crestFactor(i, v){
   // going light over a crest (kapV>0 where grade steepens) unweights the tyres
@@ -760,13 +824,14 @@ function planSpeed(rider, n, i0, i1, vStart, vEnd, blind){
   // 90+ km/h a tucked road descent allows.
   const vlim=new Float32Array(N);
   for(let i=0;i<N;i++) vlim[i]=CONFIG.vmaxAbs*(1-T.rough[i]*.55);
+  for(let i=i0;i<=i1;i++) vlim[i]=CONFIG.vmaxAbs*(1-surfAt(i,n[i]).rough*.55);
   const tag=new Array(N).fill('');
   for(let i=i0;i<=i1;i++){
     const k=Math.abs(kapP[i]);
     if (k<1.2e-3) continue;
     let v=Math.sqrt(g/(k||1e-6));
     for(let it=0;it<2;it++){
-      const mue=muEff(i,v,rider)*rider.gripUse, fN=crestFactor(i,v);
+      const mue=muEff(i,v,rider,n[i])*rider.gripUse, fN=crestFactor(i,v);
       v=Math.sqrt(Math.max(1, bankedLat(mue, g*Math.cos(thP[i])*fN, bank[i]) / k));
     }
     if (v<vlim[i]){ vlim[i]=v;
@@ -817,7 +882,7 @@ function planSpeed(rider, n, i0, i1, vStart, vEnd, blind){
   v[i1]=Math.min(vlim[i1], vEnd??vlim[i1]);
   for(let i=i1-1;i>=i0;i--){
     const vn=v[i+1];
-    const mue=muEff(i,vn,rider), fN=crestFactor(i,vn), gn=g*Math.cos(thP[i])*fN;
+    const mue=muEff(i,vn,rider,n[i]), fN=crestFactor(i,vn), gn=g*Math.cos(thP[i])*fN;
     const latU=clamp(vn*vn*Math.abs(kapP[i])/(mue*gn||1e-6),0,.98);
     const leftover=mue*gn*Math.sqrt(1-latU*latU)*rider.brakeSkill;
     const endo=endoCap(POSTURE.brake, thP[i])*.95;
@@ -833,7 +898,7 @@ function planSpeed(rider, n, i0, i1, vStart, vEnd, blind){
   let wp=rider.wprime;
   for(let i=i0;i<i1;i++){
     const vi=Math.max(1.2,v[i]);
-    const mue=muEff(i,vi,rider), fN=crestFactor(i,vi), gn=g*Math.cos(thP[i])*fN;
+    const mue=muEff(i,vi,rider,n[i]), fN=crestFactor(i,vi), gn=g*Math.cos(thP[i])*fN;
     const latU=clamp(vi*vi*Math.abs(kapP[i])/(mue*gn||1e-6),0,.98);
     const straight=Math.abs(kapP[i])<.02, fast=vi>11;
     // would we like to pedal? only when the BACKWARD-pass ceiling (which already
@@ -855,7 +920,8 @@ function planSpeed(rider, n, i0, i1, vStart, vEnd, blind){
     }
     const posture= P>40? POSTURE.pedal : (straight&&fast? POSTURE.tuck : POSTURE.stand);
     const drag=.5*CONFIG.rho*posture.cda*vi*vi/m;
-    const roll=T.crr[i]*g*Math.cos(thP[i])*(1+T.rough[i]*.5);
+    const spF=surfAt(i,n[i]);
+    const roll=spF.crr*g*Math.cos(thP[i])*(1+spF.rough*.5);
     const drive=Math.min(P/(m*vi), mue*gn*.5*Math.sqrt(1-latU*latU));
     const aNet=g*Math.sin(thP[i]) + drive - drag - roll;
     const v2=Math.min(vlim[i+1]*vlim[i+1], vi*vi+2*aNet*dsP[i+1]);
@@ -919,7 +985,7 @@ function stepSim(dt){
   const vP=gv(PLAN.v), th=gv(PLAN.thP);
   const aFF=(PLAN.v[i+1]*PLAN.v[i+1]-PLAN.v[i]*PLAN.v[i])/(2*Math.max(.5,PLAN.dsP[i+1]));
   let aCmd=aFF + (vP-S.v)*2.2;
-  const mue=muEff(i,S.v,{...rider}), fN=crestFactor(i,S.v), gn=g*Math.cos(th)*fN;
+  const mue=muEff(i,S.v,rider,S.n), fN=crestFactor(i,S.v), gn=g*Math.cos(th)*fN;
   const kap=gv(PLAN.kapP);
   const aLatNeed=S.v*S.v*kap;
   const cap=Math.max(.2, mue*gn);
@@ -934,7 +1000,8 @@ function stepSim(dt){
                           S.v>CONFIG.vgear?0:9);
   const posture=S.posture;
   const cda=POSTURE[posture].cda;
-  const drag=.5*CONFIG.rho*cda*S.v*S.v/m, roll=T.crr[i]*g*Math.cos(th)*(1+T.rough[i]*.5);
+  const spL=surfAt(i,S.n);
+  const drag=.5*CONFIG.rho*cda*S.v*S.v/m, roll=spL.crr*g*Math.cos(th)*(1+spL.rough*.5);
   const grav=g*Math.sin(th);
   let aBrake=0, aDrive=0;
   if (aCmd < grav-drag-roll-.05) aBrake=clamp((grav-drag-roll)-aCmd, 0, brakeCap);
@@ -1023,7 +1090,7 @@ function stepSim(dt){
         S.rockPulse=1; } }
 
   // dust + skid bookkeeping for the renderer
-  if ((S.sliding || (S.brakeF>.55 && T.rough[i]>.25)) && S.v>3) spawnDust(i);
+  if ((S.sliding || (S.brakeF>.55 && spL.rough>.25)) && S.v>3) spawnDust(i);
   if (S.sliding) addSkid(i);
 
   if (S.idx>=T.finishIdx){ S.done=true; }
@@ -1146,28 +1213,49 @@ function updateCamera(dt){
   const S=SIM, i=Math.min(Math.floor(S.idx), T.N-2);
   const rp=stationPoint(i, S.n, [0,0,0]);
   let tgtPos, tgtLook, roll=0;
+  /* WHY STEEP TRAIL USED TO READ AS FLAT (or even uphill). Two couplings tied
+     the camera's DOWNWARD PITCH to the trail's own grade, so the view axis
+     always dived as fast as the mountain did and the slope cancelled out of
+     the picture:
+       (1) the camera stood 2.6 m over the rider and aimed at a point a metre
+           over the trail ahead - on a 20% grade that geometry alone pitches
+           ~18° down against the trail's 11°, so the trail ahead actually rose
+           in frame (the uphill illusion);
+       (2) the crest-clearing loop scanned 8 m BEHIND the rider, and on any
+           steady grade that ground is grade*8 m higher - so the steeper the
+           trail, the higher the camera was jacked, which flattens perspective
+           exactly on the sections that should look most dramatic.
+     The cure: sit LOW (head height), clear only the ground the camera is
+     actually among, and pitch the view at less than half the slope angle so a
+     descent visibly falls away below a horizon that stays in frame. */
+  let thA=0;                         // mean grade over the next 25 m, for pitch
+  { let c2=0; for(let k2=i;k2<Math.min(T.N-1,i+25);k2++){ thA+=(PLAN.thP[k2]||T.theta[k2]); c2++; } thA/=c2||1; }
   if (camMode==='chase'){
-    // sit 7 m behind the rider ALONG THE TRAIL DIRECTION - extrapolated, so the
-    // camera still hangs back properly in the first metres of the run
+    // sit behind the rider ALONG THE TRAIL DIRECTION - extrapolated, so the
+    // camera still hangs back properly in the first metres of the run.
+    // In tight bends, hang back less and float higher - seven metres back in a
+    // switchback puts the camera inside the cutbank of the leg above, and the
+    // (correctly-occluding) hillside then hides the rider entirely
     const ia=Math.min(T.N-1, i+9);
     const pa=stationPoint(ia, 0, [0,0,0]);
     const dx=pa[0]-rp[0], dy=pa[1]-rp[1], dL=Math.hypot(dx,dy)||1;
-    // in tight bends, hang back less and float higher - seven metres back in a
-    // switchback puts the camera inside the cutbank of the leg above, and the
-    // (correctly-occluding) hillside then hides the rider entirely
     const kb=Math.abs(T.kapSm[i]);
     const back=clamp(7*(1-kb*2.8), 3.2, 7);
-    tgtPos=[rp[0]-dx/dL*back, rp[1]-dy/dL*back, rp[2]+2.6+Math.min(1.8,kb*6)];
-    // never let a crest between camera and rider swallow the rider: float the
-    // camera up until it clears everything in the gap
-    for(let k=Math.max(0,i-8); k<=Math.min(T.N-1,i+3); k++)
-      if (tgtPos[2] < T.z[k]+2.0) tgtPos[2]=T.z[k]+2.0;
-    tgtLook=[(rp[0]*.35+pa[0]*.65),(rp[1]*.35+pa[1]*.65),(rp[2]*.35+pa[2]*.65)+1.0];
+    tgtPos=[rp[0]-dx/dL*back, rp[1]-dy/dL*back, rp[2]+1.9+Math.min(1.8,kb*6)];
+    // never let a crest between camera and rider swallow the rider - but only
+    // ground BETWEEN them counts, not the hillside behind the camera
+    for(let k=Math.max(0,i-Math.ceil(back)); k<=Math.min(T.N-1,i+3); k++)
+      if (tgtPos[2] < T.z[k]+1.5) tgtPos[2]=T.z[k]+1.5;
+    const lx2=rp[0]*.35+pa[0]*.65, ly2=rp[1]*.35+pa[1]*.65;
+    const hd=Math.hypot(lx2-tgtPos[0], ly2-tgtPos[1])||1;
+    const pitchT=-(thA*.45 + 3.5*DEG);
+    tgtLook=[lx2, ly2, tgtPos[2] + Math.tan(pitchT)*hd];
     roll=S.leanBike*.30;
   } else if (camMode==='fp'){
     tgtPos=[rp[0],rp[1],rp[2]+1.62];
     const ia=Math.min(T.N-1,i+14), pa=stationPoint(ia, PLAN.n[ia]||0, [0,0,0]);
-    tgtLook=[pa[0],pa[1],pa[2]+.9]; roll=S.leanBike*.8;
+    const hd=Math.hypot(pa[0]-tgtPos[0], pa[1]-tgtPos[1])||1;
+    tgtLook=[pa[0],pa[1], tgtPos[2] + Math.tan(-(thA*.55+2*DEG))*hd]; roll=S.leanBike*.8;
   } else {                    // side: stand off on the downhill side, tracking
     const side=-T.uphill[i];
     const off=stationPoint(i, side*9, [0,0,0]);
@@ -1352,6 +1440,29 @@ function drawStrip(a,b){
       }
     }
   }
+  // lateral stripe/patch of a second surface, painted over the base tread with
+  // a crisp edge - the whole point is that the viewer can SEE the choice
+  if (T.bId[a]!==255){
+    const gs=SURFS[T.bId[a]];
+    const loB=T.bId[b]!==255? T.bLo[b]:T.bLo[a], hiB=T.bId[b]!==255? T.bHi[b]:T.bHi[a];
+    const q0=stationPoint(a, T.bLo[a], [0,0,0]); q0[2]+=.012;
+    const q1=stationPoint(a, T.bHi[a], [0,0,0]); q1[2]+=.012;
+    const q2=stationPoint(b, hiB, [0,0,0]); q2[2]+=.012;
+    const q3=stationPoint(b, loB, [0,0,0]); q3[2]+=.012;
+    proj(q0,_p[0]); proj(q1,_p[1]); proj(q2,_p[2]); proj(q3,_p[3]);
+    quad(_p[0],_p[1],_p[2],_p[3], shadeQuad(q0,q1,q2,q3, gs.col, 1), 'rgba(30,24,18,.28)');
+    if (gs.spk && _p[0][2]<70 && _p[0][2]>0){
+      const rng=mulberry32(a*3557+11);
+      ctx.fillStyle=gs.spk;
+      for(let d=0;d<3;d++){
+        const fx=rng(), fy=rng();
+        const px=_p[0][0]+(_p[1][0]-_p[0][0])*fx+(_p[3][0]-_p[0][0])*fy;
+        const py=_p[0][1]+(_p[1][1]-_p[0][1])*fx+(_p[3][1]-_p[0][1])*fy;
+        const rr=.07*CAM.f/_p[0][2];
+        ctx.fillRect(px,py,Math.max(1,rr),Math.max(1,rr));
+      }
+    }
+  }
   drawApron(a,b,ca,cb, -1); drawApron(a,b,ca,cb, 1);
 }
 const crossCache=new Map();
@@ -1526,6 +1637,15 @@ function drawDust(){
 function drawRider(){
   const S=SIM, i=clamp(Math.floor(S.idx),1,T.N-2);
   const base=stationPoint(i, S.n, [0,0,0]);
+  /* Keep the tyres OUT of the dirt. The bike is drawn about the contact point
+     at the rider's centreline n - but when it leans, the wheel's volume swings
+     sideways, and on a banked surface (berm, cup wall) the ground RISES on
+     exactly that side, so the rim used to bury itself in the face of the bank.
+     Sample the ground where the leaned wheel actually hangs and stand the bike
+     on whichever is higher, plus a whisker of tyre clearance. */
+  { const nS=clamp(S.n + Math.sin(S.leanBike)*CONFIG.wheelR*.85,
+                   -T.width[i]/2-2, T.width[i]/2+2);
+    base[2] += Math.max(0, zOff(i,nS)-zOff(i,S.n)) + .025; }
   const psi=T.psi[i], th=PLAN.thP[i]||T.theta[i];
   const t=[Math.cos(psi)*Math.cos(th), Math.sin(psi)*Math.cos(th), -Math.sin(th)];   // forward
   let l=[-Math.sin(psi), Math.cos(psi), 0];                                          // left
@@ -1630,6 +1750,33 @@ function drawHUD(){
   ctx.font=`400 ${17*u}px ui-sans-serif`; ctx.fillStyle='rgba(220,230,244,.6)';
   ctx.fillText('mph', 40*u, H-94*u);
   ctx.fillText(kmh.toFixed(0)+' km/h', 40*u, H-70*u);
+  // WHY the trail is about to demand a different speed: the tightest ceiling
+  // in the next 35 m, named - corner, rock, sight line, or simply the dirt.
+  // Its own pill ABOVE the panel, so the eye finds cause-and-effect instantly.
+  { let jm=-1, vm=1e9;
+    for(let j=i+2;j<Math.min(T.N-1,i+38);j++) if (PLAN.v[j]<vm){ vm=PLAN.v[j]; jm=j; }
+    const slowing = jm>0 && vm < S.v+2.0;
+    const sp= slowing? surfAt(jm, PLAN.n[jm]) : null;
+    const surfCause = slowing && !PLAN.tag[jm];
+    const cause= !slowing? 'trail open — carrying speed'
+      : PLAN.tag[jm] || (sp.rough>.32? 'rough '+SURFS[sp.id].name : SURFS[sp.id].name+' — low grip');
+    const head= slowing? '▼ '+Math.round(vm*2.23694)+' mph': '';
+    ctx.font=`600 ${15*u}px ui-sans-serif`;
+    const wHead=head? ctx.measureText(head).width : 0;
+    ctx.font=`500 ${14*u}px ui-sans-serif`;
+    const wCause=ctx.measureText(cause).width;
+    const pw3=wHead+wCause+(head?46:28)*u;
+    ctx.fillStyle='rgba(8,11,18,.55)';
+    roundRect(18*u, H-248*u, pw3, 32*u, 9*u); ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,.16)'; ctx.lineWidth=1;
+    roundRect(18*u, H-248*u, pw3, 32*u, 9*u); ctx.stroke();
+    ctx.textAlign='left';
+    if (head){ ctx.font=`600 ${15*u}px ui-sans-serif`; ctx.fillStyle='#ffd166';
+      ctx.fillText(head, 32*u, H-226*u); }
+    ctx.font=`500 ${14*u}px ui-sans-serif`;
+    ctx.fillStyle= surfCause? SURFS[sp.id].col : (slowing? 'rgba(235,242,250,.85)':'rgba(220,230,244,.5)');
+    ctx.fillText(cause, (head? 32+wHead/u+14 : 32)*u, H-226*u);
+  }
   const gr=Math.tan(PLAN.thP[i]||0)*100;
   const sg=latSlope(i,S.n), camDeg=Math.abs(Math.atan(sg)/DEG);
   const camDir= T.bermH[i]>0? 'berm' : T.cupH[i]>0? 'cupped'
@@ -1644,7 +1791,7 @@ function drawHUD(){
   ctx.strokeStyle='rgba(255,255,255,.14)'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(cx-R0*1.05,cy2); ctx.lineTo(cx+R0*1.05,cy2); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(cx,cy2-R0*1.05); ctx.lineTo(cx,cy2+R0*1.05); ctx.stroke();
-  const capG=muEff(i,S.v,RUN.rider)*Math.cos(PLAN.thP[i]||0)*crestFactor(i,S.v);
+  const capG=muEff(i,S.v,RUN.rider,S.n)*Math.cos(PLAN.thP[i]||0)*crestFactor(i,S.v);
   ctx.strokeStyle= S.sliding? '#ff5546':'rgba(120,220,160,.8)'; ctx.lineWidth=2;
   ctx.beginPath(); ctx.arc(cx,cy2,R0*Math.min(1.05,capG/1.1),0,TAU); ctx.stroke();
   const dx=clamp(-S.aLat/CONFIG.g/1.1,-1.05,1.05)*R0;
@@ -1720,7 +1867,12 @@ function updateTicker(dt){
   // find the constraint we are currently riding toward
   let limIdx=-1;
   for(let k=i;k<Math.min(T.N-1,i+60);k++){ if (PLAN.v[k]<S.v-0.8){ limIdx=k; break; } }
-  const limTag= limIdx>=0? (PLAN.tag[limIdx]||'') : '';
+  let limTag= limIdx>=0? (PLAN.tag[limIdx]||'') : '';
+  // name the DIRT too when it is part of why the limit is what it is
+  if (limTag && limIdx>=0){
+    const spT=surfAt(limIdx, PLAN.n[limIdx]);
+    if (spT.mu<.68) limTag += ' · '+SURFS[spT.id].name+' μ'+spT.mu.toFixed(2);
+  }
   // a big rock just ahead is a SPOTLIGHT moment: name the choice being made
   let rockNear=null, rockDist=0;
   for(let k=0;k<16 && !rockNear;k++){
@@ -1850,7 +2002,8 @@ function showIntroCard(){
     <div class="sub">${(T.totLen/1000).toFixed(1)} km · ${T.totDrop.toFixed(0)} m of descent · avg ${avgGr.toFixed(0)}% · ${T.rocks.filter(r=>r.kind!=='small').length} big rocks</div>
     <div class="rows">${RUN.rider.label.toLowerCase()} · ${RUN.mode==='known'
       ? 'has ridden this trail — full line planned\npredicted time '+fmtTime(RUN.predicted)
-      : 'has never seen this trail\nwill ride only as fast as the sight line allows'}</div>
+      : 'has never seen this trail\nwill ride only as fast as the sight line allows'}${
+      T.bId.some(v=>v!==255)? '\nsurfaces run in clean bands at first, then mix into stripes and patches':''}</div>
     <div class="surfbar">${sb.map(s=>`<div style="flex:${s.frac};background:${SURFS[s.id].col}"></div>`).join('')}</div>
     <div class="surfkey">${sb.map(s=>SURFS[s.id].name+' '+(s.frac*100).toFixed(0)+'%').join(' · ')}</div>
     <canvas></canvas>`;
