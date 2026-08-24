@@ -56,10 +56,32 @@
   #card .surfkey { margin-top:.4em; font-family:ui-monospace,Menlo,monospace; font-size:.62em;
     color:rgba(200,212,230,.65); letter-spacing:.02em; }
 
-  /* ---- caption bar, matching the rest of the wall ---------------------- */
-  #caption { position:fixed; left:0; right:0; bottom:0; z-index:8; text-align:center;
-    background:linear-gradient(to top, rgba(3,5,10,.88) 0%, rgba(3,5,10,.62) 55%, rgba(3,5,10,0) 100%);
-    padding:1.5em 0 .65em 0; pointer-events:none; }
+  /* ---- caption bar ----
+     A PLATE THAT HUGS THE TEXT, rather than the full-width gradient the map
+     pages use. Both of the obvious options are wrong here, and I tried both:
+
+     A full-bleed scrim at bottom:0 - which is what hike.html and weather.html
+     do, because they caption over a bright satellite basemap - covers the
+     lowest ninety pixels of a 2160-tall screen. That is exactly the band
+     holding this page's INSTRUMENTS: the grade and camber lines at the foot of
+     the speed panel sit 58 px off the bottom, and the elevation profile's
+     lower edge is lower still. It put a wash over both.
+
+     Dropping the scrim for a text-shadow then failed the other way. The
+     caption is pale, and after the round-3 camera change the pale gravel of
+     the trail itself runs straight through the bottom centre of the frame -
+     light text on light ground, and no shadow rescues that.
+
+     So: a small dark plate sized to its own contents and centred, which is the
+     same idiom as the rider chips at the top left. It darkens the ~450 px
+     behind the words and nothing else - the speed panel ends around x=1520 of
+     3840 and the profile box starts around x=2900, so the plate sits in the
+     clear gap between them. Lifted off the very edge because televisions
+     overscan. */
+  #caption { position:fixed; left:0; right:0; bottom:1.6vh; z-index:8; text-align:center;
+    width:fit-content; margin-inline:auto; pointer-events:none;
+    background:rgba(6,9,15,.55); border-radius:.5em; padding:.5em 1.5em .55em;
+    text-shadow:0 1px 3px rgba(0,0,0,.7); }
   #caption .what { font:300 clamp(12px,1.1vw,24px)/1.3 ui-sans-serif,system-ui,sans-serif;
     letter-spacing:.24em; text-transform:uppercase; color:rgba(235,241,249,.88); }
   #caption .params { margin-top:.25em; font:400 clamp(9px,.75vw,16px)/1.3 ui-monospace,Menlo,monospace;
