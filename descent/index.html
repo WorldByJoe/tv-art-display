@@ -233,7 +233,7 @@ const RIDERS = {
              sightRead:1.15, muAssume:.60, lineNoise:.03, edgeMargin:.25,
              rollA:6.8, rollB:11 },      // rolls a rock of height h at rollA - rollB*h m/s
   weekend: { label:'WEEKEND RIDER',col:'#4c8dff', massRider:86, cp:195, sprint:520, wprime:9000,
-             gripUse:.78, brakeSkill:.80, blindV:3.2, sightSafety:.80, replan:.60,
+             gripUse:.78, brakeSkill:.80, blindV:3.5, sightSafety:.82, replan:.60,
              sightRead:.85, muAssume:.50, lineNoise:.13, edgeMargin:.40,
              rollA:5.0, rollB:10 },     // a 40 cm rock brings them nearly to a stop
 };
@@ -313,7 +313,7 @@ function genTrail(seedStr){
   // same seed is a fair head-to-head between riders and knowledge modes
   // (keys r and m re-run the identical trail).
   const seedFn = xmur3(seedStr); rand = mulberry32(seedFn());
-  const vertTarget = Q.get('vert') ? +Q.get('vert') : RR(280,360);
+  const vertTarget = Q.get('vert') ? +Q.get('vert') : RR(250,330);
 
   const ds = CONFIG.ds;
   const x=[],y=[],z=[],psiA=[],thetaA=[],segA=[];       // centreline + segment tag
@@ -326,6 +326,13 @@ function genTrail(seedStr){
   const NMAXguess = Math.ceil(vertTarget/0.10)+600;
   const fallDrift = smoothNoise1D(rand, NMAXguess, 600, 30*DEG);
   const slopeNz  = smoothNoise1D(rand, NMAXguess, 260, .34);
+  /* PITCH MOOD: a slow multiplier on every segment's grade target, so whole
+     stretches of a run are genuinely mellow (x0.5) or genuinely committing
+     (x1.6) instead of everything hovering near the average - Joe's ask, the
+     runs read too uniform. Meadow segments below do the same at the shallow
+     extreme. */
+  const moodNz = smoothNoise1D(rand, NMAXguess, 300, .55);
+  const moodAt = i => clamp(1 + moodNz[Math.min(i,NMAXguess-1)], .58, 1.6);
   const psiFall0 = psi + RR(-.6,.6);
   const hillAt = i => clamp(.64 + slopeNz[Math.min(i,NMAXguess-1)], .36, .98); // tan(hill slope)
   const fallAt = i => psiFall0 + fallDrift[Math.min(i,NMAXguess-1)];
@@ -355,34 +362,46 @@ function genTrail(seedStr){
   }
 
   /* -- segment machine -- */
-  const SEG={TRAV:0,SBEND:1,SWITCH:2,CHUTE:3,ROLL:4,RUNOUT:5};
+  const SEG={TRAV:0,SBEND:1,SWITCH:2,CHUTE:3,ROLL:4,RUNOUT:5,MEADOW:6};
   const switchbacks=[];    // [startIdx,endIdx,dir,bermH,R] for berms/surfacing later
   const chutes=[];
   let switchCool=0;        // stations until another switchback is allowed - real
                            // trails breathe between hairpins; without this the
                            // generator once tied itself into a knot of them
-  while(drop < vertTarget){
+  // stop at the vert target OR a length cap - a mellow-mood trail otherwise
+  // stretches a fixed drop into an eight-minute ride, far too long for the wall
+  while(drop < vertTarget && x.length < 2000){
     const i0=x.length, hill=hillAt(i0);
     let type;
     if (Math.abs(u) > uMax && switchCool<=0) type=SEG.SWITCH;
     else { const r=R01();
-      type = r<.36?SEG.TRAV : r<.56?SEG.SBEND : r<.68?(hill>.5?SEG.CHUTE:SEG.TRAV)
+      type = r<.30?SEG.TRAV : r<.48?SEG.SBEND : r<.58?SEG.MEADOW
+           : r<.70?(hill>.5?SEG.CHUTE:SEG.TRAV)
            : r<.84?SEG.ROLL : (switchCool<=0?SEG.SWITCH:SEG.TRAV); }
     switchCool -= 1;
+    const mood=moodAt(i0);
 
     if (type===SEG.TRAV){
       // grade wanders WITHIN a traverse too - flat rests, sudden steep pitches -
       // so the speed plan has real texture, not one long constant slope
-      const len=RI(55,150), gr=clamp(RR(.05,.28), 0, hill*.85);
+      const len=RI(55,150), gr=clamp(RR(.05,.28)*mood, .03, hill*.85);
       const wig = smoothNoise1D(rand, len, 22, .016);
       const gnz = smoothNoise1D(rand, len, 45, .08);
       for(let k=0;k<len;k++)
         pushStation(wig[k], Math.atan(clamp(gr+gnz[k], .02, hill*.9)), SEG.TRAV);
       switchCool-=len;
+    } else if (type===SEG.MEADOW){
+      // a genuine breather: near-flat cruising where pedaling is what makes
+      // speed, before the mountain tips away again
+      const len=RI(40,100), gr=RR(.02,.06);
+      const wig = smoothNoise1D(rand, len, 30, .012);
+      for(let k=0;k<len;k++)
+        pushStation(wig[k], Math.atan(clamp(gr, .015, hill*.9)), SEG.MEADOW);
+      switchCool-=len;
     } else if (type===SEG.SBEND){
       const n=RI(1,2);
       for(let b=0;b<n;b++){
-        const R_=RR(9,24), gr=RR(.10,.22);
+        const R_=RR(9,24), gr=clamp(RR(.10,.22)*mood, .04, hill*.85);
         // pick the turn direction that keeps the heading inside the downhill cone
         const d0=wrapA(psi-fallAt(x.length));
         let dpsi=RR(38,80)*DEG*(R01()<.5?1:-1);
@@ -398,7 +417,14 @@ function genTrail(seedStr){
       // other side - however far that actually is from the current heading -
       // so the exit leg is guaranteed to head back across the hill, never up it.
       const berm = R01()<.5;
-      const R_ = berm? RR(3.4,6.5) : RR(2.6,5.0);
+      // MOMENTUM TURN (Joe's ask): about half the bermed hairpins bank up
+      // steeply AND their exit ramp CLIMBS - the only way through at pace is
+      // to dive in, rail the high bank at speed, and let the momentum pay for
+      // the rise. The physics needs no special case: the bank raises the
+      // corner's speed ceiling, the forward pass carries speed into it, and
+      // the climb-out bleeds whatever the rider kept.
+      const ascend = berm && R01()<.5;
+      const R_ = ascend? RR(4.5,7) : berm? RR(3.4,6.5) : RR(2.6,5.0);
       const lead=RI(8,14);
       for(let k=0;k<lead;k++) pushStation(0, Math.atan(RR(.12,.18)), SEG.TRAV);
       const d0=wrapA(psi-fallAt(x.length));
@@ -408,9 +434,14 @@ function genTrail(seedStr){
       const len=Math.max(4,Math.round(dpsi*R_/ds)), k0=dir/R_;
       for(let k=0;k<len;k++){
         const tfrac=k/len, apex=1-Math.abs(tfrac-.5)*2;       // 0 at ends, 1 mid
-        pushStation(k0, Math.atan(lerp(.14,.08,apex)), SEG.SWITCH);
+        pushStation(k0, Math.atan(ascend? (tfrac<.5? lerp(.14,.02,apex) : .02)
+                                        : lerp(.14,.08,apex)), SEG.SWITCH);
       }
-      switchbacks.push([s0, x.length, dir, berm? RR(.28,.55): 0, R_]);
+      switchbacks.push([s0, x.length, dir, ascend? RR(.5,.8) : berm? RR(.28,.55): 0, R_]);
+      if (ascend){
+        const up=RI(8,20), gUp=RR(.06,.14);
+        for(let k=0;k<up;k++) pushStation(0, Math.atan(-gUp), SEG.TRAV);
+      }
       const tail=RI(30,70), gr=clamp(RR(.12,.22),0,hill*.85);
       for(let k=0;k<tail;k++) pushStation(0, Math.atan(gr), SEG.TRAV);
       travDir = -travDir;
@@ -421,13 +452,13 @@ function genTrail(seedStr){
       const d0=wrapA(psi-fallAt(x.length));
       const steer=Math.round(Math.abs(d0)*8/ds);
       for(let k=0;k<steer;k++) pushStation(-Math.sign(d0)/8, Math.atan(.16), SEG.SBEND);
-      const len=RI(16,40), gr=clamp(RR(.26,.38), 0, hill*.95);
+      const len=RI(16,40), gr=clamp(RR(.26,.38)*Math.max(1,mood), 0, hill*.95);
       const s0=x.length;
       for(let k=0;k<len;k++) pushStation(RR(-.004,.004), Math.atan(gr), SEG.CHUTE);
       chutes.push([s0,x.length]);
       switchCool-=len;
     } else { // ROLLERS
-      const len=RI(30,70), base=RR(.11,.17), wl=RR(8,14);
+      const len=RI(30,70), base=clamp(RR(.11,.17)*mood,.05,hill*.8), wl=RR(8,14);
       for(let k=0;k<len;k++)
         pushStation(0, Math.atan(clamp(base+.09*Math.sin(k/wl*TAU),-.03,hill*.85)), SEG.ROLL);
       switchCool-=len;
@@ -854,7 +885,12 @@ function planSpeed(rider, n, i0, i1, vStart, vEnd, blind){
     let v=Math.sqrt(g/(k||1e-6));
     for(let it=0;it<2;it++){
       const mue=muEff(i,v,rider,n[i])*rider.gripUse, fN=crestFactor(i,v);
-      v=Math.sqrt(Math.max(1, bankedLat(mue, g*Math.cos(thP[i])*fN, bank[i]) / k));
+      // the PLANNER trusts a berm only so far (t capped .62 ~ 32 deg): the
+      // full banked-turn law on a 40 deg wall promises hairpins at 60 km/h,
+      // which nobody rides. The DYNAMICS keep the full law as reserve, same
+      // one-sided margin as gripUse - so the trust cap never causes slides.
+      const tB=Math.min(bank[i], .62);
+      v=Math.sqrt(Math.max(1, bankedLat(mue, g*Math.cos(thP[i])*fN, tB) / k));
     }
     if (v<vlim[i]){ vlim[i]=v;
       tag[i]= T.bermH[i]>0? 'railing the berm'
@@ -1018,7 +1054,10 @@ function stepSim(dt){
   const endo=endoCap(POSTURE.brake, th)*.95;
   const brakeCap=Math.min(cap*leftFrac, Math.max(.25,endo));
   const wantP=gv(PLAN.pw);
-  const driveCap=Math.min(wantP>0? wantP/(m*Math.max(2,S.v)) : 0, cap*.5*leftFrac,
+  // low-speed floor MUST match the planner's (1.2 m/s): the plan promises the
+  // climb-out thrust of P/(m*1.2) at grovel speeds, and a higher floor here
+  // made the rider fall behind the plan on every ascending hairpin
+  const driveCap=Math.min(wantP>0? wantP/(m*Math.max(1.2,S.v)) : 0, cap*.5*leftFrac,
                           S.v>CONFIG.vgear?0:9);
   const posture=S.posture;
   const cda=POSTURE[posture].cda;
@@ -1270,14 +1309,20 @@ function updateCamera(dt){
       if (tgtPos[2] < T.z[k]+1.5) tgtPos[2]=T.z[k]+1.5;
     const lx2=rp[0]*.35+pa[0]*.65, ly2=rp[1]*.35+pa[1]*.65;
     const hd=Math.hypot(lx2-tgtPos[0], ly2-tgtPos[1])||1;
-    const pitchT=-(thA*.45 + 3.5*DEG);
+    /* Pitch stays SHALLOWER than the slope at every gradient. The old form,
+       -(0.45*thA + 3.5deg), was tuned on steeps: at a gentle 5% the constant
+       made the view axis dive 4.8 deg against the trail's 2.9, so the trail
+       ROSE in frame and mellow descents read as flat or uphill (Joe caught
+       it). Proportional-first keeps a 5% descent visibly falling away - and
+       on a genuine climb (thA negative) the camera looks slightly UP. */
+    const pitchT=-(thA*.55 + 0.5*DEG);
     tgtLook=[lx2, ly2, tgtPos[2] + Math.tan(pitchT)*hd];
     roll=S.leanBike*.30;
   } else if (camMode==='fp'){
     tgtPos=[rp[0],rp[1],rp[2]+1.62];
     const ia=Math.min(T.N-1,i+14), pa=stationPoint(ia, PLAN.n[ia]||0, [0,0,0]);
     const hd=Math.hypot(pa[0]-tgtPos[0], pa[1]-tgtPos[1])||1;
-    tgtLook=[pa[0],pa[1], tgtPos[2] + Math.tan(-(thA*.55+2*DEG))*hd]; roll=S.leanBike*.8;
+    tgtLook=[pa[0],pa[1], tgtPos[2] + Math.tan(-(thA*.6+.5*DEG))*hd]; roll=S.leanBike*.8;
   } else {                    // side: stand off on the downhill side, tracking
     const side=-T.uphill[i];
     const off=stationPoint(i, side*9, [0,0,0]);
@@ -1808,9 +1853,15 @@ function drawHUD(){
     for(let j=i+2;j<Math.min(T.N-1,i+38);j++) if (PLAN.v[j]<vm){ vm=PLAN.v[j]; jm=j; }
     const slowing = jm>0 && vm < S.v+2.0;
     const sp= slowing? surfAt(jm, PLAN.n[jm]) : null;
-    const surfCause = slowing && !PLAN.tag[jm];
+    // the 3-wide min-filter often parks the minimum on an UNTAGGED neighbour
+    // of the tagged station - look a couple of stations either side for the name
+    let tagNear='';
+    if (slowing) for(const dj of [0,1,-1,2,-2]){
+      const jj=jm+dj; if (jj>0&&jj<T.N&&PLAN.tag[jj]){ tagNear=PLAN.tag[jj]; break; } }
+    const surfCause = slowing && !tagNear;
     const cause= !slowing? 'trail open — carrying speed'
-      : PLAN.tag[jm] || (sp.rough>.32? 'rough '+SURFS[sp.id].name : SURFS[sp.id].name+' — low grip');
+      : tagNear || (sp.rough>.32? 'rough '+SURFS[sp.id].name
+                   : SURFS[sp.id].name + (sp.mu<.68? ' — low grip':''));
     const head= slowing? '▼ '+Math.round(vm*2.23694)+' mph': '';
     ctx.font=`600 ${15*u}px ui-sans-serif`;
     const wHead=head? ctx.measureText(head).width : 0;
@@ -1828,12 +1879,16 @@ function drawHUD(){
     ctx.fillStyle= surfCause? SURFS[sp.id].col : (slowing? 'rgba(235,242,250,.85)':'rgba(220,230,244,.5)');
     ctx.fillText(cause, (head? 32+wHead/u+14 : 32)*u, H-226*u);
   }
+  // grade with an explicit DIRECTION arrow - at gentle gradients the eye
+  // cannot tell up from down, so the number says it (20u: sofa-read value)
   const gr=Math.tan(PLAN.thP[i]||0)*100;
   const sg=latSlope(i,S.n), camDeg=Math.abs(Math.atan(sg)/DEG);
   const camDir= T.bermH[i]>0? 'berm' : T.cupH[i]>0? 'cupped'
     : (Math.sign(sg)===T.uphill[i]? 'out':'in');
-  ctx.fillText('grade '+gr.toFixed(0)+'%', 40*u, H-46*u);
-  ctx.fillText('camber '+camDeg.toFixed(0)+'° '+camDir, 40*u, H-24*u);
+  ctx.font=`600 ${20*u}px ui-sans-serif`; ctx.fillStyle= gr<-.5? '#6fb7ff':'rgba(235,242,250,.9)';
+  ctx.fillText((gr<-.5?'↑ ':'↓ ')+Math.abs(gr).toFixed(0)+'%', 40*u, H-46*u);
+  ctx.font=`400 ${16*u}px ui-sans-serif`; ctx.fillStyle='rgba(220,230,244,.6)';
+  ctx.fillText('camber '+camDeg.toFixed(0)+'° '+camDir, 40*u, H-22*u);
 
   // The tyre-grip circle. The ring is ALL the grip this surface offers at this
   // speed; the amber dot is how much is being spent, and in which direction -
@@ -1889,20 +1944,36 @@ function drawHUD(){
   ctx.fillStyle='rgba(235,242,250,.85)'; ctx.textAlign='left'; ctx.font=`500 ${15*u}px ui-sans-serif`;
   ctx.fillText(sc.name+'   μ '+T.mu0[i].toFixed(2)+' · crr '+T.crr[i].toFixed(3), 64*u, H-183*u);
 
-  // elevation profile with progress
-  const pw2=380*u, ph2=54*u, px2=W-pw2-30*u, py2=H-ph2-26*u;
+  /* Elevation profile. Taller than it was, and the line is coloured by LOCAL
+     grade - Joe found the old thin white line read as one uniform ramp, and
+     measuring it he was right: at 380x54 units against ~2 km x 300 m the
+     vertical exaggeration was 0.86x, LESS than 1:1. Colour carries what
+     geometry cannot: green mellow, amber steep, red plunging, and BLUE where
+     the trail actually climbs (the momentum-turn ramps). The widget is a
+     shape, not a table - the only numerals are the live clock and the
+     vertical remaining, at sofa size. */
+  const pw2=400*u, ph2=88*u, px2=W-pw2-30*u, py2=H-ph2-26*u;
   ctx.fillStyle='rgba(8,11,18,.55)'; roundRect(px2-12*u,py2-12*u,pw2+24*u,ph2+24*u,10*u); ctx.fill();
-  ctx.beginPath();
-  for(let k2=0;k2<T.N;k2+=8){
-    const xx=px2+k2/T.N*pw2, yy=py2+ (1-(T.z[k2]-T.z[T.N-1])/(T.z[0]-T.z[T.N-1]))*ph2;
-    k2?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);
+  if (!RUN.zSpan){ let lo=1e9,hi=-1e9;
+    for(let k2=0;k2<T.N;k2++){ if(T.z[k2]<lo)lo=T.z[k2]; if(T.z[k2]>hi)hi=T.z[k2]; }
+    RUN.zSpan=[lo, Math.max(1,hi-lo)]; }
+  const zy=k2=>py2+(1-(T.z[k2]-RUN.zSpan[0])/RUN.zSpan[1])*ph2;
+  ctx.lineWidth=2.6*u; ctx.lineCap='round';
+  for(let k2=0;k2<T.N-6;k2+=6){
+    const g2=Math.tan(T.theta[k2]);
+    ctx.strokeStyle= g2<-.005? '#6fb7ff'      // climbing - the momentum-turn ramps
+      : g2<.05? '#7ad38f' : g2<.11? '#e8e2c8'
+      : g2<.19? '#ffb15e' : g2<.27? '#ff7a4d' : '#ff4436';
+    ctx.beginPath(); ctx.moveTo(px2+k2/T.N*pw2, zy(k2));
+    ctx.lineTo(px2+Math.min(k2+6,T.N-1)/T.N*pw2, zy(Math.min(k2+6,T.N-1))); ctx.stroke();
   }
-  ctx.strokeStyle='rgba(230,238,248,.7)'; ctx.lineWidth=1.6; ctx.stroke();
-  const fx2=px2+S.idx/T.N*pw2, fy2=py2+(1-(T.z[i]-T.z[T.N-1])/(T.z[0]-T.z[T.N-1]))*ph2;
-  ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(fx2,fy2,4.5*u,0,TAU); ctx.fill();
-  ctx.fillStyle='rgba(220,230,244,.6)'; ctx.font=`400 ${13*u}px ui-monospace,Menlo,monospace`;
+  const fx2=px2+S.idx/T.N*pw2, fy2=zy(i);
+  ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(fx2,fy2,6*u,0,TAU); ctx.fill();
+  ctx.strokeStyle='rgba(8,11,18,.8)'; ctx.lineWidth=1.5*u;
+  ctx.beginPath(); ctx.arc(fx2,fy2,6*u,0,TAU); ctx.stroke();
+  ctx.fillStyle='rgba(235,242,250,.85)'; ctx.font=`500 ${20*u}px ui-monospace,Menlo,monospace`;
   ctx.textAlign='right';
-  ctx.fillText(fmtTime(S.time)+'   '+Math.max(0,(T.z[i]-T.z[T.N-1])).toFixed(0)+' m to go', px2+pw2, py2-18*u);
+  ctx.fillText(fmtTime(S.time)+'   '+Math.max(0,(T.z[i]-T.z[T.N-1])).toFixed(0)+' m to go', px2+pw2, py2-20*u);
   ctx.restore();
 }
 function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y);
@@ -1942,6 +2013,9 @@ function updateTicker(dt){
       : `squaring up — the ${cm} cm step spans the whole trail`; }
   else if (rockNear && rockNear.choice==='around'){
     act='PICKING A LINE'; why=`around the big rock — rolling ${cm} cm would cost +${(rockNear.dtCost||0).toFixed(1)}s`; }
+  else if ((PLAN.thP[i]||0) < -.02){
+    act='CLIMBING'; why= S.pedalW>RUN.rider.cp*.6? 'digging in — a short rise'
+      : 'momentum is paying for the rise'; }
   else if (S.brakeF>.75){ act='HARD ON THE BRAKES'; why=limTag? 'setting up for '+limTag : ''; }
   else if (S.brakeF>.2 && Math.abs(S.aLat)>2.5){ act='TRAIL-BRAKING'; why=limTag? 'easing into '+limTag:''; }
   else if (S.brakeF>.2){ act='BRAKING'; why=limTag? 'for '+limTag : (RUN.mode==='onsight'&&PLAN.tag[Math.min(T.N-1,limIdx<0?i:limIdx)]==='sight line ends ahead'?'can’t see past the corner':''); }
