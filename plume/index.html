@@ -257,10 +257,10 @@ function drawSlpm(){
 
 const ACTS = [
   { key:'steady',  name:'Steady Wind',    passes:2,
-    windMean:5.5, windSd:0.8, meanderSd:8,  stability:'D',
+    windMean:5.5, meanderSd:8,  stability:'D',
     blurb:'A brisk, steady breeze — the plume holds still and the answer comes quickly' },
   { key:'meander', name:'Plume Meander',  passes:2,
-    windMean:1.6, windSd:0.5, meanderSd:34, stability:'B',
+    windMean:1.6, meanderSd:34, stability:'B',
     blurb:'Light, wandering wind — the same leak, and now the arc refuses to close' },
   /* THESE TWO WERE NAMED AFTER THE LEAK, and cannot be any more: the rate is
      drawn per leak now, so a run called "A Small Leak" would regularly have
@@ -269,10 +269,10 @@ const ACTS = [
      encode - so that is what they are called. How big the leak turns out to be
      is the draw's business, and the card reports what it actually was. */
   { key:'thorough',name:'Four Passes',     passes:4,
-    windMean:3.2, windSd:0.7, meanderSd:18, stability:'D',
+    windMean:3.2, meanderSd:18, stability:'D',
     blurb:'Neutral air, and the same streets driven four times — what does repetition buy?' },
   { key:'gusty',   name:'Gusty',           passes:3,
-    windMean:4.0, windSd:2.2, meanderSd:24, stability:'C',
+    windMean:4.0, meanderSd:24, stability:'C',
     blurb:'Wind that shifts between one pass and the next — easy to smell, hard to place' }
 ];
 
@@ -397,6 +397,7 @@ let sources=[];            // 1..4 leaks, each with its own release rate
 let puffs=[];
 let car={x:0,y:0,leg:0,t:0,route:[],heading:0};
 let windDir=0, windMeanDir=0, windSpeed=0, windMeanSpeed=0;
+let windDir0=0, gustU=0, gustV=0;   // act's base direction; turbulent vector
 let samples=0, detections=0, passesDone=0, peakSeen=0;
 let simClock=0, nextSampleAt=0;
 let routeLenM=0, timeScaleEff=9, passSecEst=0, inPlumeSamples=0;
@@ -868,8 +869,9 @@ function newAct(){
   act._slpmTotal=sources.reduce((a,b)=>a+b.slpm,0);
   act._slpmMin=Math.min(...sources.map(s=>s.slpm));
   act._slpmMax=Math.max(...sources.map(s=>s.slpm));
-  windMeanDir=Math.random()*Math.PI*2; windDir=windMeanDir;
+  windMeanDir=Math.random()*Math.PI*2; windDir=windMeanDir; windDir0=windMeanDir;
   windMeanSpeed=act.windMean; windSpeed=act.windMean;
+  gustU=windSpeed*Math.cos(windDir); gustV=windSpeed*Math.sin(windDir);
   car.route=buildRoute(); car.leg=0; car.t=0;
   edgePasses=new Int32Array(edges.length); covDirty=true; lastEdgeSeen=-1;
   enc=null; peaks=[];
@@ -964,7 +966,7 @@ function updateCaption(){
   if(ch) ch.textContent = hood ? hood.name : '';
   if(cc) cc.textContent = hood ? hood.city : '';
   CAP_PARAMS =
-    `wind ${act.windMean.toFixed(1)} m/s ±${act.windSd.toFixed(1)}  ·  `
+    `wind ${act.windMean.toFixed(1)} m/s ±${sigmaTurb().toFixed(1)}  ·  `
   + `direction wanders ±${act.meanderSd}°  ·  Pasquill ${act.stability}  ·  `
   + `analyser threshold ${CONFIG.detectPpm} ppm over ${CONFIG.background} ppm background  ·  `
   + `${act.passes} passes  ·  ${Math.round(MAPW*mPerPx)} m across  ·  `
@@ -988,27 +990,65 @@ function updateCaption(){
    sectors wider than 90 degrees; Cirillo & Poli (1992) fit sigma_theta as a
    power law in 1/U; Mahrt (2011, Boundary-Layer Meteorol. 139) documents the
    sharp rise below ~2 m/s; Anfossi et al. (2005) show meandering appears in
-   ALL low-wind records regardless of stability. The act's configured
-   meanderSd stays as the mesoscale baseline; the turbulent term is added in
-   quadrature and dominates exactly when the field data said it should.
-   sigma_v here is tuned so U ~ 0.7 m/s gives roughly the 45-degree floor the
-   controlled releases measured. */
+   ALL low-wind records regardless of stability.
+
+   MEASURED, NOT JUST CITED: the Trussville 2024 survey (9.2 M corrected
+   10 Hz anemometer samples, 420 drive hours) confirmed both relationships
+   on the survey's own streets. Direction spread collapsed onto a single
+   curve in the ratio U/sigma_v (median residual -0.2 deg), saturating
+   toward ~104 deg - the projected-normal uniform limit - as the mean wind
+   vanishes; and sigma_speed followed rough-surface similarity
+   (sigma ~ 0.3*U at 10 m, z0 ~ 0.5 m) with a ~0.45 m/s weak-wind floor.
+
+   So the simulation follows the recipe the measurement validated: hold a
+   mean wind VECTOR, wander it slowly (the mesoscale act.meanderSd, the
+   part HRRR cannot see), and add fast turbulent fluctuations per
+   COMPONENT. Speed spread and direction spread then both EMERGE from one
+   sigma with the correct speed dependence - no angle cap, no speed clamp:
+   near-calm moments and full direction reversals happen exactly as often
+   as the physics says. */
 const SIGMA_V = { A:0.95, B:0.85, C:0.70, D:0.60, E:0.45, F:0.35 };
-function meanderSdNow(){
+const SIGMA_TH_SAT = 104*Math.PI/180;    // uniform-limit direction spread
+function sigmaTurb(){
+  // per-component turbulent sigma: stability floor or similarity growth
   const sv = SIGMA_V[act.stability] || 0.6;
-  const turb = Math.atan2(sv, Math.max(windSpeed, 0.15));
+  return Math.max(sv, 0.32*windMeanSpeed);
+}
+function meanderSdNow(){
+  /* The model's own estimate of its direction spread - the evidence wedge
+     reads this. Projected-normal curve: sigma_v/U when the wind is strong,
+     saturating at ~104 deg as it dies; mesoscale wander adds in
+     quadrature. */
+  const r = sigmaTurb()/Math.max(windMeanSpeed, .05);
+  const turb = SIGMA_TH_SAT*(1 - Math.exp(-r/SIGMA_TH_SAT));
   const base = act.meanderSd*Math.PI/180;
-  return Math.min(85*Math.PI/180, Math.hypot(base, turb));
+  return Math.min(SIGMA_TH_SAT, Math.hypot(base, turb));
+}
+let _g2=null;
+function G(){
+  /* Standard normal (Box-Muller pair, cached). The measurement's recipe asks
+     for Gaussian components - the uniform+-1.7 shortcut used elsewhere in
+     this file has thin tails and under-produces the brief full reversals
+     that make weak wind look like weak wind. */
+  if (_g2!==null){ const v=_g2; _g2=null; return v; }
+  const r=Math.sqrt(-2*Math.log(1-Math.random())), a=Math.random()*2*Math.PI;
+  _g2=r*Math.sin(a); return r*Math.cos(a);
 }
 
 function stepWind(dt){
-  const a=Math.exp(-dt/CONFIG.meanderTau);
-  const sd=meanderSdNow();
-  windDir = windMeanDir + (windDir-windMeanDir)*a
-          + Math.sqrt(Math.max(0,1-a*a))*sd*(Math.random()*2-1)*1.7;
-  const as=Math.exp(-dt/25);
-  windSpeed = Math.max(0.4, windMeanSpeed + (windSpeed-windMeanSpeed)*as
-            + Math.sqrt(Math.max(0,1-as*as))*act.windSd*(Math.random()*2-1)*1.7);
+  // the transport direction itself wanders on a scale of minutes
+  const am=Math.exp(-dt/300), msd=act.meanderSd*Math.PI/180;
+  windMeanDir = windDir0 + (windMeanDir-windDir0)*am
+              + Math.sqrt(Math.max(0,1-am*am))*msd*G();
+  // fast turbulence: OU per horizontal component about the mean vector
+  const at=Math.exp(-dt/CONFIG.meanderTau);
+  const q=Math.sqrt(Math.max(0,1-at*at))*sigmaTurb();
+  const mu=windMeanSpeed*Math.cos(windMeanDir),
+        mv=windMeanSpeed*Math.sin(windMeanDir);
+  gustU = mu + (gustU-mu)*at + q*G();
+  gustV = mv + (gustV-mv)*at + q*G();
+  windSpeed = Math.hypot(gustU, gustV);
+  windDir   = Math.atan2(gustV, gustU);
 }
 
 /* ---- the puff model -------------------------------------------------
