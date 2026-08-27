@@ -8,53 +8,31 @@
   html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; }
   canvas { display:block; width:100vw; height:100vh; }
   * { cursor:none; }
-  #info { position:fixed; left:2vw; bottom:3vh; z-index:10; display:none;
-    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,Menlo,monospace;
-    color:#dfe6ee; background:rgba(0,0,0,.6); padding:.7em 1em; border-radius:.4em;
-    border:1px solid rgba(255,255,255,.15); white-space:pre; }
-  body.showinfo #info { display:block; }
-  #title { position:fixed; left:0; right:0; top:5vh; z-index:9; text-align:center;
-    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out; }
-  #title.show { opacity:1; }
-  #title .name { font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.22em; text-transform:uppercase; color:rgba(226,236,248,.88); }
-  #title .blurb { margin-top:.9em; font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.06em; color:rgba(190,205,225,.58); }
+  /* #info and every type token live in wall.css */
+  /* #info, the type tokens and the four language surfaces live in wall.css.
 
-  /* ---- persistent caption ----------------------------------------------
-     Stays for the whole run, unlike the title card which dissolves. Two
-     lines: what this is, and the settings that produced this version. */
-  #caption {
-    position:fixed; left:0; right:0; bottom:var(--cap-bottom, 2.2vh);
-    z-index:8; text-align:center; pointer-events:none; padding:0 4vw;
-  }
-  #caption .what {
-    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.055em; color:rgba(206,220,240,.66);
-  }
-  #caption .params {
-    margin-top:.45em;
-    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
-    letter-spacing:.02em; color:rgba(150,172,205,.44);
-  }
-  :root { --cap-bottom: 2.4vh; }
+     THE TITLE BAND AND THE PERMANENT CAPTION ARE GONE. The caption was
+     identical across two completely different patterns photographed 46
+     seconds apart - cream Maze and teal Spots - and it talked about "U" and
+     "V", two letters that are never defined and never drawn. At three and a
+     half metres that is noise wearing the costume of an explanation.
 
-  /* ---- scrim behind the caption ----------------------------------------
-     The caption used to sit directly on the artwork. On a black field that is
-     fine; over a lit basemap, a bright mosaic or a pale plume it becomes
-     unreadable exactly when there is something worth reading it about. A soft
-     upward fade keeps the text legible without drawing a visible box. */
-  #caption {
-    background: linear-gradient(to top,
-                rgba(3,5,10,0.88) 0%, rgba(3,5,10,0.70) 55%, rgba(3,5,10,0) 100%);
-    padding-top: 1.6em; padding-bottom: 0.7em;
-  }
+     The dark bottom scrim went with them, and it was actively harmful here:
+     this page is bright cream about half the time, so a dark gradient was
+     laid over the lightest artwork in the rotation. Language is now an
+     episode beat through Wall.lane(), on a fitted plate that covers its own
+     ground whatever the palette is doing. See WALL_REVIEW.md. */
 </style>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: every page here runs its setup at the
+     end of an INLINE script, which executes before any deferred bottom
+     tag. Loaded at the bottom, Wall was undefined exactly when the first
+     episode tried to speak. It touches the DOM only inside its calls, so
+     the head is safe. nav.js stays at the bottom and still sees it. -->
+<script src="wall.js"></script>
 </head>
 <body>
 <canvas id="cv"></canvas>
-<div id="title"><div class="name"></div><div class="blurb"></div></div>
-<div id="caption"><div class="what"></div><div class="params"></div></div>
 <div id="info"></div>
 <script>
 /* ---- rotation navigation (remote D-pad) --------------------------------
@@ -68,16 +46,6 @@ function rotateTo(step){
   let i = ROTATION.indexOf(here);
   if (i < 0) i = 0;
   location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
-}
-
-/* ---- caption -----------------------------------------------------------
-   setCaption(what, params) writes the two persistent lines at the bottom of
-   the screen. Called whenever a new scenario starts. */
-const capWhat   = document.querySelector('#caption .what');
-const capParams = document.querySelector('#caption .params');
-function setCaption(what, params) {
-  if (capWhat)   capWhat.textContent   = what || '';
-  if (capParams) capParams.textContent = params || '';
 }
 
 /* =======================================================================
@@ -104,7 +72,19 @@ function setCaption(what, params) {
 
 const CONFIG = {
   targetCells: 125000,   // grid budget; upscaled to the panel by CSS
-  iters:           22,   // solver steps per rendered frame
+  /* SOLVER STEPS PER RENDERED FRAME - and this is the flashiness knob.
+
+     At 22 the whole field reorganises several times a second: every spot in a
+     mitosis pattern divides, everywhere, continuously, and the eye has nothing
+     still to rest on. Joe's word was "sickening", which is the right word for
+     small-scale high-contrast motion filling the visual field - it is the
+     same mechanism as motion sickness in a bad camera shake.
+
+     At 8 the chemistry is identical and takes about three times as long to
+     get there, which it has: a pattern gets 46 seconds and reaches its
+     character in well under that. What changes is that you can now watch a
+     single spot divide instead of watching the whole field seethe. */
+  iters:            8,   // solver steps per rendered frame
   /* Du/Dv must be ~1.0/0.5 against F,k of order 0.05, not 0.16/0.08.
      The pattern's length scale goes as sqrt(Dv/F): at Dv=0.08 that is about
      one grid cell, so structures cannot spread and every seed collapses to an
@@ -151,19 +131,19 @@ const PINNED = /[?&]pin\b/.test(location.search);
    similarity 0.57 against the whole set, where Spots/Mitosis scored 0.98), and
    it brings a polarity nothing else had: dark features on a pale ground. */
 const PATTERNS = [
-  { name:'Maze',     F:0.0290, k:0.0570, band:'fine',   scale:7,  blurb:'Stripes that wander, join and dead-end into a labyrinth' },
-  { name:'Spots',    F:0.0350, k:0.0645, band:'fine',   scale:7,  blurb:'Isolated blobs that repel each other and space themselves evenly' },
-  { name:'Pores',    F:0.0240, k:0.0520, band:'mid',    scale:8,  blurb:'A pale field opening into dark pits, spaced as evenly as spots but inside out' },
-  { name:'Solitons', F:0.0300, k:0.0620, band:'fine',   scale:7,  blurb:'Travelling pulses that survive collisions and pass through each other' },
-  { name:'Worms',    F:0.0800, k:0.0600, band:'fine',   scale:8,  blurb:'Restless filaments that lengthen, writhe and reconnect' },
-  { name:'Cells',    F:0.0750, k:0.0600, band:'mid',    scale:8,  blurb:'Thick walls closing into a froth of rounded compartments' },
-  { name:'Foam',     F:0.0900, k:0.0570, band:'mid',    scale:10, blurb:'A few large chambers whose walls thin, meet and rearrange' },
-  { name:'Bacilli',  F:0.0850, k:0.0600, band:'mid',    scale:20, blurb:'Short rods that grow end to end and drift apart on an empty field' },
-  { name:'Flecks',   F:0.0750, k:0.0630, band:'coarse', scale:30, blurb:'Sparse dashes, scattered and slow, with darkness between them' },
-  { name:'Plankton', F:0.0180, k:0.0530, band:'cloud',  scale:10, blurb:'A soft-edged swarm, forever dividing and drifting apart' },
-  { name:'Drift',    F:0.0200, k:0.0500, band:'cloud',  scale:22, blurb:'Blurred shoals that swell, merge and pull away again' },
-  { name:'Bloom',    F:0.0180, k:0.0470, band:'cloud',  scale:26, blurb:'Broad soft blooms opening into one another' },
-  { name:'Nebula',   F:0.0160, k:0.0440, band:'cloud',  scale:50, blurb:'Great slow rings that swell, collide and swallow each other' }
+  { name:'Maze',     F:0.0290, k:0.0570, band:'fine',   scale:7,  line:'The stripes wander, join, and dead-end into a labyrinth.' },
+  { name:'Spots',    F:0.0350, k:0.0645, band:'fine',   scale:7,  line:'The blobs push each other away until they are evenly spaced.' },
+  { name:'Pores',    F:0.0240, k:0.0520, band:'mid',    scale:8,  line:'A pale field opens into dark pits - spots turned inside out.' },
+  { name:'Solitons', F:0.0300, k:0.0620, band:'fine',   scale:7,  line:'These pulses travel, collide, and pass straight through one another.' },
+  { name:'Worms',    F:0.0800, k:0.0600, band:'fine',   scale:8,  line:'The filaments lengthen, writhe, and reconnect without ever settling.' },
+  { name:'Cells',    F:0.0750, k:0.0600, band:'mid',    scale:8,  line:'Thick walls close in until the field is a froth of rounded compartments.' },
+  { name:'Foam',     F:0.0900, k:0.0570, band:'mid',    scale:10, line:'A few large chambers press together; their walls thin, meet and rearrange.' },
+  { name:'Bacilli',  F:0.0850, k:0.0600, band:'mid',    scale:20, line:'Short rods grow end to end, then drift apart across an empty field.' },
+  { name:'Flecks',   F:0.0750, k:0.0630, band:'coarse', scale:30, line:'Sparse dashes scatter slowly, leaving darkness between them.' },
+  { name:'Plankton', F:0.0180, k:0.0530, band:'cloud',  scale:10, line:'A soft-edged swarm divides and drifts apart, over and over.' },
+  { name:'Drift',    F:0.0200, k:0.0500, band:'cloud',  scale:22, line:'Blurred shoals swell, merge, and pull away from one another again.' },
+  { name:'Bloom',    F:0.0180, k:0.0470, band:'cloud',  scale:26, line:'Broad soft blooms open into one another.' },
+  { name:'Nebula',   F:0.0160, k:0.0440, band:'cloud',  scale:50, line:'Great slow rings swell, collide, and swallow one another.' }
 ];
 
 /* Pick something UNLIKE the last few. A viewer sees only two patterns per
@@ -193,11 +173,17 @@ function pickPattern(){
   return p;
 }
 
+/* EVERY ONE OF THESE USED TO END AT PAPER WHITE, and with the tone curve
+   below lifting the mid-range as well, most of the active field sat near the
+   top of the ramp. A screen of small bright shapes churning against near
+   black is the glare half of Joe's complaint. The top stop is now a tinted
+   near-white around 88% rather than 100%, which keeps the full range of the
+   pattern visible and takes roughly a stop of glare off the peaks. */
 const PALETTES = [
-  [[3,4,10],[12,30,70],[20,110,150],[70,200,190],[200,250,240],[255,255,255]],
-  [[6,3,6],[50,10,40],[140,25,60],[230,90,50],[250,190,90],[255,250,230]],
-  [[2,6,4],[10,40,25],[25,105,55],[110,190,80],[215,240,140],[255,255,240]],
-  [[6,4,14],[35,20,70],[95,45,150],[170,95,215],[235,180,245],[255,255,255]]
+  [[3,4,10],[12,30,70],[20,110,150],[70,190,180],[176,222,216],[224,236,232]],
+  [[6,3,6],[50,10,40],[140,25,60],[214,88,52],[232,176,88],[236,224,206]],
+  [[2,6,4],[10,40,25],[25,105,55],[108,180,80],[196,218,132],[230,232,212]],
+  [[6,4,14],[35,20,70],[95,45,150],[162,94,202],[212,168,220],[232,228,236]]
 ];
 function ramp(pal, t) {
   t = t<0?0:t>1?1:t;
@@ -208,9 +194,6 @@ function ramp(pal, t) {
 
 const canvas=document.getElementById('cv');
 const ctx=canvas.getContext('2d',{alpha:false});
-const titleEl=document.getElementById('title');
-const nameEl=titleEl.querySelector('.name');
-const blurbEl=titleEl.querySelector('.blurb');
 const infoEl=document.getElementById('info');
 
 let GW=0,GH=0,U=null,V=null,U2=null,V2=null,img=null,buf32=null,lut=null;
@@ -283,13 +266,33 @@ function newPattern(){
   lastPal = (lastPal + 1 + Math.floor(Math.random()*(PALETTES.length-1))) % PALETTES.length;
   buildLut(PALETTES[lastPal]);
   seed(); ticks=0; startedAt=performance.now();
-  nameEl.textContent=pattern.name;
-  blurbEl.textContent=pattern.blurb;
-  titleEl.classList.add('show');
-  setTimeout(()=>titleEl.classList.remove('show'),9000);
-  setCaption(
-    'Two chemicals on a grid. U is fed in, V turns U into more of itself, and both spread — but U spreads twice as fast. Diffusion, the process that smooths things out, is what builds the pattern. Turing predicted this in 1952.',
-    `feed F ${pattern.F.toFixed(4)}  ·  kill k ${pattern.k.toFixed(4)}  ·  Du ${CONFIG.Du}  ·  Dv ${CONFIG.Dv}  ·  dt ${CONFIG.dt}  ·  ${CONFIG.iters} steps/frame on ${GW}x${GH}`);
+  /* ---- the episode's one sentence -------------------------------------
+     A new pattern IS a new episode. Two sentences alternate by position
+     rather than both firing, so the wall is silent most of every 46 seconds:
+
+       MECHANISM - the physics, and it no longer contains a letter. The old
+         wording named "U" and "V", neither of which is defined or drawn
+         anywhere, so from the sofa it explained nothing. Same physics, no
+         algebra. F and k stay in the diagnostics box, where the person who
+         wants them is sitting at a keyboard.
+       CHARACTER - what THIS pattern does, which the old permanent caption
+         could never say because one sentence had to cover all thirteen.
+
+     The plate is --plate-solid on every episode rather than chosen from the
+     palette. Mean luminance is the wrong test for a field that is 55% cream
+     ribbons and 45% near-black gaps IN THE SAME FRAME: the mean says "light"
+     and a pale plate would land half over near-black. An opaque plate covers
+     its own ground and the question stops mattering. */
+  /* Joe's note: the old wording never said WHAT the picture shows. It is
+     the concentration of the self-copying substance in a Gray-Scott
+     reaction-diffusion cell - an abstract chemistry, so it is named by its
+     role rather than by a formula it does not have. */
+  const MECHANISM = 'Two dissolved substances share this dish: a feedstock '
+                  + 'seeping in evenly everywhere, and a self-copying substance '
+                  + 'that eats it. The picture is the self-copier\u2019s '
+                  + 'concentration \u2014 bright where it is dense. Nobody drew '
+                  + 'this pattern.';
+  Wall.episode(patternIndex % 3 === 0 ? MECHANISM : pattern.line);
 }
 
 /* One solver step. The Laplacian is the standard 9-point stencil (0.05 on
@@ -330,7 +333,12 @@ function render(){
        bare outlines. Normalise to the actual ceiling and lift the low end. */
     let v=V[i]*2.6;
     if(v>1) v=1;
-    v=Math.pow(v,0.62);
+    /* 0.62 lifted the low end hard, which was right when the worry was that
+       faint structure fell below the first visible step - but it also dragged
+       the broad mid-range up towards the bright end, so most of the field
+       read as "lit". 0.78 keeps the faint gradients and lets the quiet parts
+       stay quiet. */
+    v=Math.pow(v,0.78);
     buf32[i]=lut[(v*255)|0];
   }
   ctx.putImageData(img,0,0);
@@ -348,6 +356,9 @@ function updateInfo(){
 }
 
 function handOff(){
+  /* Stop the language schedule before the fade, or a beat fires into a
+     document on its way out and reads as the next page's caption. */
+  Wall.clearEpisode(); Wall.clearTimers();
   if(handingOff) return;
   handingOff=true;
   document.body.style.transition=`opacity ${CONFIG.fadeMs}ms ease-in-out`;

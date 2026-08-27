@@ -22,7 +22,7 @@
    has one, CONFIG.nextPage if not - so no page needs to know about it beyond
    loading the file.
 --------------------------------------------------------------------------- */
-(function () {
+(function (global) {
   'use strict';
 
   const IDLE_MS = 4000;          // how long the controls linger after the last move
@@ -51,6 +51,12 @@
       }
       .navArrow.prev { left: 2.2vw; }
       .navArrow.next { right: 2.2vw; }
+      /* The diagnostics box holds everything the Episode review took off the
+         wall - seeds, grid sizes, coordinates, per-leak tables. It was always
+         reachable, but only by pressing the i key, and nobody walking
+         past a television knows there is a key to press. Same control set,
+         one more button. */
+      .navArrow.info { right: 2.2vw; top: calc(50% + 6.4vw); font-style: italic; }
       body.pointer-live .navArrow { opacity: 1; pointer-events: auto; }
       /* The cursor is hidden everywhere by the host page; give it back only
          while a pointer is actually in use. */
@@ -68,6 +74,22 @@
       return b;
     };
     ui = { prev: mk('prev', '‹', -1), next: mk('next', '›', +1) };
+
+    /* Not a page step, so it does not go through mk()'s go(). */
+    const info = document.createElement('div');
+    info.className = 'navArrow info';
+    info.textContent = 'i';
+    info.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.body.classList.toggle('showinfo');
+      /* Pages that keep a live readout expose updateInfo(); those that do not
+         simply have static content in the box already. */
+      try { if (typeof updateInfo === 'function') updateInfo(); } catch (err) {}
+      /* The Lane and #info want the same corner and are never both wanted. */
+      try { if (global.Wall) global.Wall.hideLane(); } catch (err) {}
+    });
+    document.body.appendChild(info);
+    ui.info = info;
     return ui;
   }
 
@@ -107,4 +129,4 @@
 
   // a click is use too, even without movement - that is all mouse mode sends
   addEventListener('mousedown', live, { passive: true });
-})();
+})(window);

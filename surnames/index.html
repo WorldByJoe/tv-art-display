@@ -17,10 +17,29 @@
      to do both on one canvas would mean clearing a rectangle inside the
      river's own bitmap on every tick, and the squash step below would then
      have to work around that hole. Two canvases is less code and less to get
-     wrong. */
-  canvas { position:fixed; left:0; display:block; }
-  #river   { top:0; }
-  #village { }
+     wrong.
+
+     BOTH ARE NOW FULL FRAME, one on top of the other. The village used to be
+     a strip across the bottom 17% and the river was cut off above it, which
+     drew a hard black horizon at about y=683 - a line nobody designed, being
+     merely the shape of the space the village left. The village is now the
+     OPENING: it holds the whole frame while the river has almost no history
+     to show, then dissolves off it. After that it is destroyed and the river
+     has every pixel.
+
+     The dissolve is driven from JS with an inline transition rather than a
+     duration written here, because a duration in two places is a duration
+     that goes out of step - see CONFIG.villageFadeMs. */
+  /* The BITMAP is sized once at boot; the BOX is always the whole viewport.
+     Keeping those two separate is what lets the window change size without
+     costing the run: the river is a painted history that cannot be redrawn,
+     so a resize used to throw the act away and start again. Now the picture
+     simply stretches into the new box. The wall never resizes; a laptop
+     window does, and a slightly stretched river is a far better answer there
+     than a run that restarts every time the window is dragged. */
+  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  #river   { z-index:1; }
+  #village { z-index:2; }
 
   /* Black curtain used for the dip between acts and for the hand-off. Fading
      a DOM overlay covers both canvases at once; fading the canvases
@@ -31,82 +50,36 @@
   }
   #curtain.on { opacity:1; }
 
-  #info {
-    position:fixed; left:2vw; bottom:9vh; z-index:10; display:none;
-    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,"SF Mono",Menlo,monospace;
-    color:#dfe6ee; background:rgba(0,0,0,.6); padding:.7em 1em;
-    border-radius:.4em; border:1px solid rgba(255,255,255,.15); white-space:pre;
-  }
-  body.showinfo #info { display:block; }
+  /* #info and every type token live in wall.css */
 
-  /* Act name and one line of explanation, faded in at the start of each act.
-     On a wall display this is the one piece of text worth showing: it says
-     what you are looking at without turning the screen into a dashboard. */
-  #title {
-    position:fixed; left:0; right:0; top:0; z-index:9; text-align:center;
-    padding:5vh 6vw 9vh; box-sizing:border-box;
-    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out;
-    background:linear-gradient(to bottom, rgba(0,0,0,.85) 0%,
-                                          rgba(0,0,0,.66) 42%,
-                                          rgba(0,0,0,0)  100%);
-  }
-  #title.show { opacity:1; }
-  #title .name {
-    font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.22em; text-transform:uppercase; color:rgba(226,236,248,.85);
-  }
-  #title .blurb {
-    margin-top:.9em;
-    font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.06em; color:rgba(190,205,225,.55);
-  }
+  /* NO TITLE BAND, NO CAPTION BAND, NO TICKER, NO SCRIM.
 
-  /* A permanent, deliberately faint counter. Unlike the title it stays up for
-     the whole act, because the numbers are the thing that makes the picture
-     legible - "37 names left" is what turns a pretty gradient into a result.
-     Set CONFIG.showTicker = false to remove it entirely. */
-  #ticker {
-    position:fixed; right:2.4vw; bottom:2.4vh; z-index:9; text-align:right;
-    pointer-events:none; opacity:0; transition:opacity 1.2s ease-in-out;
-    font:300 clamp(10px,.9vw,17px)/1.5 ui-monospace,"SF Mono",Menlo,monospace;
-    letter-spacing:.08em; color:rgba(200,214,232,.34); white-space:pre;
-  }
-  #ticker.show { opacity:1; }
+     All four used to be defined here and all four are gone. The title band
+     put prose at the top edge while the caption put prose at the bottom edge
+     in the same frame; the caption was PERMANENT, so it said the same
+     sentence at generation 29 and at generation 299; the ticker printed four
+     fields under it, one of which read "3 surnames" directly below a
+     sentence reading "Eight names left"; and the caption's scrim was a
+     full-width gradient that owned the bottom third whether or not there was
+     anything on it.
 
-  /* ---- persistent caption ----
-     Sits above the ticker, which keeps its own lane on the right. */
-  #caption {
-    position:fixed; left:0; right:0; bottom:2.4vh; z-index:8;
-    text-align:left; pointer-events:none; padding:0 2.4vw; max-width:66vw;
-  }
-  #caption .what {
-    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.055em; color:rgba(206,220,240,.62);
-  }
-  #caption .params {
-    margin-top:.45em;
-    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
-    letter-spacing:.02em; color:rgba(150,172,205,.42);
-  }
-
-  /* ---- scrim behind the caption ----------------------------------------
-     The caption used to sit directly on the artwork. On a black field that is
-     fine; over a lit basemap, a bright mosaic or a pale plume it becomes
-     unreadable exactly when there is something worth reading it about. A soft
-     upward fade keeps the text legible without drawing a visible box. */
-  #caption {
-    background: linear-gradient(to top,
-                rgba(3,5,10,0.88) 0%, rgba(3,5,10,0.70) 55%, rgba(3,5,10,0) 100%);
-    padding-top: 1.6em; padding-bottom: 0.7em;
-  }
+     What replaces them: the act's sentence goes to the Lane (wall.css, and
+     Wall.episode in wall.js) where it arrives, holds, and dissolves; the
+     living surname count becomes a Mark drawn into the river itself; and the
+     rest went to #info, which is where a number addressed to somebody at a
+     keyboard always belonged. */
 </style>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: every page here runs its setup at the
+     end of an INLINE script, which executes before any deferred bottom
+     tag. Loaded at the bottom, Wall was undefined exactly when the first
+     episode tried to speak. It touches the DOM only inside its calls, so
+     the head is safe. nav.js stays at the bottom and still sees it. -->
+<script src="wall.js"></script>
 </head>
 <body>
 <canvas id="river"></canvas>
 <canvas id="village"></canvas>
-<div id="title"><div class="name"></div><div class="blurb"></div></div>
-<div id="ticker"></div>
-<div id="caption"><div class="what"></div><div class="params"></div></div>
 <div id="info"></div>
 <div id="curtain"></div>
 
@@ -124,14 +97,6 @@ function rotateTo(step){
   location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
 }
 
-/* ---- caption: the two persistent lines at the bottom-left ---- */
-const capWhat   = document.querySelector('#caption .what');
-const capParams = document.querySelector('#caption .params');
-function setCaption(what, params){
-  if(capWhat)   capWhat.textContent   = what || '';
-  if(capParams) capParams.textContent = params || '';
-}
-
 /* =======================================================================
    PATRILINE - surname loss as a wall display.
 
@@ -144,17 +109,24 @@ function setCaption(what, params){
 
    WHAT IS ON SCREEN
    -----------------
-   TOP (the river). Time runs left to right. Every surname alive in a given
-   generation gets a horizontal band whose thickness is its share of living
-   men. Bands are stacked in a stable order, so a band that pinches out stays
-   pinched and its neighbours simply close over it. This is a Muller plot,
-   and read backwards it is the coalescent tree of the male line.
+   THE RIVER, which is the whole frame. Time runs left to right and the
+   newest generation is always at the right edge, so the history fills the
+   width from the first column rather than creeping across it. Every surname
+   alive in a given generation gets a horizontal band whose thickness is its
+   share of living men. Bands are stacked in a stable order, so a band that
+   pinches out stays pinched and its neighbours simply close over it. This is
+   a Muller plot, and read backwards it is the coalescent tree of the male
+   line.
 
-   BOTTOM (the village). One square per living man in the current generation,
-   coloured by his surname and sorted so that men sharing a name sit
-   together. This is the same data as the river's rightmost column, but it
-   shows the population as people rather than as area, and it is where the
-   collapse is easiest to read from across a room.
+   THE OPENING (the village). One square per living man in the current
+   generation, coloured by his surname and sorted so that men sharing a name
+   sit together. This is the same data as the river's newest column, but it
+   shows the population as people rather than as area. It holds the whole
+   frame for the first few seconds of an act and then dissolves off it, which
+   is the one stretch of a run where the river has too little history to be
+   worth looking at. It used to be a permanent strip along the bottom, which
+   cost the river a fifth of the screen for the whole run in exchange for a
+   picture of a single generation.
 
    THREE ACTS
    ----------
@@ -189,15 +161,17 @@ const CONFIG = {
      and doubles every `rampGens` generations up to a ceiling. */
   holdMs:           5200,   // how long a finished act stays on screen
   fadeMs:           1200,   // curtain dip between acts (must match the CSS)
-  titleMs:          9000,   // how long the act title stays up
 
-  /* ---- layout ---- */
-  /* These three have to leave a clear lane at the bottom for the ticker.
-     river 0 -> 0.70, village 0.745 -> 0.910, text below that. */
-  riverFrac:        0.700,  // fraction of screen height given to the river
-  villageTop:       0.745,  // village strip top, as a fraction of height
-  villageFrac:      0.165,  // village strip height, as a fraction of height
-  showTicker:        true,
+  /* ---- the opening ----
+     The village holds the whole frame, then dissolves off it. There is no
+     layout to configure any more: both canvases are the full window, and the
+     three fractions that used to divide the screen between them (riverFrac,
+     villageTop, villageFrac) are gone with the caption band they were
+     measured against. The village's fade duration is applied to the element
+     as an inline transition, so this number is the only place it lives. */
+  villageHoldMs:    9000,   // full frame, opaque
+  villageFadeMs:    6000,   // then dissolved off the river over this long
+  showCount:         true,  // the living-surname Mark at the right frontier
 
   /* ---- the naming pause ----
      When the field is down to this many names the run STOPS, the view drops
@@ -244,7 +218,18 @@ const ACTS = [
   {
     key:   'drift',
     name:  'Drift',
-    blurb: 'Five hundred surnames, no new ones. Two thirds of them were doomed from the first generation.',
+    /* THE ACT'S ONE SENTENCE, and the only prose the page shows.
+       These were authored as `blurb` and never reached the screen: the
+       element that would have carried them was deleted to stop a null-node
+       throw, so the sentences were orphaned by a bug fix rather than by any
+       judgement. They are the Lane's text now.
+
+       The act NAME is the sentence's first clause rather than a band of its
+       own (Law 13: no page carries both a title and a caption). The first act
+       of a turn also states the mechanism, because it is the one thing a
+       viewer arriving cold cannot read off the picture; acts two and three
+       say only what has changed, so recurrence never becomes recitation. */
+    lane:  'Five hundred surnames drift down the male line alone: a man passes his to his sons and to no one else, and a dead name never returns.',
     wealth: false,
     lam:    2.5,            // mean children per couple; mean SONS is lam/2
     mu:     0,              // no new names coined
@@ -256,7 +241,12 @@ const ACTS = [
   {
     key:   'wealth',
     name:  'Wealth',
-    blurb: 'Fortune inherited down the same line as the name. One patriline runs away with the population.',
+    /* Present tense and true from the first generation of the act: the model
+       really is ranking survival on the father's fortune while this is on
+       screen. The authored line said "one patriline runs away with the
+       population", which is a forecast rather than a description of the
+       picture underneath it. */
+    lane:  'Now fortune is inherited down the same line as the name, and the sons of rich fathers are the ones that live to marry.',
     wealth: true,
     /* Rank-based mortality kills exactly half of all offspring by
        construction, so replacement needs lam = 4, not 2. lam = 5 keeps the
@@ -272,7 +262,12 @@ const ACTS = [
   {
     key:   'invention',
     name:  'Invention',
-    blurb: 'A trickle of newly coined names. The collapse stops halfway and never finishes.',
+    /* Rewritten to carry its own contrast. The authored line - "a trickle of
+       newly coined names, the collapse stops halfway" - read as a flat
+       contradiction of the page's own premise, because the sentence that
+       established "no new names are ever coined" had by then dissolved two
+       acts ago. Saying both halves in one breath restores it. */
+    lane:  'Normally no new names are coined. Here a trickle is - and the collapse stops halfway.',
     wealth: false,
     lam:    2.5,
     /* theta = 2*N*mu = 4, so the Ewens prediction for the equilibrium name
@@ -730,8 +725,6 @@ const riverCv   = document.getElementById('river');
 const villageCv = document.getElementById('village');
 const rctx = riverCv.getContext('2d');
 const vctx = villageCv.getContext('2d');
-const titleEl = document.getElementById('title');
-const tickEl  = document.getElementById('ticker');
 const infoEl  = document.getElementById('info');
 const curtain = document.getElementById('curtain');
 
@@ -754,6 +747,9 @@ let zoomFrom = 0, zoomEase = 0;
    slides, 'hold' while it sits named and still, 'done' for the rest of the
    act - which is when the labels are live and tracking the bands. */
 const naming = { phase: 'none', t0: 0, startedAt: 0 };
+/* Where each name's label actually IS on screen, as opposed to where this
+   generation says it should be. See drawBandLabels. */
+const labelY = new Map();
 
 /* The river is painted into an OFF-SCREEN buffer and blitted to the visible
    canvas scaled to fit. That indirection is what removes the flash.
@@ -767,13 +763,31 @@ const naming = { phase: 'none', t0: 0, startedAt: 0 };
 const histCv = document.createElement('canvas');
 const hctx = histCv.getContext('2d');
 
+/* ONCE, AT BOOT, AND NEVER AGAIN.
+
+   Sizing a canvas erases it, and the river IS its own accumulated bitmap, so
+   every call to this function after the first is a chance to wipe the run.
+   The old version was called three times at boot - inline, on `load`, and
+   again when the fonts settled - because the picture had to be laid out
+   against a measured caption band whose height depended on both. With the
+   band gone the answer is simply the window, which is known immediately.
+
+   The guard is not belt and braces. Headless Chrome reports innerHeight 2073
+   while the page loads and 2160 when it captures, which fired a resize, which
+   restarted the act - so every automated screenshot of this page was of
+   generation zero, and the two frames a check compares differed only in the
+   random seed. On the television the same class of event is the set changing
+   HDMI mode. */
 function layout() {
+  if (W) return;
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   W  = window.innerWidth;
-  RH = Math.round(window.innerHeight*CONFIG.riverFrac);
-  VH = Math.round(window.innerHeight*CONFIG.villageFrac);
+  /* The whole window, both canvases. No caption band to yield to and no strip
+     reserved for the village, which is why the river no longer ends in a hard
+     black horizon two thirds of the way down. */
+  RH = window.innerHeight;
+  VH = RH;
 
-  riverCv.style.width = W + 'px';   riverCv.style.height = RH + 'px';
   riverCv.width  = Math.round(W*dpr);
   riverCv.height = Math.round(RH*dpr);
   rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -782,8 +796,6 @@ function layout() {
   histCv.height = Math.round(RH*dpr);
   hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  villageCv.style.width = W + 'px'; villageCv.style.height = VH + 'px';
-  villageCv.style.top   = Math.round(window.innerHeight*CONFIG.villageTop) + 'px';
   villageCv.width  = Math.round(W*dpr);
   villageCv.height = Math.round(VH*dpr);
   vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -799,6 +811,7 @@ function clearRiver() {
   riverX = 0; squashes = 0; virtualX = 0;
   zoomFrom = 0; zoomEase = 0;
   naming.phase = 'none';
+  labelY.clear();
 }
 
 /* Halve the time axis in place. drawImage with the canvas as its own source
@@ -819,10 +832,22 @@ function squashRiver() {
   // what makes the blit below produce an identical picture across a squash.
 }
 
-/* Blit the used part of the buffer onto the visible canvas.
-   Until the run has produced a screen's worth of time the river grows
-   left-to-right at natural size; after that it fills the width and compresses
-   continuously. */
+/* Blit the used part of the buffer onto the visible canvas, RIGHT-ANCHORED:
+   the whole history drawn so far is scaled to the whole width, so the newest
+   generation is always at the right edge and the oldest is always at the
+   left.
+
+   THIS IS THE PAGE'S BIGGEST CHANGE. The river used to grow left to right at
+   natural size until it had filled a screen's worth of time, and only then
+   compress. On the wall that meant generation 29 of ~299 was a 120-pixel
+   column against 1800 pixels of black - 6% of the frame - and the picture did
+   not reach half the width until about generation 150, which is roughly half
+   of every act, three times a turn. It was not an opening problem to be
+   waited out; it was most of the run. Filling the width from the first column
+   costs nothing anyone can point at: the axis is uniform at every instant,
+   which is the property the squash-and-blit design exists to protect, and it
+   simply compresses continuously from generation one instead of jumping into
+   compression when the screen fills. */
 function presentRiver() {
   if (!histCv.width || !histCv.height) return;
   /* The left edge of what is shown, on the buffer's own axis. Dividing by the
@@ -833,22 +858,17 @@ function presentRiver() {
   const srcX  = Math.max(0, Math.min((zoomFrom*zoomEase)/scale, riverX));
   const srcW  = riverX - srcX;
 
-  /* Before the zoom the river grows left to right at natural size and only
-     starts compressing once it has filled the screen. Across the zoom that
-     natural size is eased up to the full width, because after truncating the
-     opening the survivors are a SHORTER stretch of time - drawn at natural
-     size the picture would shrink at the exact moment it became worth
-     reading. Once eased in, destW is simply the whole width for ever. */
-  const natural = Math.min(W, virtualX);
-  const destW   = natural + (W - natural)*zoomEase;
-
+  /* The destination is the whole frame, always. The zoom therefore does its
+     work entirely through srcX above: the naming pause drops the crowded
+     opening and what is left is magnified into the same rectangle, which is
+     what makes eight bands wide enough to carry a name. */
   rctx.setTransform(1, 0, 0, 1, 0, 0);
   rctx.clearRect(0, 0, riverCv.width, riverCv.height);
-  if (srcW > 0 && destW > 0) {
+  if (srcW > 0) {
     rctx.imageSmoothingEnabled = true;
     rctx.drawImage(histCv,
                    Math.round(srcX*dpr), 0, Math.round(srcW*dpr), histCv.height,
-                   0, 0, Math.round(destW*dpr), riverCv.height);
+                   0, 0, riverCv.width, riverCv.height);
   }
   rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
@@ -904,11 +924,17 @@ function drawRiverColumn(s, colW) {
   presentRiver();
 }
 
-/* The current generation as people. Men are sorted by surname so that a
-   lineage is a contiguous block, which is what makes the collapse read as
-   blocks fusing rather than as noise slowly losing colours. */
+/* The current generation as people, over the whole frame, for the opening of
+   an act only. Men are sorted by surname so that a lineage is a contiguous
+   block, which is what makes the collapse read as blocks fusing rather than
+   as noise slowly losing colours.
+
+   villageLive goes false when the dissolve finishes and nothing is drawn
+   after that - the canvas is hidden and the river owns every pixel for the
+   rest of the act. */
+let villageLive = false;
 function drawVillage(s) {
-  if (W <= 0 || VH <= 0) return;
+  if (!villageLive || W <= 0 || VH <= 0) return;
   vctx.clearRect(0, 0, W, VH);
   const n = s.men.length;
   if (n === 0) return;
@@ -955,6 +981,15 @@ function drawVillage(s) {
    Everything below only runs once the field is down to CONFIG.nameAt names.
    ======================================================================= */
 
+/* Read a tier off wall.css, in the page's own pixels. The canvas is drawn at
+   CSS pixel scale here, so the computed value is directly usable; `fallback`
+   covers the stylesheet failing to load, which on file:// is a real
+   possibility rather than a theoretical one. */
+function wallTier(name, fallback){
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  return (isFinite(v) && v > 0) ? v : fallback;
+}
+
 /* The current column as a list of bands: the same stacking drawRiverColumn
    uses, so a label's y really is the middle of the band it points at. */
 function bandLayout(s) {
@@ -996,7 +1031,11 @@ function drawBandLabels(s, alpha) {
   const bands = bandLayout(s);
   if (!bands.length) return;
 
-  let fs  = Math.max(13, Math.min(W*0.0125, 30));
+  /* THE CLAMP TRAP, IN JAVASCRIPT. W*0.0125 is 48 px on the wall and the
+     Math.min ceiling of 30 threw that away - the same defeat-your-own-intent
+     shape as the CSS clamp() this page has just been rid of. Read the ladder
+     out of the stylesheet instead, so there is exactly one place sizes live. */
+  let fs  = wallTier('--t4', 30);
   let gap = fs*1.5;
   const pad  = fs*0.6;
   const room = RH - pad*2;
@@ -1018,12 +1057,44 @@ function drawBandLabels(s, alpha) {
   const over = rows[rows.length-1].y - hi;
   if (over > 0) for (const r of rows) r.y -= over;
 
+  /* AND NOW EASE TOWARDS THAT, rather than jumping to it.
+
+     Everything above computes where a label OUGHT to be, from the share its
+     band holds this generation. That target is honest and it is also jumpy:
+     late in a run the wall is drawing tens of generations a second, every one
+     of them moves the band boundaries, and when a name dies the de-overlap
+     pass re-sorts everything below it at once. Joe's note was that the names
+     jump up and down so fast they become unreadable - which is exactly right,
+     and it is a rendering artefact rather than anything the simulation is
+     saying.
+
+     So the label chases its target at about an eighth of the distance per
+     frame - a time constant near a seventh of a second. Fast enough to keep
+     up with a band genuinely growing, far too slow to reproduce the flicker.
+     A name appearing for the first time starts where it belongs rather than
+     sliding in from wherever the last one was. */
+  for (const r of rows) {
+    const prev = labelY.get(r.b.id);
+    r.y = (prev === undefined) ? r.y : prev + (r.y - prev)*0.12;
+    labelY.set(r.b.id, r.y);
+  }
+  /* Forget names that have died, so an id reused by a later coinage does not
+     inherit a stale position from the other end of the screen. */
+  if (labelY.size > bands.length*3) {
+    const live = new Set(bands.map(b => b.id));
+    for (const k of [...labelY.keys()]) if (!live.has(k)) labelY.delete(k);
+  }
+
   rctx.save();
   rctx.globalAlpha = Math.min(1, alpha);
   rctx.font = '500 ' + fs.toFixed(1) + 'px ui-sans-serif, system-ui, sans-serif';
   rctx.textBaseline = 'middle';
   rctx.textAlign = 'right';
-  const right = W - fs*0.8;
+  /* The label plate stops on the house safe line (134 wall px of 3840 =
+     3.49% of the width), not fs*0.8 from the glass. Televisions overscan, and
+     these labels were landing in the part of the frame the set can eat. */
+  const safe  = W * 0.0349;
+  const right = W - safe - fs*0.5;
 
   for (const r of rows) {
     const name  = surnameFor(s, r.b.id);
@@ -1059,6 +1130,53 @@ function drawBandLabels(s, alpha) {
   rctx.restore();
 }
 
+/* =======================================================================
+   THE MARK - the one number on the wall
+
+   How many surnames are still alive, drawn by the same code that draws the
+   bands, sitting on the top surface of the stack at the right frontier where
+   the newest generation is. It moves when the picture moves and it dies at
+   the naming pause, because from that moment the bands are countable and
+   every one of them is carrying its own name instead.
+
+   It replaces a four-field ticker - "drift  ·  generation 299  ·  3 surnames
+   ·  commonest 56%" - of which this is the only field that survived. The act
+   name is the Lane's first clause now; the generation number is the
+   horizontal axis itself, and it is in #info for anyone who wants the digit;
+   and a share is a THICKNESS, so "commonest 56%" was a worse copy of a band
+   already drawn at half the height of the frame.
+
+   A fitted pill rather than a halo, for the same reason the band labels use
+   one: the ground under it is saturated colour and there is no quiet local
+   ground to halo against.
+   ======================================================================= */
+function drawCount(s) {
+  if (!CONFIG.showCount || !s || W <= 0 || RH <= 0) return;
+  if (naming.phase !== 'none') return;          // retired at the naming pause
+  /* A Mark appears when its datum appears. While the village holds the frame
+     the stack it sits on is not on screen at all, and the pill was being half
+     covered by the squares laid over it. */
+  if (villageLive) return;
+  const fs  = wallTier('--t3', 40);             // a live figure, off the ladder
+  const txt = s.richness + (s.richness === 1 ? ' surname' : ' surnames');
+  rctx.save();
+  rctx.font = '500 ' + fs.toFixed(1) + 'px ui-sans-serif, system-ui, sans-serif';
+  rctx.textBaseline = 'middle';
+  rctx.textAlign = 'right';
+  const tw = rctx.measureText(txt).width;
+  /* The house safe rectangle, in this canvas's own pixels: 134 of 3840 across
+     and 76 of 2160 down. Televisions overscan and the set can eat anything
+     outside it. */
+  const right = W - W*0.0349;
+  const cy    = RH*0.0352 + fs*0.9;
+  rctx.fillStyle = 'rgba(4,7,13,.74)';
+  roundRect(rctx, right - tw - fs*1.1, cy - fs*0.9, tw + fs*1.1, fs*1.8, fs*0.4);
+  rctx.fill();
+  rctx.fillStyle = 'rgba(234,242,252,.95)';
+  rctx.fillText(txt, right - fs*0.55, cy);
+  rctx.restore();
+}
+
 /* Stop the run and change what the screen is about. */
 function startNaming(now) {
   naming.phase = 'zoom';
@@ -1074,10 +1192,14 @@ function startNaming(now) {
   zoomFrom = virtualX*(1 - CONFIG.zoomKeep);
   zoomEase = 0;
 
-  setCaption(
-    'Eight names left, and now they have names. The view drops the opening scramble and follows only the survivors. '
-    + 'From here it is a random walk between a handful of families: the last few names take far longer to die than the first five hundred did.',
-    lastParams);
+  /* A MOMENT, not a caption. This used to rewrite the permanent caption to
+     "Eight names left, and now they have names", which was true for about
+     four generations and then sat there for the rest of the act contradicting
+     the band labels underneath it - and, in the wall photographs, sitting
+     directly above a ticker that read "3 surnames". Four words on something
+     that has just happened, four seconds, gone. The subject is not a place -
+     the whole frame is the subject - so it takes wall.js's centre fallback. */
+  Wall.moment('The survivors have names');
 }
 
 /* =======================================================================
@@ -1088,30 +1210,21 @@ let actIndex = 0, cycleIndex = 0;
 let actStart = 0, lastStepAt = 0, genDebt = 0;
 let finishedAt = 0;
 let paused = false, handingOff = false, transitioning = false;
-let lastParams = '';
 let fps = 0, lastFrame = performance.now();
 
-function showTitle(act) {
-  titleEl.querySelector('.name').textContent  = act.name;
-  titleEl.querySelector('.blurb').textContent = act.blurb;
-  titleEl.classList.add('show');
-  setTimeout(() => titleEl.classList.remove('show'), CONFIG.titleMs);
+/* ---- the act's opening beat ---------------------------------------------
+   AN ACT IS AN EPISODE. Wall.episode waits two seconds so the picture
+   establishes on its own, lights the Lane with the act's one sentence for a
+   hold proportional to its length, and dissolves it. Nothing else is said
+   until the naming pause.
 
-  /* The title dissolves; this stays. Each band is one surname, its height its
-     share of the men alive. A name that pinches out is gone for good, because
-     nothing in a patrilineal system can bring it back. */
-  /* Kept, because the naming pause rewrites the sentence above it and the
-     parameters underneath are still true - it would be a shame to lose them
-     just to change the prose. */
-  lastParams =
-    `${CONFIG.n0} founding names  ·  ${CONFIG.N} men per generation  ·  `
-    + `${act.lam.toFixed(1)} children per couple  ·  `
-    + (act.mu > 0 ? `new names coined at ${(act.mu*100).toFixed(1)}% per birth` : 'no new names coined')
-    + (act.wealth ? '  ·  survival ranked by inherited wealth, eldest son takes half' : '  ·  survival independent of wealth')
-    + `  ·  seed ${sim ? sim.seed : '?'}`;
-  setCaption(
-    'Every man passes his surname to his sons and to no one else. Some men have no sons, so names die — and a dead name can never return. Each band is one surname; its thickness is its share of the living men.',
-    lastParams);
+   What this replaces: a title band at the top for nine seconds AND a caption
+   at the bottom for the whole act - both lit at once, which is the pair
+   Law 13 forbids - plus a settings string that was assembled here, handed to
+   setCaption and then read by nothing at all. Those parameters are printed by
+   #info now, which is who they were always addressed to. */
+function speakAct(act) {
+  Wall.episode(act.lane);
 }
 
 function startAct() {
@@ -1121,7 +1234,7 @@ function startAct() {
      re-rolling the act re-rolls the names with it. */
   sim.namePool = makeNamePool(sim.seed);
   /* Seed the bookkeeping for generation zero so the first column and the
-     first ticker reading are correct rather than blank. */
+     first reading of the count are correct rather than blank. */
   sim.counts = new Map();
   for (const id of sim.men) sim.counts.set(id, (sim.counts.get(id) || 0) + 1);
   sim.richness = sim.counts.size;
@@ -1130,16 +1243,43 @@ function startAct() {
   sim.topShare = top0/sim.men.length;
 
   clearRiver();
+
+  /* Tear down the previous act's language and timers before scheduling this
+     act's. clearEpisode FIRST and clearTimers second, always: clearTimers on
+     its own would drop the Lane's own hide timer on the floor and leave the
+     last sentence lit for ever. */
+  Wall.clearEpisode();
+  Wall.clearTimers();
+
+  /* The village holds the frame, then dissolves off the river. The transition
+     is set inline at the moment it is wanted so that CONFIG.villageFadeMs is
+     the only place the duration lives; restoring the village for the next act
+     has to switch the transition off first, or the act would open by fading
+     the village IN from nothing over the same six seconds. */
+  villageLive = true;
+  villageCv.style.display    = '';
+  villageCv.style.transition = 'none';
+  villageCv.style.opacity    = '1';
+  void villageCv.offsetWidth;                     // force the reset to stick
+  Wall.after(CONFIG.villageHoldMs, () => {
+    villageCv.style.transition = 'opacity ' + CONFIG.villageFadeMs + 'ms linear';
+    villageCv.style.opacity    = '0';
+  });
+  Wall.after(CONFIG.villageHoldMs + CONFIG.villageFadeMs, () => {
+    villageLive = false;
+    vctx.clearRect(0, 0, W, VH);
+    villageCv.style.display = 'none';             // and stop compositing it
+  });
+
   vctx.clearRect(0, 0, W, VH);
   actStart = performance.now();
   lastStepAt = actStart;
   genDebt = 0;
   finishedAt = 0;
-  showTitle(act);
-  if (CONFIG.showTicker) tickEl.classList.add('show');
+  speakAct(act);
   drawRiverColumn(sim, act.colW);
   drawVillage(sim);
-  updateTicker();
+  drawCount(sim);
 }
 
 /* Rate doubles every rampGens generations, up to a ceiling. Slow where the
@@ -1151,6 +1291,9 @@ function gensPerSecond(act, gen) {
 function nextAct() {
   if (transitioning) return;
   transitioning = true;
+  /* The curtain dip IS the episode boundary, so whatever is being said stops
+     being said as it falls rather than fading out behind it. */
+  Wall.clearEpisode();
   curtain.classList.add('on');
   setTimeout(() => {
     actIndex++;
@@ -1160,6 +1303,10 @@ function nextAct() {
          build_github.py leaves behind when it cuts this page out of the wall's
          rotation for publishing. Start again instead. */
       if (!PINNED && cycleIndex >= CONFIG.cyclesPerTurn) {
+        /* Hand-off: silence the language and cancel every timer it owns.
+           clearEpisode first, clearTimers second - see startAct. */
+        Wall.clearEpisode();
+        Wall.clearTimers();
         if (CONFIG.nextPage) location.href = CONFIG.nextPage; else location.reload();
         return;
       }
@@ -1170,22 +1317,23 @@ function nextAct() {
   }, CONFIG.fadeMs);
 }
 
-function updateTicker() {
-  if (!CONFIG.showTicker || !sim) return;
-  /* Deliberately one line. Two lines reached far enough up the screen to
-     collide with the bottom row of the village. */
-  tickEl.textContent =
-    sim.act.name.toLowerCase() +
-    '   ·   generation ' + sim.gen +
-    '   ·   ' + sim.richness + (sim.richness === 1 ? ' surname' : ' surnames') +
-    '   ·   commonest ' + Math.round(sim.topShare*100) + '%';
-}
-
+/* The diagnostics box, which is where everything taken off the wall lives.
+   The parameter string that used to be assembled for the caption band and
+   then read by nobody is printed here as `model` and `pop`, and the
+   generation number the ticker used to show is `gen` - it was always a
+   duplicate of the horizontal axis, but somebody at a keyboard may still want
+   the digit. */
 function updateInfo() {
   if (!sim) return;
   infoEl.textContent =
     'act       ' + sim.act.name + '  (' + (actIndex+1) + '/' + ACTS.length + ')\n' +
     'seed      ' + sim.seed + '\n' +
+    'model     ' + sim.act.lam.toFixed(1) + ' children per couple   ' +
+      (sim.act.mu > 0 ? 'new names coined at ' + (sim.act.mu*100).toFixed(1) + '% per birth'
+                      : 'no new names coined') + '\n' +
+    'survival  ' + (sim.act.wealth ? 'ranked by inherited wealth, eldest son takes half'
+                                   : 'independent of wealth') + '\n' +
+    'pop       ' + CONFIG.n0 + ' founding names   ' + CONFIG.N + ' men per generation\n' +
     'gen       ' + sim.gen + '   rate ' + gensPerSecond(sim.act, sim.gen).toFixed(1) + '/s\n' +
     'names     ' + sim.richness + ' / ' + CONFIG.n0 + '\n' +
     'men       ' + sim.men.length + '   women ' + sim.nFem + '\n' +
@@ -1194,6 +1342,7 @@ function updateInfo() {
     'axis      1 gen = ' + (sim.act.colW*Math.min(1, W/Math.max(virtualX,1))).toFixed(3) + ' px on screen  (' + squashes + ' rescales)\n' +
     'naming    ' + naming.phase + (zoomEase > 0 ? '   view starts at gen '
         + Math.round(zoomFrom*zoomEase/sim.act.colW) : '') + '\n' +
+    'village   ' + (villageLive ? 'on screen' : 'retired') + '\n' +
     'elapsed   ' + ((performance.now()-actStart)/1000).toFixed(0) + 's\n' +
     'fps       ' + fps.toFixed(0) + (paused ? '  [PAUSED]' : '');
 }
@@ -1237,7 +1386,7 @@ function frame(now) {
   /* A finished act is held on screen so the outcome can be taken in, then
      the next act begins. "Finished" is fixation, extinction, or the cap. */
   if (sim.done || overTime) {
-    if (!finishedAt) { finishedAt = now; updateTicker(); }
+    if (!finishedAt) { finishedAt = now; drawCount(sim); }
     if (now - finishedAt > CONFIG.holdMs) nextAct();
     return;
   }
@@ -1265,19 +1414,21 @@ function frame(now) {
       }
     }
     drawVillage(sim);
-    updateTicker();
+    /* Both of these are drawn AFTER the step loop rather than inside it,
+       because every column drawn re-blits the whole river and would wipe
+       them. Only the last state of the frame is ever seen. */
+    drawCount(sim);
     if (naming.phase === 'done') drawBandLabels(sim, 1);
   }
   if (document.body.classList.contains('showinfo')) updateInfo();
 }
 
-addEventListener('resize', () => {
-  /* The river is a painted history that cannot be rescaled meaningfully, so
-     a resize restarts the act rather than stretching a lie across the screen.
-     On the Pi this fires once at startup and never again. */
-  layout();
-  if (sim) startAct();
-});
+/* NO RESIZE HANDLER. There used to be one and it called startAct(), which
+   threw away however much of a run had accumulated. The canvases are stretched
+   into the viewport by CSS now, so a window that changes size changes the size
+   of the picture and nothing else - and the events that actually fire this on
+   the wall (an HDMI mode change, headless Chrome settling from 2073 to 2160
+   rows) are exactly the ones where losing the run was the wrong answer. */
 
 addEventListener('keydown', (e) => {
   switch (e.key) {
@@ -1301,6 +1452,13 @@ addEventListener('keydown', (e) => {
 });
 
 layout();
+/* The two re-measurements that used to live here are gone with the caption
+   band. They existed because the picture was laid out against the band's
+   height, and the band's height depended on wall.css and on the interface
+   font, neither of which was guaranteed to have been applied when layout()
+   first ran. The canvases are now simply the window, which is known
+   immediately, and each of those extra calls was a chance to resize - and so
+   to erase - a river that had already started to accumulate. */
 startAct();
 requestAnimationFrame(frame);
 </script>

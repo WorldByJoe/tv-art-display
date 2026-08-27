@@ -12,70 +12,39 @@
   canvas { display:block; width:100vw; height:100vh; }
   * { cursor:none; }
 
-  #info {
-    position:fixed; left:2vw; bottom:9vh; z-index:10; display:none;
-    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,"SF Mono",Menlo,monospace;
-    color:#dfe6ee; background:rgba(0,0,0,.6); padding:.7em 1em;
-    border-radius:.4em; border:1px solid rgba(255,255,255,.15); white-space:pre;
-  }
-  body.showinfo #info { display:block; }
+  /* #info and every type token live in wall.css */
 
-  /* Scenario name and one line of explanation, faded in at the start of each
-     run. On a wall display this is the one piece of text worth showing: it
-     says what you are looking at without turning the screen into a dashboard. */
-  #title {
-    position:fixed; left:0; right:0; top:5vh; z-index:9; text-align:center;
-    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out;
-  }
-  #title.show { opacity:1; }
-  #title .name {
-    font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.22em; text-transform:uppercase; color:rgba(226,236,248,.85);
-  }
-  #title .blurb {
-    margin-top:.9em;
-    font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.06em; color:rgba(190,205,225,.55);
-  }
+  /* ---- NO TITLE BAND AND NO CAPTION BAND ---------------------------------
+     Both used to live here and both are gone (the Episode review, 2026-08-24).
 
-  /* ---- persistent caption ----------------------------------------------
-     Stays for the whole run, unlike the title card which dissolves. Two
-     lines: what this is, and the settings that produced this version. */
-  #caption {
-    position:fixed; left:0; right:0; bottom:var(--cap-bottom, 2.2vh);
-    z-index:8; text-align:center; pointer-events:none; padding:0 4vw;
-  }
-  #caption .what {
-    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.055em; color:rgba(206,220,240,.66);
-  }
-  #caption .params {
-    margin-top:.45em;
-    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
-    letter-spacing:.02em; color:rgba(150,172,205,.44);
-  }
-  /* Clear of the mass bar's LABELS, not just the bar. At 12vh the caption's
-     bottom edge sat at 88% of screen height while "N bodies" / "N mergers"
-     start at 87%, so the scrim clipped the tops of both - 11px at 1080p and
-     21px at 4K. The bar rectangle itself was never the thing being hit. */
-  :root { --cap-bottom: 15vh; }
+     What they did wrong. #title printed the scenario name at top:5vh for nine
+     seconds while #caption printed a sentence at the bottom for the whole run,
+     so the page carried prose at both edges at once and one of them never
+     changed. Worse, #caption's gradient scrim ran the full width and was drawn
+     every frame whether or not anyone was reading it, and the caption's second
+     line landed INSIDE the mass bar and its first line across the canvas string
+     "REAL TIME". That collision had already been repaired once, by measuring an
+     offset against the bar's labels; the sentence then grew and the collision
+     came back. Measured offsets always lose that argument, so there is no
+     offset here any more: the bottom band belongs to the Lane alone and the
+     mass bar has moved to the top of the safe rectangle.
 
-  /* ---- scrim behind the caption ----------------------------------------
-     The caption used to sit directly on the artwork. On a black field that is
-     fine; over a lit basemap, a bright mosaic or a pale plume it becomes
-     unreadable exactly when there is something worth reading it about. A soft
-     upward fade keeps the text legible without drawing a visible box. */
-  #caption {
-    background: linear-gradient(to top,
-                rgba(3,5,10,0.88) 0%, rgba(3,5,10,0.70) 55%, rgba(3,5,10,0) 100%);
-    padding-top: 1.6em; padding-bottom: 0.7em;
-  }
+     Language is now the shared Lane and Moment surfaces in wall.css, lit by
+     wall.js for the length of an episode and dark the rest of the time. The
+     settings line that used to sit under the caption is in the `i` overlay,
+     where it was always really addressed to somebody at a keyboard. */
+
 </style>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: every page here runs its setup at the
+     end of an INLINE script, which executes before any deferred bottom
+     tag. Loaded at the bottom, Wall was undefined exactly when the first
+     episode tried to speak. It touches the DOM only inside its calls, so
+     the head is safe. nav.js stays at the bottom and still sees it. -->
+<script src="wall.js"></script>
 </head>
 <body>
 <canvas id="sky"></canvas>
-<div id="title"><div class="name"></div><div class="blurb"></div></div>
-<div id="caption"><div class="what"></div><div class="params"></div></div>
 <div id="info"></div>
 
 <script>
@@ -92,15 +61,14 @@ function rotateTo(step){
   location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
 }
 
-/* ---- caption -----------------------------------------------------------
-   setCaption(what, params) writes the two persistent lines at the bottom of
-   the screen. Called whenever a new scenario starts. */
-const capWhat   = document.querySelector('#caption .what');
-const capParams = document.querySelector('#caption .params');
-function setCaption(what, params) {
-  if (capWhat)   capWhat.textContent   = what || '';
-  if (capParams) capParams.textContent = params || '';
-}
+/* ---- what this page says, and when ------------------------------------
+   There is no setCaption() any more. It wrote one sentence into a permanent
+   band at the bottom of the screen, so the same words sat over the swarm for
+   all three minutes and over every scenario alike - a sentence about the genre
+   rather than about the picture. Every scenario now carries its own `lane`
+   line, said once at the start of the run and once again at the halfway mark,
+   and the rest of the time the frame is only the swarm. The settings that used
+   to be the caption's second line are printed by the `i` overlay. */
 
 /* =======================================================================
    Gravitational accretion - a JavaScript descendant of Joe's MATLAB
@@ -138,16 +106,17 @@ const CONFIG = {
   settleSteps:    6000,   // steps without a merge before we call it settled
   minSteps:       4000,   // never declare victory before this
 
-  /* The late phase is SLOW, not finished - encounters keep happening, just
-     further apart. Waiting it out in real time would be tedious, so once
-     merging goes quiet the simulation fast-forwards: every `boostAfter` quiet
-     steps buys another multiple of physics per rendered frame, up to
-     `maxBoost`. A single merge resets the clock and drops straight back to
-     real time, so anything actually happening is shown at watchable speed. */
-  boostAfter:      600,   // quiet steps per extra speed multiple
-  maxBoost:          8,   // ceiling on the fast-forward
-  maxSteps:     140000,   // hard ceiling so a pathological run cannot hang
-  holdMs:        30000,   // keep a settled system on screen this long
+  /* ALWAYS REAL TIME. There was a fast-forward here: once merging went quiet
+     the simulation ran up to eight times normal speed to get through the long
+     late phase. Joe asked for it out - "let's just watch gravity do its
+     thing" - so a second on screen is now a second of simulated time, always,
+     and nothing about the pacing is a lie.
+
+     The run is therefore ended by the CLOCK rather than by settling. Three
+     minutes of accretion, then the pull-back. */
+  runSec:          180,   // how long the system is watched, in real seconds
+  outroSec:         26,   // the slow pull-back that closes the run
+  maxSteps:     400000,   // hard ceiling so a pathological run cannot hang
   minBodies:         2,
 
   /* COLLISION radius and DRAWN radius are deliberately separate numbers.
@@ -181,7 +150,7 @@ const CONFIG = {
   zoomMaxRate:   0.007,
 
   barHeight:      0.052,  // mass bar height as a fraction of screen height
-  runsPerTurn:        2,  // runs before handing the screen to the surname river
+  runsPerTurn:        1,  // one three-minute run, then the wall moves on
   nextPage: '' /* standalone: nowhere to hand on to; start again */
 };
 const PINNED = /[?&]pin\b/.test(location.search);
@@ -259,6 +228,15 @@ function orbit(S, i, m, r, Mc, G, rng, gauss, opts) {
         -vC*s*(1+jitter*gauss()), vC*c*(1+jitter*gauss()), vC*inc*0.3*gauss());
 }
 
+/* The second half of every scenario's Lane sentence. The first clause names
+   THIS scenario (Law 13: the page carries no separate title, so the sentence
+   has to do that job itself); this clause states the mechanism, which is the
+   same in all five and is the only thing on the page that is worth saying
+   twice. Kept as one string so the five lines cannot drift apart. */
+const LANE_MECHANISM =
+  ' Every body pulls on every other, and any two that touch merge,' +
+  ' so the count only falls.';
+
 const SCENARIOS = [
   {
     name: 'Protoplanetary Disk',
@@ -280,7 +258,8 @@ const SCENARIOS = [
        the scenario worth storing. And because the flash is logarithmic, even
        being a factor of two out moves the drawn brightness by about a tenth. */
     keRef: 4.2,
-    blurb: 'A young star’s debris ring, orbiting at Keplerian speed, clumping into planets',
+    lane: 'A young star’s debris ring turns fastest at its inner edge.' +
+          LANE_MECHANISM,
     N: 240, G: 1.5, soft: 0.30, dt: 0.055, spf: 2,
     init(S, rng, gauss) {
       const G = this.G, Mstar = 520;
@@ -297,7 +276,8 @@ const SCENARIOS = [
   {
     name: 'Binary Dance',
     keRef: 2.9,
-    blurb: 'Two stars locked in mutual orbit, stirring the cloud that surrounds them',
+    lane: 'Two stars circle each other and stir the cloud around them.' +
+          LANE_MECHANISM,
     N: 200, G: 1.5, soft: 0.30, dt: 0.045, spf: 2,
     init(S, rng, gauss) {
       const G = this.G, M1 = 340, M2 = 260, d = 16, Mt = M1 + M2;
@@ -318,7 +298,8 @@ const SCENARIOS = [
   {
     name: 'Cluster Collision',
     keRef: 40,
-    blurb: 'Two star clusters fall together and merge, flinging out tidal debris',
+    lane: 'Two star clusters are falling together, flinging debris out sideways.' +
+          LANE_MECHANISM,
     N: 230, G: 1.4, soft: 0.28, dt: 0.05, spf: 2,
     init(S, rng, gauss) {
       const half = Math.floor(this.N/2);
@@ -342,7 +323,8 @@ const SCENARIOS = [
   {
     name: 'Oort Scattering',
     keRef: 24,
-    blurb: 'Giant planets slingshot icy debris into a vast, still-bound halo',
+    lane: 'Four giant planets are slinging icy debris into a wide halo' +
+          ' that never quite gets away.' + LANE_MECHANISM,
     N: 250, G: 1.5, soft: 0.28, dt: 0.05, spf: 2,
     init(S, rng, gauss) {
       const G = this.G, Mstar = 620;
@@ -363,7 +345,8 @@ const SCENARIOS = [
   {
     name: 'Tidal Encounter',
     keRef: 0.9,
-    blurb: 'Two disk galaxies graze past each other and draw out long tidal tails',
+    lane: 'Two disk galaxies graze past each other and draw out long tidal tails.' +
+          LANE_MECHANISM,
     N: 240, G: 1.5, soft: 0.30, dt: 0.05, spf: 2,
     init(S, rng, gauss) {
       const G = this.G, Mc = 300;
@@ -788,9 +771,11 @@ class Sim {
 /* ======================= rendering ======================= */
 const canvas = document.getElementById('sky');
 const ctx = canvas.getContext('2d', { alpha:false });
-const titleEl = document.getElementById('title');
-const nameEl = titleEl.querySelector('.name');
-const blurbEl = titleEl.querySelector('.blurb');
+/* No titleEl / nameEl / blurbEl any more. The title card is gone with the
+   caption band, and blurbEl was a query for a `.blurb` node that #title never
+   contained - so `if (blurbEl)` had been silently false since the day it was
+   written and all five authored blurbs were dead text in the file. They are
+   the Lane sentences now. */
 const infoEl = document.getElementById('info');
 
 let W=0, H=0, DPR=1;
@@ -804,17 +789,19 @@ addEventListener('resize', resize);
 resize();
 
 let sim=null, runIndex=-1, camAngle=0, fps=0, paused=false, lastFrame=performance.now();
+/* Where the run is: 'run' for the three watched minutes, 'outro' for the slow
+   pull-back that closes it. */
+let phase='run', runStartedAt=0, outroStartedAt=0, outroFrom=0, outroTo=0, boundAtOutro=0;
+let ejectedAtOutro = 0, ejectedMassPct = 0;
+/* Said once per run, when merging actually stops. Not a state label painted on
+   the bar forever - it is a thing that happens, so it is a Moment. */
+let settledSpoken = false;
+/* Where the heaviest body was on screen at the last frame, in CSS pixels, so a
+   Moment can be placed BESIDE the core rather than on top of it. The merged
+   core sits within a couple of hundred pixels of frame centre for most of a
+   run, which is exactly why frame centre is the wrong default. */
+let corePos = null;
 let lastDrawT=0;     // sim time at the previous draw, for integrating spin
-let boostSmooth=1;   // eased fast-forward multiplier
-/* Leftover fraction of a physics step, carried to the next frame.
-
-   Easing boostSmooth was only half the job: nSteps was round()ed, so with
-   spf=2 the achievable rates were the whole numbers 2,3,4...16 and the jump
-   from 2 to 3 is a FIFTY PERCENT change in speed, held for seconds and then
-   stepped again. That is the lurch. Carrying the fraction over means the
-   average rate follows boostSmooth exactly and continuously; the frame count
-   dithers between k and k+1 instead of sitting on the wrong integer. */
-let stepAcc=0;
 let handingOff = false;
 
 function newRun() {
@@ -822,15 +809,25 @@ function newRun() {
   const scenario = SCENARIOS[Math.floor(Math.random()*SCENARIOS.length)];
   sim = new Sim(scenario, 1 + Math.floor(Math.random()*999998));
   camAngle = Math.random()*Math.PI*2;
-  boostSmooth = 1; stepAcc = 0; lastDrawT = 0;
+  lastDrawT = 0;
+  phase = 'run'; runStartedAt = performance.now();
   ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H);
-  nameEl.textContent = scenario.name;
-  blurbEl.textContent = scenario.blurb;
-  titleEl.classList.add('show');
-  setTimeout(() => titleEl.classList.remove('show'), 9000);
-  setCaption(
-    'Every body pulls on every other. Bodies that touch merge, conserving mass, momentum and angular momentum, so the count only ever falls and an off-centre hit leaves the new body spinning. Colour is speed as a fraction of escape velocity — red means this one is leaving for good.',
-    `${scenario.N} bodies  ·  G ${scenario.G}  ·  softening ${scenario.soft}  ·  dt ${scenario.dt}  ·  seed ${sim.seed}`);
+  settledSpoken = false;
+
+  /* THE EPISODE. wall.js waits two seconds so the swarm establishes on its own
+     - the picture is the piece, the sentence is a footnote to it - then lights
+     one fitted pill at the bottom naming THIS scenario, holds it for as long as
+     its own length deserves, and dissolves. After that the frame is clean.
+
+     And then again at the halfway mark, because this page runs one 180-second
+     episode and nothing here comes round: without the repeat, anyone walking in
+     at minute two would watch three minutes of rocks with no explanation at
+     all. Any run over about 150 seconds re-runs its opening sentence once; see
+     "the long-run rule" in WALL_REVIEW.md. */
+  Wall.clearTimers();
+  Wall.clearEpisode();
+  Wall.episode(scenario.lane);
+  Wall.after(CONFIG.runSec*500, () => Wall.lane(scenario.lane));
 }
 
 /* ---- irregular bodies ----
@@ -873,14 +870,37 @@ function boulderPath(i, salt, cxp, cyp, radA, radB, tilt, rot, lump) {
   ctx.closePath();
 }
 
+/* 1 during the run, rising to about 2.6 by the end of the pull-back. */
+function outroMarkNow() {
+  if (phase !== 'outro') return 1;
+  const k = Math.min(1, (performance.now() - outroStartedAt)/(CONFIG.outroSec*1000));
+  return 1 + 1.6*k;
+}
+let outroMark = 1;
+
 function draw(nowSec) {
+  outroMark = outroMarkNow();
   ctx.fillStyle = `rgba(0,0,0,${CONFIG.trail})`;
   ctx.fillRect(0, 0, W, H);
 
-  const barH = H*CONFIG.barHeight;
-  const fieldH = H - barH*2.1;
+  /* THE BAR IS AT THE TOP NOW, and the swarm is centred in what is left below
+     it. It used to sit at H - barH*1.55, which put a run-position instrument
+     in the same strip as the caption and cost this page the collision the
+     Episode review opens with. The bottom band belongs to the Lane on every
+     page of the wall; run-position instruments live at the top. See wall.css.
+
+     barTop is the top edge of the SAFE RECTANGLE, not of the screen: this
+     television overscans and LG's Just Scan resets itself whenever the HDMI
+     source changes, so anything with a number in it has to be inside the
+     margin. --safe-y is 76 wall pixels and a wall pixel is 1/3840 of the
+     window's width, so the same fraction of W gives the same physical margin
+     whatever the window is. */
+  const barH   = H*CONFIG.barHeight;
+  const barTop = W*(76/3840);
+  const fieldTop = barTop + barH*2.1;            // bar, plus room for its label
+  const fieldH = H - fieldTop;
   const scale = Math.min(W, fieldH)/(2*sim.viewRadius);
-  const cx = W/2, cy = fieldH/2;
+  const cx = W/2, cy = fieldTop + fieldH/2;
   const ca = Math.cos(camAngle), sa = Math.sin(camAngle);
   const st = Math.sin(CONFIG.camTilt), ct = Math.cos(CONFIG.camTilt);
 
@@ -906,6 +926,13 @@ function draw(nowSec) {
     order.push([i, ry*ct + sim.z[i]*st]);       // depth for painter's sort
   }
   order.sort((a,b) => a[1]-b[1]);
+
+  /* Two things are picked out as the swarm is drawn, so neither costs a second
+     pass over the bodies: the heaviest body, whose screen position is where a
+     Moment gets placed, and the FASTEST body relative to its own escape speed,
+     which is the reddest thing in frame and the one the escape Mark rides. */
+  let coreM = -1, coreX = 0, coreY = 0;
+  let redF = -1, redX = 0, redY = 0, redRad = 0, redCol = null;
 
   for (const [i] of order) {
     /* Uniform sphere about its own centre, I = 2/5 M R^2, on the DRAWN radius.
@@ -994,20 +1021,24 @@ function draw(nowSec) {
     const sx = cx + rx*scale;
     const sy = cy + (ry*st - sim.z[i]*ct)*scale;
 
-    const col = turbo(sim.escapeFraction(i));
-    const rad = Math.max(2.2*DPR, sim.rDraw[i]*CONFIG.markerGain*scale);
+    const esc = sim.escapeFraction(i);
+    const col = turbo(esc);
+    /* A FLOOR THAT GROWS AS THE VIEW OPENS. At the end of the pull-back the
+       scale is thirty times what it was, so a companion drawn true-to-size is
+       under a pixel - the pull-back would reveal an empty frame and the whole
+       point would be lost. The floor rises with the zoom so distant bodies
+       stay findable. It is a marker, not a glow: the disc is still the body,
+       it just refuses to disappear. */
+    const rad = Math.max(2.2*DPR*outroMark, sim.rDraw[i]*CONFIG.markerGain*scale);
     // the same figure in pixels, and which way its long axis points on screen
     const radA = Math.max(2.2*DPR, axA*CONFIG.markerGain*scale);
     const radB = Math.max(2.2*DPR, axB*CONFIG.markerGain*scale);
     const tilt = Math.atan2(eV, eU);
 
-    if (rad > 7*DPR) {   // glow only where it reads
-      const g = ctx.createRadialGradient(sx, sy, rad*0.45, sx, sy, rad*2.5);
-      g.addColorStop(0, rgba(col, 0.28));
-      g.addColorStop(1, rgba(col, 0));
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(sx, sy, rad*2.5, 0, 6.2832); ctx.fill();
-    }
+    /* NO GLOW. There used to be a radial halo around every body over 7 px.
+       Joe asked for it gone: it softened every edge, and on a field of two
+       hundred bodies the halos overlapped into a general haze that read as
+       lens dirt rather than as light. The silhouettes are the subject. */
 
     /* THE FLASH. Brightness and size both come from how much kinetic energy
        the merger destroyed, against the MEDIAN merger for this scenario -
@@ -1103,6 +1134,14 @@ function draw(nowSec) {
       }
     }
 
+    if (sim.m[i] > coreM) { coreM = sim.m[i]; coreX = sx; coreY = sy; }
+    /* Only a body that is genuinely on screen may carry the Mark. An orphaned
+       label sliding along an edge is the exact failure the "a number touches
+       its subject" rule exists to catch. */
+    if (esc > redF && sx > 0 && sx < W && sy > 0 && sy < H) {
+      redF = esc; redX = sx; redY = sy; redRad = rad; redCol = col;
+    }
+
     ctx.fillStyle = rgb(col);
     // Silhouettes only where they can actually be seen. Below ~6px a 14-sided
     // outline just reads as a hexagon, which looks like a rendering bug rather
@@ -1115,7 +1154,61 @@ function draw(nowSec) {
     }
   }
 
-  drawMassBar(barH);
+  corePos = coreM >= 0 ? { x: coreX/DPR, y: coreY/DPR } : null;
+  drawEscapeMark(redF, redX, redY, redRad, redCol);
+  drawMassBar(barH, barTop);
+}
+
+/* ---- the escape Mark ----
+   ONE word, drawn beside the reddest body in that body's own colour, so the
+   colour scale teaches itself by example. The caption used to carry the line
+   "Red means this one is leaving for good", which is a sentence about a legend
+   rather than about the picture, and it sat at the bottom of the screen while
+   the red body it described was somewhere else entirely.
+
+   WHY IT RIDES THE REDDEST BODY RATHER THAN FIRING ON A FIRST ESCAPE. The
+   colour is a continuous ramp of speed over escape speed, not an event: eight
+   or more bodies sit in the orange-to-red end at once in a typical frame, so
+   "first escape" would announce a threshold crossing that the picture does not
+   contain. A Mark that simply names the most extreme case is honest about
+   being a scale rather than a moment.
+
+   CONTRAST IS A HALO, NOT A PILL. The ground here is empty black sky - the
+   quietest on the wall - so a stroked halo keeps the letters legible without
+   putting a rectangle in the middle of the star field. Pages with busy ground
+   use a fitted pill instead; this one has no busy ground to worry about. */
+function drawEscapeMark(esc, sx, sy, rad, col) {
+  /* 0.92 of escape speed, not 1.0. At exactly 1 the body is already the same
+     red as the top of the ramp and has usually left the frame; a shade below
+     it, the word is beside something the viewer can still see turning red. */
+  if (!col || esc < 0.92) return;
+  const size = Math.round(W*(37*1.167/3840));      // --t4, the sofa floor
+  ctx.save();
+  ctx.font = `500 ${size}px ui-monospace, Menlo, monospace`;
+  ctx.textBaseline = 'middle';
+  const gap = rad + size*0.7;
+  // flip to the other side rather than run off the safe rectangle
+  const right = sx + gap + ctx.measureText('ESCAPING').width < W - W*(134/3840);
+  ctx.textAlign = right ? 'left' : 'right';
+  const tx = right ? sx + gap : sx - gap;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(2, W*(6/3840))*2;       // a 6-wall-px halo, stroked
+  ctx.strokeStyle = 'rgba(0,0,0,0.95)';
+  ctx.strokeText('ESCAPING', tx, sy);
+  /* The word is the body's OWN colour, so the colour scale teaches itself -
+     but at the top of the turbo ramp that colour is (122,4,3), a dark red
+     which on a black sky is very nearly no word at all. So the hue is kept
+     and only the level is lifted, to a peak channel of 215. This is the same
+     red the body is, turned up until it can be read from the sofa; it is not
+     a different colour and it cannot be mistaken for one further down the
+     ramp, because nothing on the ramp is this hue except its top end. */
+  const peak = Math.max(col[0], col[1], col[2]) || 1;
+  const gain = Math.max(1, 215/peak);
+  ctx.fillStyle = rgb([Math.min(255, Math.round(col[0]*gain)),
+                       Math.min(255, Math.round(col[1]*gain)),
+                       Math.min(255, Math.round(col[2]*gain))]);
+  ctx.fillText('ESCAPING', tx, sy);
+  ctx.restore();
 }
 
 /* ---- mass bar ----
@@ -1123,9 +1216,14 @@ function draw(nowSec) {
    partitioned among its bodies, largest first, each segment coloured exactly
    as its body is. At the start it is a fine comb of hundreds of slivers; as
    accretion proceeds the comb resolves into a few broad blocks. That IS the
-   story of the simulation, told as a single line. */
-function drawMassBar(barH) {
-  const y = H - barH*1.55, pad = W*0.035, barW = W - pad*2;
+   story of the simulation, told as a single line.
+
+   IT OWNS THE TOP STRIP ALONE. It used to sit at the bottom with a caption
+   printed over it and two more strings on its label line; there is now one
+   number up here and nothing else, and the number touches the end of the bar
+   it belongs to. */
+function drawMassBar(barH, barTop) {
+  const y = barTop, pad = W*0.035, barW = W - pad*2;
 
   ctx.fillStyle = 'rgba(255,255,255,0.05)';
   ctx.fillRect(pad, y, barW, barH);
@@ -1149,32 +1247,101 @@ function drawMassBar(barH) {
     x += w;
   }
 
-  // Labels sit ABOVE the bar: below it they run off the bottom of the screen.
+  /* THE ONE NUMBER ON THIS PAGE, flush against the bar's left end and directly
+     under it, because a number that cannot be joined to the thing it measures
+     is not worth the pixels. It survives the "form before digits" test on its
+     own merits: about forty marks are separable by eye in a frame that holds
+     eighty-seven bodies, so the picture genuinely cannot draw this count and
+     the bar cannot either - the bar draws the mass, not the tally.
+
+     Three strings used to share this line and two of them are gone.
+     "REAL TIME" asserted something half a second of watching establishes, and
+     it sat dead centre where the caption crossed it. "N mergers" counted the
+     same events as "N bodies" from the other end - 87 + 113 = 200 in one
+     photograph, 102 + 98 = 200 in the other - so it carried no information the
+     falling count was not already carrying. "SETTLED" was a state label pinned
+     to the bar for the rest of the run; it is a Moment now, said once, beside
+     the core, when merging actually stops. */
   ctx.fillStyle = 'rgba(196,210,228,0.68)';
   ctx.font = `500 ${Math.round(barH*0.60)}px ui-monospace, Menlo, monospace`;
-  ctx.textBaseline = 'bottom';
+  ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
-  ctx.fillText(`${sim.alive} bodies`, pad, y - barH*0.35);
-  ctx.textAlign = 'right';
-  ctx.fillText(sim.settled ? 'SETTLED' : `${sim.merges} mergers`, pad + barW, y - barH*0.35);
+  ctx.fillText(`${sim.alive} bodies`, pad, y + barH + barH*0.22);
+}
 
-  /* How fast time is running, AND WHY, in the empty middle of the bar's label
-     line - the only strip up here that the two end labels can never reach.
+/* THE PULL-BACK.
 
-     It used to read "TIME x4.2" and nothing else, and Joe's note was that it
-     was not obvious why the speed kept changing. The number alone does not
-     say that: it reports the multiplier without giving the reason. The reason
-     is that nothing has collided for a while and the quiet is being skipped,
-     so the label says that too, and the moment something does collide the
-     clock drops back and the label goes back to REAL TIME. */
-  const mult = sim.settled ? 1 : boostSmooth;   // 1x is spf steps/frame
-  ctx.textAlign = 'center';
-  ctx.fillStyle = mult < 1.08 ? 'rgba(196,210,228,0.68)' : 'rgba(255,214,140,0.86)';
-  ctx.fillText(mult < 1.08 ? 'REAL TIME'
-                           : `\u00D7${mult.toFixed(1)}  \u00B7  NOTHING COLLIDING`,
-               pad + barW*0.5, y - barH*0.35);
-  ctx.fillStyle = 'rgba(196,210,228,0.68)';
-  ctx.textAlign = 'left';
+   Joe's ask: at the end, draw slowly back to show the bodies that have been
+   off-screen all along but are still held by the system - the Oort cloud of
+   whatever has just formed. The framing during the run deliberately follows
+   the clump and ignores anything on its way out, so those companions are
+   genuinely invisible until now; this is the only moment the piece admits how
+   much bigger than the picture the system really is.
+
+   WHAT COUNTS AS STILL BOUND is escapeFraction < 1 - the same quantity the
+   colour scale already uses, so a body that is red is one this pull-back is
+   deliberately NOT framing for. It is bound bodies we are widening to find. */
+function startOutro(now) {
+  phase = 'outro'; outroStartedAt = now;
+  outroFrom = sim.viewRadius;
+  const rs = [];
+  for (let i = 0; i < sim.n; i++) {
+    if (!sim.active[i]) continue;
+    if (sim.escapeFraction(i) >= 1) continue;
+    rs.push(Math.hypot(sim.x[i], sim.y[i], sim.z[i]));
+  }
+  boundAtOutro = rs.length;
+  /* THE SLINGSHOT LEDGER - Joe's ask (2026-08-26): how much did this system
+     throw away? Every escaper was flung by close encounters (nothing else
+     in here adds energy), so the unbound population at the close IS the
+     slingshot toll. Counted by body and weighed by mass, against the total
+     - which mergers conserve, so the denominator is honest. */
+  let ejN = 0, ejM = 0, totM = 0;
+  for (let i = 0; i < sim.n; i++) {
+    if (!sim.active[i]) continue;
+    totM += sim.m[i];
+    if (sim.escapeFraction(i) >= 1) { ejN++; ejM += sim.m[i]; }
+  }
+  ejectedAtOutro = ejN;
+  ejectedMassPct = totM > 0 ? 100*ejM/totM : 0;
+  rs.sort((a, b) => a - b);
+
+  /* THE NINETIETH PERCENTILE, NOT THE FURTHEST, and the cap has to be wide.
+
+     Measured at the end of a real run: the view was 10.6 across, the core and
+     its close family sat inside 58, and there was a genuine outer population
+     at 176, 225, 230 and 375 - bound, on long ellipses, and completely unseen.
+     That population IS the thing Joe asked to reveal.
+
+     The first version framed the furthest one and capped the pull-back at 14x,
+     which came out at 148 - so the cap bound, and it cut off the outermost
+     companions the feature exists to show. Widening to fit the furthest is
+     not right either: one straggler at 375 sets the scale for everything and
+     the core collapses to a speck. The 90th percentile keeps the population
+     and lets the last outlier stay off-frame, which is what a wide-field
+     photograph of a cluster does too. */
+  const p90 = rs.length ? rs[Math.min(rs.length - 1, Math.floor(0.90*rs.length))] : outroFrom;
+  outroTo = Math.min(Math.max(p90*1.35, outroFrom*1.25), outroFrom*40);
+
+  /* THE CLOSE BEAT. The whole-run figure is said once, in a sentence, at the
+     moment the picture is widening to show what it is about - and then the
+     pill dissolves well before the hand-off. It used to be a canvas string
+     reading "N STILL BOUND" parked in the middle of the mass bar's label line,
+     which is where the caption also was, and where nothing links the number to
+     the bodies it counts. wall.js waits two seconds first, so the pull-back
+     starts on its own. */
+  /* The ejection clause reports the slingshot ledger. Below half a percent
+     of the mass the figure is said as "under 1%" rather than as a decimal -
+     a wall is not a lab notebook. */
+  const pct = ejectedMassPct >= 0.95 ? Math.round(ejectedMassPct) + '%'
+            : ejectedMassPct > 0 ? 'under 1%' : '';
+  const ej = ejectedAtOutro === 0 ? 'None were thrown clear.'
+    : `${ejectedAtOutro} ${ejectedAtOutro === 1 ? 'was' : 'were'} thrown clear by `
+      + `slingshots, carrying ${pct} of the mass.`;
+  const closing = boundAtOutro === 1
+    ? `${sim.n} bodies at the start. One is left, holding nothing. ${ej}`
+    : `${sim.n} bodies at the start. ${boundAtOutro} are still bound to each other. ${ej}`;
+  Wall.episode(closing, { figures: true, hold: 11000 });
 }
 
 function updateInfo() {
@@ -1182,6 +1349,9 @@ function updateInfo() {
   infoEl.textContent =
     `scenario  ${sim.s.name}\n` +
     `seed      ${sim.seed}\n` +
+    /* The caption's second line used to carry these and it is gone; they are
+       settings, and settings are for somebody at a keyboard. */
+    `params    N ${sim.s.N}  G ${sim.s.G}  softening ${sim.s.soft}  dt ${sim.s.dt}\n` +
     `bodies    ${sim.alive} / ${sim.n}\n` +
     `merges    ${sim.merges}   escaped ${sim.escaped}\n` +
     `spin shed ${sim.shed.toFixed(2)}  (L lost to breakup)\n` +
@@ -1189,7 +1359,7 @@ function updateInfo() {
     `centre    clump ${(100*(sim.clumpMass||0)/(sim.boundMass||1)).toFixed(0)}% of mass, shift ${(sim.shift||0).toFixed(3)}/step\n` +
     `steps     ${sim.steps}  (last merge ${sim.steps - sim.lastMerge} ago)\n` +
     `settled   ${sim.settled ? 'yes' : 'no'}\n` +
-    `boost     ${boostSmooth.toFixed(2)}x\n` +
+    `phase     ${phase}${phase === 'outro' ? '  bound ' + boundAtOutro + '  view ' + outroFrom.toFixed(0) + ' -> ' + outroTo.toFixed(0) : '  ' + ((performance.now()-runStartedAt)/1000).toFixed(0) + 's of ' + CONFIG.runSec}\n` +
     `view r    ${sim.viewRadius.toFixed(1)}\n` +
     `fps       ${fps.toFixed(0)}${paused ? '  [PAUSED]' : ''}`;
 }
@@ -1197,6 +1367,12 @@ function updateInfo() {
 function handOff() {
   if (handingOff) return;
   handingOff = true;
+  /* Take the language down before the fade, and cancel every pending timer.
+     A half-lit sentence riding a fade to black is the one thing worse than no
+     sentence at all, and a timer that outlives its own episode narrates the
+     previous one. */
+  Wall.clearEpisode();
+  Wall.clearTimers();
   const t0 = performance.now();
   (function fade() {
     const k = Math.min(1, (performance.now()-t0)/1400);
@@ -1217,42 +1393,36 @@ function frame(now) {
   fps = fps ? fps*0.9 + (1000/dtms)*0.1 : 1000/dtms;
   if (paused || handingOff) return;
 
-  // A settled system is held on screen so the outcome can be taken in, then
-  // the next scenario begins.
-  if (sim && sim.settled && now - sim.settledAt > CONFIG.holdMs) {
+  /* THE RUN IS ON A CLOCK. Three minutes of watching, then the pull-back,
+     then the wall moves on. Settling is still tracked and still shown on the
+     mass bar, but it no longer decides when the piece ends - a system that
+     settles early simply gets watched for the rest of its three minutes,
+     which is the point of taking the fast-forward out. */
+  const elapsed = (now - runStartedAt)/1000;
+  if (phase === 'run' && elapsed >= CONFIG.runSec) startOutro(now);
+  if (phase === 'outro' && now - outroStartedAt > CONFIG.outroSec*1000) {
     if (!PINNED && runIndex + 1 >= CONFIG.runsPerTurn) { handOff(); return; }
     newRun();
   }
 
-  if (!sim.settled) {
-    /* Fast-forward through quiet stretches - but EASE into it. Stepping the
-       multiplier in whole integers made the whole field visibly lurch between
-       speeds, which reads as the animation stuttering rather than as time
-       being compressed. The target still snaps back to 1x on a merge; only the
-       approach to it is smoothed, so speed changes are gradual either way. */
-    const quiet = sim.steps - sim.lastMerge;
-    const target = Math.min(CONFIG.maxBoost, 1 + quiet / CONFIG.boostAfter);
-    /* Slowing DOWN is still faster than speeding up - a merger should be seen
-       at something near real time, not at eight times - but 0.10 a frame
-       stopped the whole field dead inside a fifth of a second, which reads as
-       a stutter rather than as a deceleration. At 0.06 the drop from eight
-       times takes about half a second, which is also roughly how long the
-       collision flash lasts: the picture visibly slows down WHILE the flash
-       that caused it is still burning, so the two read as cause and effect. */
-    boostSmooth += (target - boostSmooth) * (target < boostSmooth ? 0.06 : 0.02);
-    stepAcc += sim.s.spf * boostSmooth;
-    const nSteps = Math.max(1, Math.floor(stepAcc));
-    stepAcc -= nSteps;                      // keep only the remainder
-    if (stepAcc < 0) stepAcc = 0;           // the max(1,...) floor can overdraw
-    for (let k = 0; k < nSteps; k++) sim.step();
-  } else {
-    /* The hold runs at TRUE 1x, which means spf steps - not one. Stepping once
-       here made the settled system drift at half the speed it had been moving
-       a moment earlier, and now that the readout says REAL TIME during the
-       hold, that would have been a plain lie. A merger during the hold still
-       clears `settled` and the run carries on, which is the intended
-       behaviour: if bodies are still colliding the story is not over. */
+  {
+    /* One frame of physics is spf steps, and spf is chosen per scenario so
+       that comes to real time. No multiplier, no accumulator, nothing to
+       ease - the clock on the wall and the clock in the simulation are the
+       same clock. */
     for (let k = 0; k < sim.s.spf; k++) sim.step();
+  }
+
+  /* MERGING HAS STOPPED - said once, four seconds, beside the core.
+     This was a canvas label reading "SETTLED" that swapped into the right-hand
+     end of the mass bar and then stayed there for the rest of the run, which
+     made it a state label for a state the picture already shows: when nothing
+     is colliding, nothing flashes. The interesting part is the instant it
+     becomes true, and that is a Moment. Placed against the heaviest body, not
+     at frame centre, because on this page the heaviest body IS frame centre. */
+  if (phase === 'run' && sim.settled && !settledSpoken) {
+    settledSpoken = true;
+    Wall.moment('Merging has stopped', { at: corePos });
   }
 
   /* Move the zoom ONCE PER FRAME, and never faster than a fixed fraction of
@@ -1261,7 +1431,15 @@ function frame(now) {
      when the system is expanding quickly the TARGET runs away fast and an
      uncapped ease would chase it just as fast. With the cap the picture can
      only ever breathe at one rate, whatever the simulation is doing. */
-  if (sim.viewTarget > 0) {
+  if (phase === 'outro') {
+    /* Eased in and out over the whole outro, and NOT run through the normal
+       zoom limiter below - that exists to keep the view calm while the system
+       is being watched, and its rate cap would take far longer than the outro
+       to cross this much ground. */
+    const k = Math.min(1, (now - outroStartedAt)/(CONFIG.outroSec*1000));
+    const e = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2)/2;
+    sim.viewRadius = outroFrom + (outroTo - outroFrom)*e;
+  } else if (sim.viewTarget > 0) {
     const cur = sim.viewRadius;
     let d = (sim.viewTarget - cur) * CONFIG.zoomEase;
     let cap = cur * CONFIG.zoomMaxRate;

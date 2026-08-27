@@ -13,79 +13,19 @@
      Two chips, always visible top-left. The whole point of randomising the
      rider and the knowledge mode is watching the difference between runs,
      so the labels have to be legible from the couch. */
-  #who { position:fixed; left:2vw; top:3vh; z-index:9; display:flex; gap:.6em; }
-  #who .chip { font:600 clamp(11px,1.0vw,22px)/1 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.14em; text-transform:uppercase; color:#eef2f8;
-    background:rgba(8,11,18,.66); border:1px solid rgba(255,255,255,.22);
-    border-radius:.45em; padding:.62em .9em; backdrop-filter:blur(4px);
-    text-shadow:0 1px 6px rgba(0,0,0,.8); }
-  #who .chip .dot { display:inline-block; width:.62em; height:.62em; border-radius:50%;
-    margin-right:.55em; vertical-align:1%; }
+  /* ---- WHAT USED TO BE HERE ------------------------------------------
+     #who      two chips, top-left, lit for the whole run
+     #ticker   a two-line narration, lit for the whole run
+     #card     a 36vw glass slab for the intro and the finish
+     #caption  a centred band reading THE FASTEST LINE plus a seed line
 
-  /* ---- the action ticker ----------------------------------------------
-     One short line saying what the rider is DOING and one smaller line
-     saying WHY. This is how a spectator reads the rider's decisions. */
-  #ticker { position:fixed; left:0; right:0; bottom:12.5vh; z-index:9; text-align:center;
-    pointer-events:none; }
-  #ticker .act { font:600 clamp(15px,1.7vw,38px)/1.15 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.2em; text-transform:uppercase; color:rgba(240,245,252,.95);
-    text-shadow:0 2px 12px rgba(0,0,0,.85); }
-  #ticker .why { margin-top:.35em; font:400 clamp(11px,1.0vw,22px)/1.3 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.08em; color:rgba(210,222,238,.72); text-shadow:0 2px 10px rgba(0,0,0,.85); }
-
-  /* ---- intro / finish card --------------------------------------------
-     Same glass-card look as the other wall pieces. */
-  #card { position:fixed; right:3.5vw; top:50%; transform:translateY(-50%) translateX(3vw);
-    z-index:10; width:min(36vw,660px); opacity:0; pointer-events:none;
-    transition:opacity 1.1s ease-out, transform 1.1s ease-out;
-    background:linear-gradient(135deg, rgba(10,14,22,.92), rgba(10,14,22,.76));
-    border:1px solid rgba(255,255,255,.14); border-radius:.55em;
-    padding:1.4em 1.6em; backdrop-filter:blur(7px);
-    box-shadow:0 10px 46px rgba(0,0,0,.6);
-    font:300 clamp(12px,1.05vw,24px)/1.45 ui-sans-serif,system-ui,sans-serif; color:#e8edf5; }
-  #card.show { opacity:1; transform:translateY(-50%) translateX(0); }
-  #card .pk { font-weight:300; font-size:1.8em; line-height:1.15; letter-spacing:.06em; }
-  #card .sub { margin-top:.3em; font-family:ui-monospace,Menlo,monospace; font-size:.72em;
-    color:rgba(205,218,236,.78); letter-spacing:.04em; }
-  #card .rows { margin-top:.8em; font-family:ui-monospace,Menlo,monospace; font-size:.78em;
-    color:rgba(228,236,247,.9); white-space:pre; line-height:1.65; }
-  #card canvas { display:block; margin-top:.9em; width:100%; border-radius:.35em;
-    background:rgba(255,255,255,.045); }
-  #card .surfbar { display:flex; height:.55em; margin-top:.9em; border-radius:.3em; overflow:hidden;
-    border:1px solid rgba(255,255,255,.12); }
-  #card .surfkey { margin-top:.4em; font-family:ui-monospace,Menlo,monospace; font-size:.62em;
-    color:rgba(200,212,230,.65); letter-spacing:.02em; }
-
-  /* ---- caption bar ----
-     A PLATE THAT HUGS THE TEXT, rather than the full-width gradient the map
-     pages use. Both of the obvious options are wrong here, and I tried both:
-
-     A full-bleed scrim at bottom:0 - which is what hike.html and weather.html
-     do, because they caption over a bright satellite basemap - covers the
-     lowest ninety pixels of a 2160-tall screen. That is exactly the band
-     holding this page's INSTRUMENTS: the grade and camber lines at the foot of
-     the speed panel sit 58 px off the bottom, and the elevation profile's
-     lower edge is lower still. It put a wash over both.
-
-     Dropping the scrim for a text-shadow then failed the other way. The
-     caption is pale, and after the round-3 camera change the pale gravel of
-     the trail itself runs straight through the bottom centre of the frame -
-     light text on light ground, and no shadow rescues that.
-
-     So: a small dark plate sized to its own contents and centred, which is the
-     same idiom as the rider chips at the top left. It darkens the ~450 px
-     behind the words and nothing else - the speed panel ends around x=1520 of
-     3840 and the profile box starts around x=2900, so the plate sits in the
-     clear gap between them. Lifted off the very edge because televisions
-     overscan. */
-  #caption { position:fixed; left:0; right:0; bottom:1.6vh; z-index:8; text-align:center;
-    width:fit-content; margin-inline:auto; pointer-events:none;
-    background:rgba(6,9,15,.55); border-radius:.5em; padding:.5em 1.5em .55em;
-    text-shadow:0 1px 3px rgba(0,0,0,.7); }
-  #caption .what { font:300 clamp(12px,1.1vw,24px)/1.3 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.24em; text-transform:uppercase; color:rgba(235,241,249,.88); }
-  #caption .params { margin-top:.25em; font:400 clamp(9px,.75vw,16px)/1.3 ui-monospace,Menlo,monospace;
-    letter-spacing:.05em; color:rgba(205,216,232,.5); }
+     Eight lit regions on five different x-origins, three of four corners
+     furniture, and the instrument panel's last line cut off by the bottom of
+     the screen in BOTH reference photographs. All of it is gone. Language on
+     this page is now the Lane (two sentences a run) and Moments (four words,
+     edge-triggered), both from wall.css, in the same place as every other
+     page in the rotation. Numbers that survived became Marks on the picture
+     in drawHUD; everything else is in #info. See WALL_REVIEW.md. */
 
   #info { position:fixed; left:2vw; bottom:9vh; z-index:11; display:none;
     font:500 clamp(11px,.9vw,17px)/1.5 ui-monospace,Menlo,monospace;
@@ -93,13 +33,17 @@
     border:1px solid rgba(255,255,255,.15); white-space:pre; }
   body.showinfo #info { display:block; }
 </style>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: every page here runs its setup at the
+     end of an INLINE script, which executes before any deferred bottom
+     tag. Loaded at the bottom, Wall was undefined exactly when the first
+     episode tried to speak. It touches the DOM only inside its calls, so
+     the head is safe. nav.js stays at the bottom and still sees it. -->
+<script src="wall.js"></script>
 </head>
 <body>
 <canvas id="cv"></canvas>
-<div id="who"></div>
-<div id="ticker"><div class="act"></div><div class="why"></div></div>
 <div id="card"></div>
-<div id="caption"><div class="what">The Fastest Line</div><div class="params"></div></div>
 <div id="info"></div>
 <script>
 'use strict';
@@ -176,7 +120,9 @@ const CONFIG = {
   ds: 1.0,                 // metres between trail stations (the sim's spatial grid)
   drawDist: 250,           // how far ahead the renderer bothers to look, metres
   corridor: 15,            // hillside drawn this far to each side of the trail
-  introSec: 8, countSec: 3, finishSec: 13,
+  /* finishSec was 13 and the camera just sat on the gate - "way too long"
+     (Joe, 2026-08-26). Seven seconds still clears the closing sentence. */
+  introSec: 8, countSec: 3, finishSec: 7,
   g: 9.81,
   rho: 1.02,               // thin air - these mountains sit at altitude
   wheelR: 0.368,           // 29" wheel with a tyre on it
@@ -345,9 +291,16 @@ function genTrail(seedStr){
      physically impossible knots. */
   const MAXDEV = 81*DEG;
 
-  function pushStation(kappa, thetaTarget, segTag){
+  function pushStation(kappa, thetaTarget, segTag, snap){
     const i = x.length;
-    const dTh = clamp(thetaTarget-theta, -.028, .028); theta += dTh;   // grade eases, never snaps
+    /* Grade eases, never snaps - EXCEPT at a jump lip. The 0.028 rad/station
+       ease is what makes trails ride like dirt instead of ramps, but it also
+       caps the vertical curvature so low that leaving the ground needed
+       ~50 mph: kapV <= 0.028/ds, and flight wants v^2*kapV > g. A lip is the
+       one place a trail genuinely DOES snap - a built kicker breaks from
+       up-ramp to falling-away in a bike length - so the JUMP segment alone
+       may pass `snap` and change grade sharply. */
+    const dTh = clamp(thetaTarget-theta, snap?-.34:-.028, snap?.34:.028); theta += dTh;
     psi += kappa*ds;
     const psiF = fallAt(i);
     if (segTag!==2){                          // 2 = SWITCH: the one place a trail sweeps past the cone
@@ -362,7 +315,12 @@ function genTrail(seedStr){
   }
 
   /* -- segment machine -- */
-  const SEG={TRAV:0,SBEND:1,SWITCH:2,CHUTE:3,ROLL:4,RUNOUT:5,MEADOW:6};
+  const SEG={TRAV:0,SBEND:1,SWITCH:2,CHUTE:3,ROLL:4,RUNOUT:5,MEADOW:6,JUMP:7};
+  /* Cooldowns here are in STATIONS, but the segment loop runs once per
+     SEGMENT (thirty-odd stations each) - counting iterations left jumpCool
+     at 60 forever and the first build produced five trails with zero lips.
+     The decrement below measures what was actually emitted. */
+  let jumpCool=60, jumpsMade=0, lastLen=0;
   const switchbacks=[];    // [startIdx,endIdx,dir,bermH,R] for berms/surfacing later
   const chutes=[];
   let switchCool=0;        // stations until another switchback is allowed - real
@@ -374,11 +332,21 @@ function genTrail(seedStr){
     const i0=x.length, hill=hillAt(i0);
     let type;
     if (Math.abs(u) > uMax && switchCool<=0) type=SEG.SWITCH;
+    /* Joe's ask (2026-08-27): every trail should offer air several times.
+       Jumps are drawn from their own hat, with a cooldown so they read as
+       features rather than a rhythm section - and the draw is generous
+       until three are in, so short trails still get theirs. */
+    else if (jumpCool<=0 && hill>.18 && x.length>140
+             && (R01() < (jumpsMade<4? .18 : .04)
+                 /* catch-up: a trail past 60% of its drop with fewer than
+                    three jumps takes one at the next legal opportunity */
+                 || (jumpsMade<3 && drop>vertTarget*.6))) type=SEG.JUMP;
     else { const r=R01();
       type = r<.30?SEG.TRAV : r<.48?SEG.SBEND : r<.58?SEG.MEADOW
            : r<.70?(hill>.5?SEG.CHUTE:SEG.TRAV)
            : r<.84?SEG.ROLL : (switchCool<=0?SEG.SWITCH:SEG.TRAV); }
     switchCool -= 1;
+    jumpCool -= (x.length - lastLen); lastLen = x.length;
     const mood=moodAt(i0);
 
     if (type===SEG.TRAV){
@@ -457,6 +425,25 @@ function genTrail(seedStr){
       for(let k=0;k<len;k++) pushStation(RR(-.004,.004), Math.atan(gr), SEG.CHUTE);
       chutes.push([s0,x.length]);
       switchCool-=len;
+    } else if (type===SEG.JUMP){
+      /* A built kicker: run-in at trail grade, a short up-ramp, ONE snapped
+         station at the lip where the ground breaks away, then a steep
+         landing ramp easing back to the hill. The physics needs no special
+         case: the lip's kapV is exactly what the flight integrator reads,
+         so speed decides everything - hit it fast and fly, roll it slow and
+         it is just a roller. Straight by construction (kappa 0), because a
+         jump into a corner would be sadism, not trail-building. */
+      const gr=clamp(RR(.12,.20)*Math.max(1,mood), .08, hill*.85);
+      for(let k=0;k<5;k++)  pushStation(0, Math.atan(gr), SEG.JUMP);
+      const kick=RR(.09,.15);
+      for(let k=0;k<4;k++)  pushStation(0, Math.atan(-kick), SEG.JUMP, true);
+      const fall=RR(.30,.42);
+      pushStation(0, Math.atan(fall), SEG.JUMP, true);          // the lip
+      const land=RI(9,14);
+      for(let k=0;k<land;k++)
+        pushStation(0, Math.atan(lerp(fall, gr, k/land)), SEG.JUMP);
+      jumpsMade++; jumpCool=RI(80,170);
+      switchCool-=6;
     } else { // ROLLERS
       const len=RI(30,70), base=clamp(RR(.11,.17)*mood,.05,hill*.8), wl=RR(8,14);
       for(let k=0;k<len;k++)
@@ -531,39 +518,49 @@ function genTrail(seedStr){
     mu0[i]=(mu0[i-1]+2*mu0[i]+mu0[i+1])/4; crr[i]=(crr[i-1]+2*crr[i]+crr[i+1])/4;
     rough[i]=(rough[i-1]+2*rough[i]+rough[i+1])/4; }
 
-  /* -- LATERAL heterogeneity: stripes and patches WITHIN the trail width ----
-     The opening stretch of every ride keeps each surface as one clean band
-     across the whole tread, so the viewer learns the colour code. From about
-     a third of the way down, mixed zones appear: either a worn STRIPE of a
-     contrasting surface snaking down the tread (a gravel wash, a slick
-     rut), or discrete PATCHES alternating side to side. Grip now differs
-     ACROSS the width, so the line solver has a real reason to be on one side
-     rather than the other - which is the point.                            */
-  const bId=new Uint8Array(N).fill(255), bLo=new Float32Array(N), bHi=new Float32Array(N);
-  { let i=Math.round(N*RR(.28,.40));                     // homogeneous until here
+  /* -- LATERAL heterogeneity: an 8-cell lattice across the tread -----------
+     The first version stored ONE guest interval per station - a base surface
+     with a single stripe or patch - which capped the tread at two or three
+     visible zones. Joe asked for six to ten tiles across the width so the
+     line choice reads like a real trail. So the lateral axis is now a
+     LATTICE: eight cells across the tread, each holding a surface id (255 =
+     the station's base surface), painted per zone from coherent 2D value
+     noise so the guests form braided stripes and blobs a couple of cells
+     wide rather than checkerboard confetti. One zone can carry TWO guest
+     surfaces, which is where the six-to-ten count comes from: base + two
+     guests interleaving.
+
+     The opening stretch still keeps each surface as one clean band, so a
+     viewer learns the colour code before being asked to read a mixture. */
+  const LC=8;                                   // lateral cells across the tread
+  const bCell=new Uint8Array(N*LC).fill(255);
+  { let i=Math.round(N*RR(.28,.40));            // homogeneous until here
     while(i<N-60){
-      if (R01()<.5){ i+=RI(25,90); continue; }           // plain stretch between zones
-      const len=RI(18,60), baseS=surf[i];
+      if (R01()<.35){ i+=RI(10,44); continue; } // plain stretch between zones
+      const len=RI(30,110), baseS=surf[i];
       const cands=[0,1,2,3,4,5,6].filter(s2=>s2!==baseS && Math.abs(SURFS[s2].mu-SURFS[baseS].mu)>=.10);
       if (!cands.length){ i+=20; continue; }
       const guest=cands[RI(0,cands.length-1)];
-      const stripe=R01()<.62;                            // else side-to-side patches
-      const cNz=smoothNoise1D(rand, len, 22, .5);
-      const half=RR(.28,.5);                             // stripe half-width, metres
-      let side=R01()<.5?1:-1, left=RI(4,9);
+      const guest2=cands.length>1 && R01()<.4
+        ? cands.filter(c2=>c2!==guest)[RI(0,cands.length-2)] : -1;
+      /* Coarse value-noise lattice, bilinear-sampled: features ~6 stations
+         long and ~2 cells wide, which is the scale of a real gravel wash. */
+      const gx=Math.ceil(len/6)+2, gy=5;
+      const n1=[...Array(gx*gy)].map(R01);
+      const n2=guest2>=0? [...Array(gx*gy)].map(R01) : null;
+      const val=(g,k,c)=>{
+        const u=Math.min(k/6, gx-1.001), v=c/(LC-1)*(gy-1.001);
+        const u0=u|0, v0=v|0, fu=u-u0, fv=v-v0;
+        const su=fu*fu*(3-2*fu), sv=fv*fv*(3-2*fv);
+        const a2=g[v0*gx+u0], b2=g[v0*gx+u0+1], c2=g[(v0+1)*gx+u0], d2=g[(v0+1)*gx+u0+1];
+        return a2+(b2-a2)*su + ((c2+(d2-c2)*su)-(a2+(b2-a2)*su))*sv;
+      };
+      const thr=RR(.52,.62);
       for(let k=0;k<len && i<N-40;k++,i++){
-        if (bermH[i]>0) continue;                        // berms stay readable
-        const hw=width[i]/2;
-        if (stripe){
-          const cc=clamp(cNz[k],-.45,.45)*hw;
-          bId[i]=guest;
-          bLo[i]=Math.max(-hw*.94, cc-Math.min(half,hw*.42));
-          bHi[i]=Math.min( hw*.94, cc+Math.min(half,hw*.42));
-        } else {
-          if (--left<=0){ side=-side; left=RI(4,9); }    // discrete patch, then swap sides
-          bId[i]=guest;
-          if (side>0){ bLo[i]=cNz[k]*.3; bHi[i]=hw*.94; }
-          else       { bLo[i]=-hw*.94;  bHi[i]=cNz[k]*.3; }
+        if (bermH[i]>0) continue;               // berms stay readable
+        for(let c=0;c<LC;c++){
+          if (val(n1,k,c)>thr) bCell[i*LC+c]=guest;
+          else if (n2 && val(n2,k,c)>thr+.05) bCell[i*LC+c]=guest2;
         }
       }
     } }
@@ -582,6 +579,7 @@ function genTrail(seedStr){
   let lastBig=-40, garden=0;
   for(let i=6;i<N-40;i++){
     const s=surf[i], inChute=segA[i]===SEG.CHUTE;
+    if (segA[i]===SEG.JUMP) continue;   // a rock on a lip or landing is cruelty
     const region=rockNz[i];             // >0.22 rocky country, < -0.15 clean dirt
     if (region < -.15) { garden=0; continue; }
     const rocky = region > .22;
@@ -676,7 +674,7 @@ function genTrail(seedStr){
   const totLen=N*ds, totDrop=z[0]-z[N-1];
   const name = trailName();
   return {N, ds, x,y,z, psi:psiA, theta:thetaA, seg:segA, kapH,kapV,kapSm, width, sig0, bermH,
-          bermSide, uphill, hillS, cupH, surf, mu0, crr, rough, bId, bLo, bHi,
+          bermSide, uphill, hillS, cupH, surf, mu0, crr, rough, bCell, LC,
           rocks, rockBucket, trees, sight,
           totLen, totDrop, name, seed:seedStr, switchbacks, chutes,
           finishIdx: N-6};
@@ -804,19 +802,20 @@ function planLine(rider, i0, i1, nInit, iters=140){
         n[rk.i]=clamp(n[rk.i]+push*.6, lo[rk.i], hi[rk.i]); setP(rk.i);
       }
     }
-    // surface stripes: standing on a slick stripe with grippier dirt an arm's
-    // length away is a mistake no rider makes - drift off it (or ONTO a stripe
-    // that is grippier than the base tread)
+    // surface tiles: standing on a slick tile with grippier dirt an arm's
+    // length away is a mistake no rider makes. With the 8-cell lattice the
+    // question is local: sample the tread half a metre to each side and lean
+    // the line toward the best grip within reach. Run over the last
+    // iterations only, like the old stripe nudge, so it refines rather than
+    // fights the curvature solve.
     if (it>iters-30) for(let i=i0+2;i<i1-1;i++){
-      const b=T.bId[i]; if (b===255) continue;
-      const dMu=SURFS[b].mu - T.mu0[i];
-      const inB = n[i]>=T.bLo[i] && n[i]<=T.bHi[i];
-      const mid=(T.bLo[i]+T.bHi[i])/2;
-      if (inB && dMu < -.06){
-        const edge= n[i]>=mid? T.bHi[i]+.18 : T.bLo[i]-.18;
-        n[i]=clamp(n[i]+(edge-n[i])*.3, lo[i], hi[i]); setP(i);
-      } else if (!inB && dMu > .06 && Math.abs(mid-n[i])<.9){
-        n[i]=clamp(n[i]+(mid-n[i])*.18, lo[i], hi[i]); setP(i);
+      if (T.bermH[i]>0) continue;
+      const here=surfAt(i, n[i]).mu;
+      const Lmu=surfAt(i, n[i]-.5).mu, Rmu=surfAt(i, n[i]+.5).mu;
+      const best=Math.max(Lmu, Rmu);
+      if (best-here >= .06){
+        const dir= Lmu>=Rmu? -1 : 1;
+        n[i]=clamp(n[i]+dir*.22, lo[i], hi[i]); setP(i);
       }
     }
   }
@@ -833,8 +832,10 @@ function planLine(rider, i0, i1, nInit, iters=140){
    unless a stripe/patch covers that offset. This is what makes lateral
    heterogeneity real: everything downstream that knows its n asks here. */
 function surfAt(i, n){
-  const b=T.bId[i];
-  if (b!==255 && n>=T.bLo[i] && n<=T.bHi[i]){ const s=SURFS[b];
+  const hw=T.width[i]/2;
+  const c=Math.max(0, Math.min(T.LC-1, ((n/hw+1)*0.5*T.LC)|0));
+  const b=T.bCell[i*T.LC+c];
+  if (b!==255){ const s=SURFS[b];
     return {mu:s.mu, crr:s.crr, rough:s.rough, id:b}; }
   return {mu:T.mu0[i], crr:T.crr[i], rough:T.rough[i], id:T.surf[i]};
 }
@@ -1005,6 +1006,8 @@ function makeSim(rider, mode){
     posture: 'stand', postureW: {stand:1,pedal:0,tuck:0,brake:0},
     aLat: 0, aLong: 0, brakeF: 0, pedalW: 0, brakeAf: 0, brakeAr: 0, rearLight: false,
     sliding: false, slideT: 0,
+    airH: 0, airVz: 0, airT: 0, tAir: 0, airCool: 0,   // flight state
+    rearSkid: 0, skidYaw: 0, tSkid: 0,                 // deliberate rear lock
     slides: 0, distance: 0, time: 0,
     tBrake: 0, tPedal: 0, tCoast: 0, maxV: 0, maxLean: 0,
     replanAt: 0, sightIdx: mode==='onsight'? Math.max(15,Math.round(T.sight[1])) : T.N-1,
@@ -1049,6 +1052,40 @@ function stepSim(dt){
   const cap=Math.max(.2, mue*gn);
   const latU=clamp(Math.abs(aLatNeed)/cap, 0, 1.6);
 
+  /* ---- AIR (Joe's ask, 2026-08-27) ------------------------------------
+     The ground can fall away faster than gravity drops the bike. The page
+     already knew this - crestFactor() derates grip by v^2*kapV/g, and when
+     that ratio passes one the wheels carry NOTHING - it just never let the
+     bike actually leave. Now it does: past the ratio the bike is ballistic
+     RELATIVE TO THE TREAD, with relative height h obeying
+         h'' = v^2 * kapV(s) - g
+     (the ground's own downward acceleration under a rider moving at v,
+     minus gravity's). Takeoff is that expression turning positive at h=0;
+     landing is h returning to zero, where the impact speed sets a
+     suspension squat and a touch of scrubbed speed. While airborne there is
+     no braking, no pedalling, no rolling resistance and no steering -
+     which is exactly why jumps matter to the line. */
+  const wasAir = S.airH > 0;
+  S.airCool = Math.max(0, S.airCool - dt);
+  if (!wasAir && S.airCool <= 0 && S.v > 5
+      && S.v*S.v*(T.kapV[i]||0) > g*1.05){
+    S.airH = 0.001; S.airVz = 0; S.airT = 0;
+  }
+  if (S.airH > 0){
+    const relAcc = S.v*S.v*(T.kapV[i]||0) - g;
+    S.airVz += relAcc*dt;
+    S.airH  += S.airVz*dt;
+    S.airT  += dt; S.tAir += dt;
+    if (S.airH <= 0){
+      const impact = Math.abs(S.airVz);
+      if (S.airT >= 0.12) S.airN = (S.airN||0) + 1;   // a real flight, not a rut-hop
+      S.airH = 0; S.airVz = 0; S.airCool = 0.4;
+      S.rockPulse = Math.max(S.rockPulse||0, Math.min(1, impact/5));
+      S.v = Math.max(.5, S.v - Math.min(2, impact*.22));   // suspension bill
+    }
+  }
+  const airborne = S.airH > 0;
+
   // traction circle in real time: what's left for braking/driving?
   const leftFrac=latU<1? Math.sqrt(1-Math.min(latU,1)**2) : 0;
   const endo=endoCap(POSTURE.brake, th)*.95;
@@ -1067,7 +1104,40 @@ function stepSim(dt){
   let aBrake=0, aDrive=0;
   if (aCmd < grav-drag-roll-.05) aBrake=clamp((grav-drag-roll)-aCmd, 0, brakeCap);
   else aDrive=clamp(aCmd-(grav-drag-roll), 0, driveCap);
-  const aLong=grav+aDrive-aBrake-drag-roll;
+
+  /* ---- THE DELIBERATE REAR SKID (Joe's ask) ---------------------------
+     On steep ground, braking hard, a real rider locks the rear and drags
+     it: the front stays on its static grip doing the real stopping, the
+     rear scrubs at kinetic friction (~72% of static) and steps out of
+     line. It costs a little stopping power - which is honest, and why the
+     plan-following error may breathe slightly on steep trails - and it
+     buys the sharp-turn entry: the locked rear lets the tail swing toward
+     the inside of the coming corner. */
+  { const steep = Math.tan(th) > 0.13;
+    const want = (!airborne && steep && aBrake > 0.88*brakeCap && S.v > 4) ? 1 : 0;
+    S.rearSkid = lerp(S.rearSkid, want, Math.min(1, dt*8));
+    if (S.rearSkid > 0.5){
+      S.tSkid += dt;
+      /* kinetic rear: recompute the achieved deceleration with the rear
+         wheel's share degraded. The split itself is computed below from
+         wheel loads; here the total is taxed by the rear share's loss. */
+      const post=POSTURE[S.posture], hcg=post.cg, L=CONFIG.wheelbase;
+      const shift=(aBrake/g)*hcg/L;
+      let nf=Math.cos(th)*post.cgFromRear + shift;
+      let nr=Math.max(0, Math.cos(th)*(1-post.cgFromRear) - shift);
+      const tot=nf+nr||1;
+      aBrake *= (nf + 0.72*nr)/tot;
+      addSkid(i);
+      /* tail toward the inside of the next corner; straight chutes drag
+         the rear in line and get no yaw */
+      const kapNext = PLAN.kapP[Math.min(T.N-1, i+6)] || 0;
+      S.skidYaw = lerp(S.skidYaw, clamp(kapNext*30, -1, 1)*0.30, Math.min(1, dt*6));
+    } else {
+      S.skidYaw = lerp(S.skidYaw, 0, Math.min(1, dt*6));
+    }
+  }
+  if (airborne){ aBrake=0; aDrive=0; }
+  const aLong=grav+aDrive-aBrake-drag-(airborne?0:roll);
   S.v=Math.max(.5, S.v+aLong*dt);
   S.brakeF=aBrake/Math.max(.3,brakeCap); S.pedalW=aDrive>0.01? wantP:0;
   S.aLong=aLong;
@@ -1101,8 +1171,10 @@ function stepSim(dt){
   // --- lateral: track the planned line; saturate = slide -----------------
   const nP=gv(PLAN.n);
   const om=6;
-  let nAcc=om*om*(nP-S.n)-2*om*S.nVel;
-  const aLatTot=aLatNeed + nAcc*.2;
+  /* Airborne there is no steering: the line is whatever it was at takeoff
+     until the wheels are back. */
+  let nAcc= airborne? 0 : om*om*(nP-S.n)-2*om*S.nVel;
+  const aLatTot= airborne? 0 : aLatNeed + nAcc*.2;
   S.aLat=aLatTot;
   const over=Math.abs(aLatTot) - Math.max(.2, bankedLat(mue, gn, gv(PLAN.bank)));
   if (over>0 && S.v>3){
@@ -1516,27 +1588,39 @@ function drawStrip(a,b){
       }
     }
   }
-  // lateral stripe/patch of a second surface, painted over the base tread with
-  // a crisp edge - the whole point is that the viewer can SEE the choice
-  if (T.bId[a]!==255){
-    const gs=SURFS[T.bId[a]];
-    const loB=T.bId[b]!==255? T.bLo[b]:T.bLo[a], hiB=T.bId[b]!==255? T.bHi[b]:T.bHi[a];
-    const q0=stationPoint(a, T.bLo[a], [0,0,0]); q0[2]+=.012;
-    const q1=stationPoint(a, T.bHi[a], [0,0,0]); q1[2]+=.012;
-    const q2=stationPoint(b, hiB, [0,0,0]); q2[2]+=.012;
-    const q3=stationPoint(b, loB, [0,0,0]); q3[2]+=.012;
-    proj(q0,_p[0]); proj(q1,_p[1]); proj(q2,_p[2]); proj(q3,_p[3]);
-    quad(_p[0],_p[1],_p[2],_p[3], shadeQuad(q0,q1,q2,q3, gs.col, 1), 'rgba(30,24,18,.28)');
-    if (gs.spk && _p[0][2]<70 && _p[0][2]>0){
-      const rng=mulberry32(a*3557+11);
-      ctx.fillStyle=gs.spk;
-      for(let d=0;d<3;d++){
-        const fx=rng(), fy=rng();
-        const px=_p[0][0]+(_p[1][0]-_p[0][0])*fx+(_p[3][0]-_p[0][0])*fy;
-        const py=_p[0][1]+(_p[1][1]-_p[0][1])*fx+(_p[3][1]-_p[0][1])*fy;
-        const rr=.07*CAM.f/_p[0][2];
-        ctx.fillRect(px,py,Math.max(1,rr),Math.max(1,rr));
+  // guest tiles from the lateral lattice, painted over the base tread with
+  // crisp edges - the whole point is that the viewer can SEE the choices.
+  // Contiguous same-surface cells collapse into one quad, so a plain station
+  // costs nothing and a fully mixed one costs three or four quads, which is
+  // why doubling the tile count did not double the draw bill.
+  { const LC=T.LC, row=a*LC, hwA=T.width[a]/2*.97, hwB=T.width[b]/2*.97;
+    let c=0;
+    while(c<LC){
+      const id=T.bCell[row+c];
+      if (id===255){ c++; continue; }
+      let c1=c+1;
+      while(c1<LC && T.bCell[row+c1]===id) c1++;
+      const gs=SURFS[id];
+      const lA=(-1+2*c/LC)*hwA,  hA=(-1+2*c1/LC)*hwA;
+      const lB=(-1+2*c/LC)*hwB,  hB=(-1+2*c1/LC)*hwB;
+      const q0=stationPoint(a, lA, [0,0,0]); q0[2]+=.012;
+      const q1=stationPoint(a, hA, [0,0,0]); q1[2]+=.012;
+      const q2=stationPoint(b, hB, [0,0,0]); q2[2]+=.012;
+      const q3=stationPoint(b, lB, [0,0,0]); q3[2]+=.012;
+      proj(q0,_p[0]); proj(q1,_p[1]); proj(q2,_p[2]); proj(q3,_p[3]);
+      quad(_p[0],_p[1],_p[2],_p[3], shadeQuad(q0,q1,q2,q3, gs.col, 1), 'rgba(30,24,18,.34)');
+      if (gs.spk && _p[0][2]<70 && _p[0][2]>0){
+        const rng=mulberry32(a*3557+c*29+11);
+        ctx.fillStyle=gs.spk;
+        for(let d=0;d<2;d++){
+          const fx=rng(), fy=rng();
+          const px=_p[0][0]+(_p[1][0]-_p[0][0])*fx+(_p[3][0]-_p[0][0])*fy;
+          const py=_p[0][1]+(_p[1][1]-_p[0][1])*fx+(_p[3][1]-_p[0][1])*fy;
+          const rr=.07*CAM.f/_p[0][2];
+          ctx.fillRect(px,py,Math.max(1,rr),Math.max(1,rr));
+        }
       }
+      c=c1;
     }
   }
   drawApron(a,b,ca,cb, -1); drawApron(a,b,ca,cb, 1);
@@ -1733,22 +1817,29 @@ function riderBasePos(){
                  -T.width[i]/2-2, T.width[i]/2+2);
   const sp=surfAt(i,S.n);
   const sink= sp.id===2? .045 : sp.id===4? .02 : 0;
-  base[2] += Math.max(0, zOff(i,nS)-zOff(i,S.n)) + .03 - sink;
+  base[2] += Math.max(0, zOff(i,nS)-zOff(i,S.n)) + .03 - sink
+           + (S.airH||0);                        // flight lifts the whole rider
   return {i, base};
 }
 /* The shadow is painted with the ground UNDER the bike (the rider strip), the
    bike itself two stations NEARER in the paint order - see drawWorld. */
 function drawRiderShadow(){
   const {base}=riderBasePos();
+  /* The shadow is what sells the jump: it stays pinned to the tread while
+     the bike rises, and it thins as the gap grows. */
+  base[2] -= (SIM.airH||0);
   proj(base,_p[0]);
   if (_p[0][2]>0){ const r=1.1*CAM.f/_p[0][2];
-    ctx.fillStyle='rgba(10,8,5,.30)'; ctx.beginPath();
+    ctx.fillStyle='rgba(10,8,5,'+(.30*Math.max(.35,1-(SIM.airH||0)*.5)).toFixed(3)+')'; ctx.beginPath();
     ctx.ellipse(_p[0][0],_p[0][1], r, r*.28, 0, 0, TAU); ctx.fill(); }
 }
 function drawRider(){
   const S=SIM;
   const {i, base}=riderBasePos();
-  const psi=T.psi[i], th=PLAN.thP[i]||T.theta[i];
+  /* skidYaw swings the BIKE's heading off the path heading - the tail
+     stepping out under a locked rear. The rider's body frame keeps the path
+     heading, which is what a cutty actually looks like. */
+  const psi=T.psi[i]+(S.skidYaw||0), th=PLAN.thP[i]||T.theta[i];
   const t=[Math.cos(psi)*Math.cos(th), Math.sin(psi)*Math.cos(th), -Math.sin(th)];   // forward
   let l=[-Math.sin(psi), Math.cos(psi), 0];                                          // left
   let k=[t[1]*l[2]-t[2]*l[1], t[2]*l[0]-t[0]*l[2], t[0]*l[1]-t[1]*l[0]];              // up
@@ -1831,210 +1922,271 @@ function drawRider(){
 
 /* ============================== HUD ===================================== */
 function drawHUD(){
+  /* ======================================================================
+     WHAT THIS USED TO BE, AND WHY ALMOST ALL OF IT IS GONE.
+
+     A 648x186-unit instrument slab in the bottom-left holding a speed stack
+     in two units, grade, camber, a surface chip with mu and crr, a grip ring
+     with a two-line key, three brake/power bars and a lean dial - plus a
+     separate elevation-profile card bottom-right with an unplated clock
+     floating over the trees. Eight lit regions on five different origins,
+     three of four corners furniture, and "camber 4 out" cut off by the
+     bottom edge of the screen in BOTH reference photographs, because the
+     panel anchored at H-208u with no safe inset.
+
+     None of it was for anyone in the room. Front/rear brake force split by
+     wheel load is telemetry for a rider, and the rider is not on the sofa.
+     Camber, lean and grade are all DRAWN, at full size, in perspective, in
+     the middle of the frame - the readouts restated the picture in digits.
+
+     Three things survive, and each one now TOUCHES ITS SUBJECT:
+       SPEED     the one quantity the picture genuinely cannot draw, so it
+                 rides beside the rider's shoulder.
+       GRIP      the one gauge no sentence replaces: how much of the
+                 available friction is being spent, and in which direction.
+                 Joe asked for it to stay. It is now at world scale on the
+                 ground under the rear tyre, and it needs no key, because a
+                 dot inside a ring explains itself.
+       CAUSE     why the rider is about to slow, painted on the piece of
+                 trail that is causing it rather than on a rail 900 px away,
+                 so cause and consequence read in one glance.
+
+     Everything else went to #info or to a Moment. See WALL_REVIEW.md.
+     ====================================================================== */
   const S=SIM, i=clamp(Math.floor(S.idx),0,T.N-1);
-  const u=H/900;                       // HUD scale unit
+  const u=H/900;
+
+  drawInstrument(S, i);
   ctx.save();
-  // panel
-  ctx.fillStyle='rgba(8,11,18,.55)';
-  roundRect(18*u, H-208*u, 648*u, 186*u, 12*u); ctx.fill();
-  ctx.strokeStyle='rgba(255,255,255,.16)'; ctx.lineWidth=1; roundRect(18*u,H-208*u,648*u,186*u,12*u); ctx.stroke();
 
-  // speed
-  const mph=S.v*2.23694, kmh=S.v*3.6;
-  ctx.fillStyle='#f2f5fa'; ctx.textAlign='left';
-  ctx.font=`300 ${64*u}px ui-sans-serif`; ctx.fillText(mph.toFixed(0), 40*u, H-118*u);
-  ctx.font=`400 ${17*u}px ui-sans-serif`; ctx.fillStyle='rgba(220,230,244,.6)';
-  ctx.fillText('mph', 40*u, H-94*u);
-  ctx.fillText(kmh.toFixed(0)+' km/h', 40*u, H-70*u);
-  // WHY the trail is about to demand a different speed: the tightest ceiling
-  // in the next 35 m, named - corner, rock, sight line, or simply the dirt.
-  // Its own pill ABOVE the panel, so the eye finds cause-and-effect instantly.
+  const {base}=riderBasePos();
+  const shoulder=proj([base[0],base[1],base[2]+1.30],[0,0,0]);
+  const patch   =proj([base[0],base[1],base[2]+0.04],[0,0,0]);
+
+  /* ---- GRIP, at the contact patch, at world scale ---------------------
+     Drawn first so the speed figure sits on top of it if they ever meet.
+     The radius is a real 0.85 m on the ground, so the ring grows as the
+     camera closes and shrinks as it backs off - which is the test of a
+     Mark: change the camera and it stays with its subject. */
+  if (patch[2]>0.5 && !(S.airH>0)){
+    const R0=clamp(CAM.f*0.85/patch[2], 18*u, 150*u);
+    const cx=patch[0], cy2=patch[1];
+    ctx.lineWidth=Math.max(1,1.1*u);
+    ctx.strokeStyle='rgba(255,255,255,.20)';
+    ctx.beginPath(); ctx.moveTo(cx-R0,cy2); ctx.lineTo(cx+R0,cy2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx,cy2-R0); ctx.lineTo(cx,cy2+R0); ctx.stroke();
+    const capG=muEff(i,S.v,RUN.rider,S.n)*Math.cos(PLAN.thP[i]||0)*crestFactor(i,S.v);
+    ctx.strokeStyle= S.sliding? '#ff5546':'rgba(120,220,160,.85)';
+    ctx.lineWidth=Math.max(1.5,2.2*u);
+    ctx.beginPath(); ctx.arc(cx,cy2,R0*Math.min(1.05,capG/1.1),0,TAU); ctx.stroke();
+    const dx=clamp(-S.aLat/CONFIG.g/1.1,-1.05,1.05)*R0;
+    const dyB=clamp(((S.brakeAf||0)+(S.brakeAr||0))/CONFIG.g/1.1,0,1.05)*R0;
+    ctx.fillStyle=S.sliding? '#ff5546' : '#ffd166';
+    ctx.beginPath(); ctx.arc(cx+dx,cy2+dyB,Math.max(3,R0*0.10),0,TAU); ctx.fill();
+  }
+
+  /* ---- CAUSE, on the piece of trail that owns it ----------------------
+     The tightest speed ceiling in the next ~35 m, named, drawn AT that
+     station. This was the best idea in the old panel and the worst placed:
+     on a rail 900 px from the corner it was about.
+
+     Its rectangle is worked out here and kept, because the speed Mark has to
+     dodge it - the constraining station is often almost behind the rider's
+     shoulder, which is exactly where speed wants to sit.
+
+     ONE ACCEPTED SILENCE: the station is often round a corner or behind the
+     camera, and then nothing is drawn. The wall will sometimes brake hard and
+     say nothing about why. That is better than a rail that claims a cause for
+     a corner you cannot see. */
+  let causeBox=null;
   { let jm=-1, vm=1e9;
-    for(let j=i+2;j<Math.min(T.N-1,i+38);j++) if (PLAN.v[j]<vm){ vm=PLAN.v[j]; jm=j; }
-    const slowing = jm>0 && vm < S.v+2.0;
-    const sp= slowing? surfAt(jm, PLAN.n[jm]) : null;
-    // the 3-wide min-filter often parks the minimum on an UNTAGGED neighbour
-    // of the tagged station - look a couple of stations either side for the name
-    let tagNear='';
-    if (slowing) for(const dj of [0,1,-1,2,-2]){
-      const jj=jm+dj; if (jj>0&&jj<T.N&&PLAN.tag[jj]){ tagNear=PLAN.tag[jj]; break; } }
-    const surfCause = slowing && !tagNear;
-    const cause= !slowing? 'trail open — carrying speed'
-      : tagNear || (sp.rough>.32? 'rough '+SURFS[sp.id].name
-                   : SURFS[sp.id].name + (sp.mu<.68? ' — low grip':''));
-    const head= slowing? '▼ '+Math.round(vm*2.23694)+' mph': '';
-    ctx.font=`600 ${15*u}px ui-sans-serif`;
-    const wHead=head? ctx.measureText(head).width : 0;
-    ctx.font=`500 ${14*u}px ui-sans-serif`;
-    const wCause=ctx.measureText(cause).width;
-    const pw3=wHead+wCause+(head?46:28)*u;
-    ctx.fillStyle='rgba(8,11,18,.55)';
-    roundRect(18*u, H-248*u, pw3, 32*u, 9*u); ctx.fill();
-    ctx.strokeStyle='rgba(255,255,255,.16)'; ctx.lineWidth=1;
-    roundRect(18*u, H-248*u, pw3, 32*u, 9*u); ctx.stroke();
-    ctx.textAlign='left';
-    if (head){ ctx.font=`600 ${15*u}px ui-sans-serif`; ctx.fillStyle='#ffd166';
-      ctx.fillText(head, 32*u, H-226*u); }
-    ctx.font=`500 ${14*u}px ui-sans-serif`;
-    ctx.fillStyle= surfCause? SURFS[sp.id].col : (slowing? 'rgba(235,242,250,.85)':'rgba(220,230,244,.5)');
-    ctx.fillText(cause, (head? 32+wHead/u+14 : 32)*u, H-226*u);
+    for(let j2=i+2;j2<Math.min(T.N-1,i+38);j2++) if (PLAN.v[j2]<vm){ vm=PLAN.v[j2]; jm=j2; }
+    if (jm>0 && vm < S.v+2.0){
+      let tagNear='';
+      for(const dj of [0,1,-1,2,-2]){
+        const jj=jm+dj; if (jj>0&&jj<T.N&&PLAN.tag[jj]){ tagNear=PLAN.tag[jj]; break; } }
+      const sp = tagNear ? null : surfAt(jm, PLAN.n[jm]);
+      const label='▼ '+(vm*2.23694).toFixed(0)+'  ·  '+(tagNear || (sp&&sp.name) || 'dirt');
+      const wp=stationPoint(jm, PLAN.n[jm], [0,0,0]);
+      const sc=proj([wp[0],wp[1],wp[2]+1.1],[0,0,0]);
+      if (sc[2]>2 && sc[0]>60*u && sc[0]<W-60*u && sc[1]>50*u && sc[1]<H-70*u){
+        ctx.font=`500 ${19*u}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        const tw=ctx.measureText(label).width, pw=tw+34*u, ph=38*u;
+        causeBox={x:sc[0]-pw/2, y:sc[1]-ph/2, w:pw, h:ph};
+        ctx.fillStyle='rgba(8,11,18,.86)';
+        roundRect(causeBox.x, causeBox.y, pw, ph, ph/2); ctx.fill();
+        ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
+        roundRect(causeBox.x, causeBox.y, pw, ph, ph/2); ctx.stroke();
+        ctx.fillStyle='rgba(238,244,252,.95)';
+        ctx.fillText(label, sc[0], sc[1]);
+      }
+    }
   }
-  // grade with an explicit DIRECTION arrow - at gentle gradients the eye
-  // cannot tell up from down, so the number says it (20u: sofa-read value)
-  const gr=Math.tan(PLAN.thP[i]||0)*100;
-  const sg=latSlope(i,S.n), camDeg=Math.abs(Math.atan(sg)/DEG);
-  const camDir= T.bermH[i]>0? 'berm' : T.cupH[i]>0? 'cupped'
-    : (Math.sign(sg)===T.uphill[i]? 'out':'in');
-  ctx.font=`600 ${20*u}px ui-sans-serif`; ctx.fillStyle= gr<-.5? '#6fb7ff':'rgba(235,242,250,.9)';
-  ctx.fillText((gr<-.5?'↑ ':'↓ ')+Math.abs(gr).toFixed(0)+'%', 40*u, H-46*u);
-  ctx.font=`400 ${16*u}px ui-sans-serif`; ctx.fillStyle='rgba(220,230,244,.6)';
-  ctx.fillText('camber '+camDeg.toFixed(0)+'° '+camDir, 40*u, H-22*u);
 
-  // The tyre-grip circle. The ring is ALL the grip this surface offers at this
-  // speed; the amber dot is how much is being spent, and in which direction -
-  // sideways for cornering, downward for braking. Dot on the ring = sliding.
-  const cx=238*u, cy2=H-116*u, R0=60*u;
-  ctx.strokeStyle='rgba(255,255,255,.14)'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(cx-R0*1.05,cy2); ctx.lineTo(cx+R0*1.05,cy2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(cx,cy2-R0*1.05); ctx.lineTo(cx,cy2+R0*1.05); ctx.stroke();
-  const capG=muEff(i,S.v,RUN.rider,S.n)*Math.cos(PLAN.thP[i]||0)*crestFactor(i,S.v);
-  ctx.strokeStyle= S.sliding? '#ff5546':'rgba(120,220,160,.8)'; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.arc(cx,cy2,R0*Math.min(1.05,capG/1.1),0,TAU); ctx.stroke();
-  const dx=clamp(-S.aLat/CONFIG.g/1.1,-1.05,1.05)*R0;
-  const dyB=clamp(((S.brakeAf||0)+(S.brakeAr||0))/CONFIG.g/1.1,0,1.05)*R0;
-  ctx.fillStyle=S.sliding? '#ff5546' : '#ffd166';
-  ctx.beginPath(); ctx.arc(cx+dx,cy2+dyB,6*u,0,TAU); ctx.fill();
-  ctx.fillStyle='rgba(220,230,244,.6)'; ctx.font=`400 ${12*u}px ui-sans-serif`; ctx.textAlign='center';
-  ctx.fillText('tire grip: ring = limit', cx, H-50*u);
-  ctx.fillText('⟷ turning   ↓ braking', cx, H-34*u);
+  /* Speed used to ride the rider's shoulder here. It is the instrument
+     panel's headline number now - the same figure in two places is the
+     readout arguing with itself, which is the fault this whole exercise is
+     supposed to be curing.
 
-  // front / rear brake force, split by the live wheel loads, plus leg power.
-  // Watch the split slide forward on steep ground and hard stops - and the
-  // rear bar die entirely just before an endo would happen.
-  bar(330*u, 'F', S.brakeAf/6.5, '#ff5546', null);
-  bar(368*u, 'R', S.brakeAr/6.5, S.rearLight? '#ffd166':'#ff8a5c',
-      S.rearLight? 'rear light!':null);
-  bar(430*u, 'PWR', S.pedalW/RUN.rider.sprint, '#57e08f',
-      S.pedalW>0? Math.round(S.pedalW)+'W':null);
-  function bar(bx,label,frac,col,note){
-    const bh=104*u, bw=24*u, by=H-178*u;
-    ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(bx,by,bw,bh);
-    ctx.fillStyle=col; const h2=clamp(frac,0,1)*bh; ctx.fillRect(bx,by+bh-h2,bw,h2);
-    ctx.fillStyle='rgba(220,230,244,.55)'; ctx.font=`400 ${12*u}px ui-sans-serif`; ctx.textAlign='center';
-    ctx.fillText(label, bx+bw/2, H-56*u);
-    if (note){ ctx.fillStyle='#ffe3b0'; ctx.fillText(note, bx+bw/2, by-6*u); }
-  }
-  ctx.fillStyle='rgba(220,230,244,.45)'; ctx.font=`400 ${11*u}px ui-sans-serif`; ctx.textAlign='center';
-  ctx.fillText('brakes', 349*u, H-40*u);
-  // lean dial - to the right of the power bar, with clear air between them
-  const lx=572*u, ly=H-116*u, LR2=54*u;
-  ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=1.5;
-  ctx.beginPath(); ctx.arc(lx,ly,LR2,Math.PI,0); ctx.stroke();
-  const ph=clamp(S.lean,-1.1,1.1);
-  ctx.strokeStyle='#ffd166'; ctx.lineWidth=3*u;
-  ctx.beginPath(); ctx.moveTo(lx,ly);
-  // +lean = left turn = needle tips to the LEFT of the dial, matching the view
-  ctx.lineTo(lx-Math.sin(ph)*LR2*.92, ly-Math.cos(ph)*LR2*.92); ctx.stroke();
-  ctx.fillStyle='rgba(220,230,244,.55)'; ctx.font=`400 ${12*u}px ui-sans-serif`;
-  ctx.fillText('lean '+Math.abs(ph/DEG).toFixed(0)+'°', lx, H-38*u);
-
-  // surface chip: what the tyres are on, its friction, its rolling drag
-  const sid=T.surf[i], sc=SURFS[sid];
-  ctx.fillStyle=sc.col; roundRect(40*u, H-196*u, 16*u, 16*u, 3*u); ctx.fill();
-  ctx.fillStyle='rgba(235,242,250,.85)'; ctx.textAlign='left'; ctx.font=`500 ${15*u}px ui-sans-serif`;
-  ctx.fillText(sc.name+'   μ '+T.mu0[i].toFixed(2)+' · crr '+T.crr[i].toFixed(3), 64*u, H-183*u);
-
-  /* Elevation profile. Taller than it was, and the line is coloured by LOCAL
-     grade - Joe found the old thin white line read as one uniform ramp, and
-     measuring it he was right: at 380x54 units against ~2 km x 300 m the
-     vertical exaggeration was 0.86x, LESS than 1:1. Colour carries what
-     geometry cannot: green mellow, amber steep, red plunging, and BLUE where
-     the trail actually climbs (the momentum-turn ramps). The widget is a
-     shape, not a table - the only numerals are the live clock and the
-     vertical remaining, at sofa size. */
-  const pw2=400*u, ph2=88*u, px2=W-pw2-30*u, py2=H-ph2-26*u;
-  ctx.fillStyle='rgba(8,11,18,.55)'; roundRect(px2-12*u,py2-12*u,pw2+24*u,ph2+24*u,10*u); ctx.fill();
-  if (!RUN.zSpan){ let lo=1e9,hi=-1e9;
-    for(let k2=0;k2<T.N;k2++){ if(T.z[k2]<lo)lo=T.z[k2]; if(T.z[k2]>hi)hi=T.z[k2]; }
-    RUN.zSpan=[lo, Math.max(1,hi-lo)]; }
-  const zy=k2=>py2+(1-(T.z[k2]-RUN.zSpan[0])/RUN.zSpan[1])*ph2;
-  ctx.lineWidth=2.6*u; ctx.lineCap='round';
-  for(let k2=0;k2<T.N-6;k2+=6){
-    const g2=Math.tan(T.theta[k2]);
-    ctx.strokeStyle= g2<-.005? '#6fb7ff'      // climbing - the momentum-turn ramps
-      : g2<.05? '#7ad38f' : g2<.11? '#e8e2c8'
-      : g2<.19? '#ffb15e' : g2<.27? '#ff7a4d' : '#ff4436';
-    ctx.beginPath(); ctx.moveTo(px2+k2/T.N*pw2, zy(k2));
-    ctx.lineTo(px2+Math.min(k2+6,T.N-1)/T.N*pw2, zy(Math.min(k2+6,T.N-1))); ctx.stroke();
-  }
-  const fx2=px2+S.idx/T.N*pw2, fy2=zy(i);
-  ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(fx2,fy2,6*u,0,TAU); ctx.fill();
-  ctx.strokeStyle='rgba(8,11,18,.8)'; ctx.lineWidth=1.5*u;
-  ctx.beginPath(); ctx.arc(fx2,fy2,6*u,0,TAU); ctx.stroke();
-  ctx.fillStyle='rgba(235,242,250,.85)'; ctx.font=`500 ${20*u}px ui-monospace,Menlo,monospace`;
-  ctx.textAlign='right';
-  ctx.fillText(fmtTime(S.time)+'   '+Math.max(0,(T.z[i]-T.z[T.N-1])).toFixed(0)+' m to go', px2+pw2, py2-20*u);
+     WHAT STAYS ON THE PICTURE AND WHAT GOES IN THE PANEL. A value that has a
+     PLACE in the world is drawn at that place: the grip ring on the ground
+     under the rear tyre, the speed ceiling on the piece of trail that
+     imposes it, "+1.4s" beside the boulder it is about. A value that is a
+     scalar about the run - grade, camber, brake force, the clock - has no
+     place to be drawn at, so it belongs in the instrument. */
+  ctx.textBaseline='alphabetic';
   ctx.restore();
 }
+/* ================== the instrument ======================================
+   PERMANENT AND CONTINUOUSLY VISIBLE, and every value recomputed from the
+   simulation on the frame it is drawn. That is the distinction the first
+   review missed: the captions it deleted were bad because they were STATIC,
+   not because they were always there. The panel below was always right -
+   descent's reference photograph shows it correctly reading 4 mph on a 2%
+   grade at 0:09.4 while the PROSE beside it claimed the rider was off the
+   brakes carrying speed.
+
+   What is here is what a rider's own head-unit would not show and a
+   data-minded spectator wants: what the ground is doing, what the tyres are
+   being asked for, and how the run is going against its own plan.
+
+   Lean is deliberately absent - the rider is drawn leaning, at full size, in
+   the middle of the frame, so a number for it restates the picture. It is in
+   #info for anyone who wants the figure. */
+function drawInstrument(S, i){
+  const grade = Math.tan(PLAN.thP[i] || T.theta[i]) * 100;
+  const bank  = (PLAN.bank && PLAN.bank[i]) || 0;
+  const sp    = SURFS[surfAt(i, S.n).id];   // the TILE under the tyres, not the base
+  const gone  = Math.max(0, T.z[i] - T.z[T.N-1]);
+  const rows = [
+    { k:'grade',   v:(grade>=0?'↓ ':'↑ ') + Math.abs(grade).toFixed(0) + '%' },
+    { k:'camber',  v: Math.abs(bank) < .02 ? 'flat'
+                    : (bank > 0 ? 'bermed ' : 'off-camber ')
+                      + (Math.abs(bank)*45).toFixed(0) + '°' },
+    { k:'surface', v: sp.name },
+    /* The label is uppercased by the house style, and uppercasing a Greek
+       mu gives capital Mu, which renders as a plain "M". Keep the symbol in
+       the value, where the type is mixed case. */
+    /* the tile's grip, not the base's: with the lattice the two differ, and
+       the wall was photographed reading "hardpack / μ 0.54" - the label from
+       the tile under the tyres beside the number from the buried base. */
+    { k:'grip',    v:'μ ' + surfAt(i, S.n).mu.toFixed(2) },
+    /* brakeAf/Ar are stored in m/s^2; the first panel build printed their
+       sum with a 'g' label - the wall showed an impossible "3.70 g". */
+    { k:'brakes',  v:(((S.brakeAf||0)+(S.brakeAr||0))/9.81).toFixed(2) + ' g' },
+    { k:'legs',    v: Math.round(S.pedalW) + ' W' },
+    { k:'clock',   v: fmtTime(S.time) },
+    { k:'to go',   v: gone.toFixed(0) + ' m' },
+  ];
+  Wall.instrument({
+    hero: { v: (S.v*2.23694).toFixed(0), u: 'mph' },
+    rows: rows,
+    /* The plan is what makes the clock mean anything: 1:58 is only
+       interesting beside the 1:52 the planner said. On-sight has no plan to
+       be measured against, so it says so rather than showing a blank. */
+    cap: RUN.predicted ? 'PLAN ' + fmtTime(RUN.predicted)
+                       : 'RIDING ON SIGHT · NO PLAN',
+  });
+}
+
 function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y);
   ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
   ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
 
-/* ================= ticker: say what the rider is doing ================== */
-let tickerHold=0, tickerAct='', tickerWhy='';
+/* ============ moments: say what just happened, and only then ============
+   WHAT THIS USED TO BE. A two-line ticker, permanently lit, that ran a
+   long if/else chain every frame and ALWAYS came out holding a value - the
+   final `else` was OFF THE BRAKES / letting the hill do the work. That is
+   why the reference photograph shows those words printed over a rider doing
+   4 mph on a 2% grade nine seconds into a descent that has not started. The
+   words were true of a state the rider is in almost all the time, so they
+   were about nothing, and they were on screen for the entire run.
+
+   Now the same physics fires EDGE-TRIGGERED Moments: four words or fewer,
+   only when something changes, only when it could not be seen coming, and
+   never on load. Between them the wall says nothing, which is most of the
+   time. wall.js enforces a six-second minimum silence between two Moments,
+   so a noisy stretch of trail cannot turn this back into a ticker.
+
+   They are placed in the SKY ABOVE THE RIDGELINE, not at frame centre. The
+   chase camera holds the rider at roughly (960,690) of a 1920 frame for the
+   whole run; "centre" would move language toward the subject, not away
+   from it. The sky is empty in both reference photographs.
+   ======================================================================= */
+let MO = { sliding:false, braking:false, climbing:false, rearLight:false, air:false, armed:false };
+/* 0.62W, not centre: a Moment's text is long and centred on its anchor, so
+   at W/2 its left half reached the instrument panel - REAR WHEEL LIGHT was
+   photographed printed straight across the readouts. The sky right of the
+   panel is the emptiest part of every frame. */
+function momentAt(){
+  /* CSS pixels, NOT canvas pixels. W here is the render canvas, capped at
+     1680 for the Pi's sake, while wall.js positions its Moments in CSS
+     space - so W*0.62 landed at a QUARTER of the 3840 screen, printing
+     DRIFTING straight across the instrument panel. innerWidth is the wall. */
+  return { x: (innerWidth||1920)*0.62, y: (innerHeight||1080)*0.17 };
+}
+function say(text){ Wall.moment(text, { at: momentAt(), exact:true }); }
+
 function updateTicker(dt){
-  tickerHold-=dt;
   const S=SIM, i=clamp(Math.floor(S.idx),0,T.N-2);
-  let act='', why='';
-  // find the constraint we are currently riding toward
-  let limIdx=-1;
-  for(let k=i;k<Math.min(T.N-1,i+60);k++){ if (PLAN.v[k]<S.v-0.8){ limIdx=k; break; } }
-  let limTag= limIdx>=0? (PLAN.tag[limIdx]||'') : '';
-  // name the DIRT too when it is part of why the limit is what it is
-  if (limTag && limIdx>=0){
-    const spT=surfAt(limIdx, PLAN.n[limIdx]);
-    if (spT.mu<.68) limTag += ' · '+SURFS[spT.id].name+' μ'+spT.mu.toFixed(2);
-  }
-  // a big rock just ahead is a SPOTLIGHT moment: name the choice being made
-  let rockNear=null, rockDist=0;
-  for(let k=0;k<16 && !rockNear;k++){
+
+  /* Nothing speaks in the first few seconds. The old ticker's worst frame
+     was at 0:09.4; a descent has not told you anything by then. */
+  if (S.time < 6){ MO.braking = S.brakeF>.2; MO.sliding=!!S.sliding;
+                   MO.climbing=(PLAN.thP[i]||0)<-.02; MO.rearLight=!!S.rearLight;
+                   MO.armed = true; return; }
+  if (!MO.armed) return;
+
+  /* --- the tyres let go. Always worth saying; it is the whole subject. -- */
+  if (S.sliding && !MO.sliding) say('DRIFTING');
+  MO.sliding = !!S.sliding;
+
+  /* --- real air, not a rut-hop: only a flight past a third of a second
+     earns the word. wall.js's six-second gap stops a jump line becoming a
+     ticker. */
+  if (S.airH > 0 && S.airT > 0.3 && !MO.air) say('AIRBORNE');
+  MO.air = S.airH > 0;
+
+  /* --- the rear wheel comes light under braking on steep ground --------
+     The one piece of brake telemetry a spectator can use: it is the reason
+     the rider stops braking, and it is invisible at this camera distance. */
+  if (S.rearLight && !MO.rearLight) say('REAR WHEEL LIGHT');
+  MO.rearLight = !!S.rearLight;
+
+  /* --- the brakes actually release -------------------------------------
+     Only after real braking, so it marks a decision rather than a state.
+     This is the phrase the old ticker printed at 4 mph; it now means what
+     it says. */
+  const braking = S.brakeF > .2;
+  if (MO.braking && !braking && S.v > 6) say('OFF THE BRAKES');
+  MO.braking = braking;
+
+  /* --- the trail turns upward on a descent ------------------------------
+     Genuinely surprising, and the old grade readout existed almost
+     entirely for this one case. */
+  const climbing = (PLAN.thP[i]||0) < -.02;
+  if (climbing && !MO.climbing && S.v > 4) say('IT CLIMBS HERE');
+  MO.climbing = climbing;
+
+  /* --- a decision about a rock, at the moment it is committed to --------
+     The +1.4s Mark beside a declined boulder already explains the choice;
+     this names the other branch, where the rider takes it on. */
+  if (!S._rockSaid) S._rockSaid = new Set();
+  for(let k=0;k<3;k++){
     const rl=T.rockBucket[i+k]; if (!rl) continue;
-    for(const rk of rl) if (rk.kind!=='small' && rk.decided!==undefined){ rockNear=rk; rockDist=k; break; }
-  }
-  const cm=rockNear? Math.round(rockNear.h*100) : 0;
-  if (S.sliding){ act='DRIFTING'; why='grip ran out — riding it out'; }
-  else if (rockNear && rockDist<3 && rockNear.choice==='over'){
-    act='ROLLING THE ROCK'; why=cm+' cm of rock under the wheels'; }
-  else if (rockNear && rockNear.kind==='boulder'){
-    act='PICKING A LINE'; why='around the boulder — far too big to roll'; }
-  else if (rockNear && rockNear.choice==='over'){
-    act='PICKING A LINE'; why= rockNear.dtCost!=null
-      ? `over the ${cm} cm rock — around would cost +${rockNear.dtCost.toFixed(1)}s`
-      : `squaring up — the ${cm} cm step spans the whole trail`; }
-  else if (rockNear && rockNear.choice==='around'){
-    act='PICKING A LINE'; why=`around the big rock — rolling ${cm} cm would cost +${(rockNear.dtCost||0).toFixed(1)}s`; }
-  else if ((PLAN.thP[i]||0) < -.02){
-    act='CLIMBING'; why= S.pedalW>RUN.rider.cp*.6? 'digging in — a short rise'
-      : 'momentum is paying for the rise'; }
-  else if (S.brakeF>.75){ act='HARD ON THE BRAKES'; why=limTag? 'setting up for '+limTag : ''; }
-  else if (S.brakeF>.2 && Math.abs(S.aLat)>2.5){ act='TRAIL-BRAKING'; why=limTag? 'easing into '+limTag:''; }
-  else if (S.brakeF>.2){ act='BRAKING'; why=limTag? 'for '+limTag : (RUN.mode==='onsight'&&PLAN.tag[Math.min(T.N-1,limIdx<0?i:limIdx)]==='sight line ends ahead'?'can’t see past the corner':''); }
-  else if (S.pedalW>RUN.rider.cp+60){ act='SPRINTING'; why='open trail — free speed'; }
-  else if (S.pedalW>40){ act='PEDALING'; why='adding speed while it’s cheap'; }
-  else if (S.posture==='tuck'){ act='TUCKED'; why='nothing to do but be small'; }
-  else if (Math.abs(S.aLat)>4.5 && T.bermH[i]>0){ act='RAILING THE BERM'; why='the bank is holding the speed'; }
-  else if (Math.abs(S.aLat)>4.5){ act='LEANED OVER'; why='carrying speed through '+(PLAN.kapP[i]>0?'a left':'a right'); }
-  else { act='OFF THE BRAKES'; why='letting the hill do the work'; }
-  if (tickerHold<=0 && (act!==tickerAct||why!==tickerWhy)){
-    tickerAct=act; tickerWhy=why; tickerHold=.8;
-    document.querySelector('#ticker .act').textContent=act;
-    document.querySelector('#ticker .why').textContent=why;
+    for(const rk of rl){
+      if (rk.kind==='small' || rk.decided===undefined || rk.choice!=='over') continue;
+      if (S._rockSaid.has(rk)) continue;
+      S._rockSaid.add(rk);
+      if (rk.h >= .30) say('ROLLING THE ROCK');
+    }
   }
 }
-
 /* ====================== run manager + cards ============================= */
-const whoEl=document.getElementById('who'), cardEl=document.getElementById('card');
-const capEl=document.querySelector('#caption .params');
+/* The chips, the caption band and the two glass slabs were this page's
+   furniture. The slabs are now single Lane sentences and the chips are three
+   clauses of the opening one, so none of those elements exist any more. */
 
 function newRun(opts={}){
   const seed = opts.seed ?? (Q.get('seed') && !RUN ? Q.get('seed') : String((Math.random()*1e9)|0));
@@ -2072,21 +2224,17 @@ function newRun(opts={}){
     if (PINNED) return;
     if (CONFIG.nextPage) location.href=CONFIG.nextPage; else location.reload();
   }, CONFIG.runDeadline);
-  /* The ticker keeps a SHADOW of what it last wrote, so it only touches the
-     DOM when the narration actually changes. That shadow is module-level and
-     survives a new run, while the finish branch blanks the DOM text - so if a
-     fresh run opened on the same line the old one closed with, the comparison
-     said "no change", the write was skipped, and the narration stayed empty
-     until the rider happened to do something different. Only reachable in the
-     ?pin loop, which is exactly where anyone tuning this sits and watches. */
-  tickerHold=0; tickerAct=''; tickerWhy='';
+  /* Every Moment's edge state belongs to the run, not to the page. */
+  MO = { sliding:false, braking:false, climbing:false, rearLight:false, armed:false };
+  Wall.clearEpisode();
 
-  // chips
-  whoEl.innerHTML=
-    `<div class="chip"><span class="dot" style="background:${rider.col}"></span>${rider.label}</div>`+
-    `<div class="chip"><span class="dot" style="background:${mode==='known'?'#ffd166':'#9aa7ff'}"></span>`+
-    (mode==='known'?'KNOWS THE TRAIL':'RIDING ON-SIGHT')+`</div>`;
-  capEl.textContent=`${T.name} · ${(T.totLen/1000).toFixed(1)} km · ${T.totDrop.toFixed(0)} m of descent · seed ${seed}`;
+  /* The two chips and the caption band are gone. "PRO RIDER" and "RIDING
+     ON-SIGHT" sat top-left for the whole run and neither meant anything on
+     its own - "pro" only means something next to "weekend", and the picture
+     already carries on-sight better than the words did, because the painted
+     plan stops dead at the sight limit with a question mark standing there.
+     All of it is now three clauses of one opening sentence, which is on
+     screen for fourteen seconds and then gone. The seed goes to #info. */
   showIntroCard();
   console.log(`[descent] seed ${seed}  ${riderKey}/${mode}  len ${(T.totLen/1000).toFixed(2)} km`+
     `  drop ${T.totDrop.toFixed(0)} m  plan ${planMs.toFixed(0)} ms`+
@@ -2098,59 +2246,38 @@ function surfBreakdown(){
   for(let i=0;i<T.N;i++) tot[T.surf[i]]++;
   return tot.map((c,id)=>({id, frac:c/T.N})).filter(s=>s.frac>.02);
 }
-function drawCardMap(canvas, colorBySpeed){
-  const c2=canvas.getContext('2d'), w2=canvas.width=460, h2=canvas.height=250;
-  let xmin=1e9,xmax=-1e9,ymin=1e9,ymax=-1e9;
-  for(let i=0;i<T.N;i++){ xmin=Math.min(xmin,T.x[i]); xmax=Math.max(xmax,T.x[i]);
-    ymin=Math.min(ymin,T.y[i]); ymax=Math.max(ymax,T.y[i]); }
-  const sc=Math.min((w2-30)/(xmax-xmin||1),(h2-30)/(ymax-ymin||1));
-  const mx=i=>15+(T.x[i]-xmin)*sc + (w2-30-(xmax-xmin)*sc)/2;
-  const my=i=>h2-15-(T.y[i]-ymin)*sc - (h2-30-(ymax-ymin)*sc)/2;
-  if (colorBySpeed){
-    for(let i=1;i<T.N;i++){
-      const v=PLAN.v[i], f2=clamp((v-3)/14,0,1);
-      c2.strokeStyle=`rgb(${Math.round(90+165*f2)},${Math.round(160-40*f2)},${Math.round(220-160*f2)})`;
-      c2.lineWidth=2.2; c2.beginPath(); c2.moveTo(mx(i-1),my(i-1)); c2.lineTo(mx(i),my(i)); c2.stroke();
-    }
-  } else {
-    c2.strokeStyle='rgba(230,238,248,.5)'; c2.lineWidth=2; c2.setLineDash([5,5]);
-    c2.beginPath(); for(let i=0;i<T.N;i+=3) i?c2.lineTo(mx(i),my(i)):c2.moveTo(mx(i),my(i));
-    c2.stroke(); c2.setLineDash([]);
-  }
-  c2.fillStyle='#57e08f'; c2.beginPath(); c2.arc(mx(0),my(0),5,0,TAU); c2.fill();
-  c2.fillStyle='#ff5546'; c2.beginPath(); c2.arc(mx(T.N-1),my(T.N-1),5,0,TAU); c2.fill();
-}
+/* drawCardMap() drew a route thumbnail into the two slabs. Both are gone,
+   and a small worse picture of a hill that is drawn full-size in perspective
+   in the same frame was the clearest case on the wall of a widget restating
+   its own artwork. Deleted rather than kept "just in case": the route is the
+   picture. */
+
 function showIntroCard(){
-  const avgGr=(T.totDrop/T.totLen*100);
-  const sb=surfBreakdown();
-  cardEl.innerHTML=`<div class="pk">${T.name}</div>
-    <div class="sub">${(T.totLen/1000).toFixed(1)} km · ${T.totDrop.toFixed(0)} m of descent · avg ${avgGr.toFixed(0)}% · ${T.rocks.filter(r=>r.kind!=='small').length} big rocks</div>
-    <div class="rows">${RUN.rider.label.toLowerCase()} · ${RUN.mode==='known'
-      ? 'has ridden this trail — full line planned\npredicted time '+fmtTime(RUN.predicted)
-      : 'has never seen this trail\nwill ride only as fast as the sight line allows'}${
-      T.bId.some(v=>v!==255)? '\nsurfaces run in clean bands at first, then mix into stripes and patches':''}</div>
-    <div class="surfbar">${sb.map(s=>`<div style="flex:${s.frac};background:${SURFS[s.id].col}"></div>`).join('')}</div>
-    <div class="surfkey">${sb.map(s=>SURFS[s.id].name+' '+(s.frac*100).toFixed(0)+'%').join(' · ')}</div>
-    <canvas></canvas>`;
-  drawCardMap(cardEl.querySelector('canvas'), RUN.mode==='known');
-  cardEl.classList.add('show');
-}
-function showFinishCard(){
-  const S=SIM, tot=S.time;
-  const pct=x=>(100*x/Math.max(.01,S.tBrake+S.tPedal+S.tCoast)).toFixed(0)+'%';
-  cardEl.innerHTML=`<div class="pk">${fmtTime(tot)}</div>
-    <div class="sub">${T.name} · ${RUN.rider.label.toLowerCase()} · ${RUN.mode==='known'?'knew the trail':'rode it on sight'}${
-      RUN.predicted? ' · plan said '+fmtTime(RUN.predicted):''}</div>
-    <div class="rows">avg ${(S.distance/tot*2.23694).toFixed(1)} mph  (${(S.distance/tot*3.6).toFixed(1)} km/h)
-top ${(S.maxV*2.23694).toFixed(0)} mph · max lean ${(S.maxLean/DEG).toFixed(0)}°
-braking ${pct(S.tBrake)} · pedaling ${pct(S.tPedal)} · coasting ${pct(S.tCoast)}
-slides ${S.slides}</div>
-    <canvas></canvas>`;
-  drawCardMap(cardEl.querySelector('canvas'), true);
-  cardEl.classList.add('show');
+  const km=(T.totLen/1000).toFixed(1), drop=T.totDrop.toFixed(0);
+  const who=RUN.rider.label.toLowerCase();
+  Wall.lane(
+    `${T.name}: ${km} km and ${drop} m down a hillside that did not exist a minute ago. `
+    + (RUN.mode==='known'
+        ? `A ${who} who has ridden it before, and has the whole line planned.`
+        : `A ${who} who has never seen it, and can only ride as fast as they can see.`),
+    { hold: 8000 });
 }
 
-/* countdown paint (over the world, no DOM) */
+/* The finish keeps the two figures a spectator cannot get from the picture:
+   what the clock said, and how much of the descent was spent slowing down -
+   that second one is genuinely surprising and it is invisible while riding.
+   Top speed survives because it is the peak of the one Mark on screen all
+   run. Average speed, max lean and the slide count went to #info; a route
+   thumbnail is not needed when the trail itself is in the frame. */
+function showFinishCard(){
+  const S=SIM, tot=S.time;
+  const brakePct=Math.round(100*S.tBrake/Math.max(.01,S.tBrake+S.tPedal+S.tCoast));
+  Wall.lane(
+    `${fmtTime(tot)} down ${T.name}, topping ${(S.maxV*2.23694).toFixed(0)} mph`
+    + (RUN.predicted? `, against a plan that said ${fmtTime(RUN.predicted)}` : '')
+    + `. ${brakePct}% of it was spent braking.`,
+    { hold: 5500 });
+}
 function drawCountdown(){
   const left=CONFIG.countSec - (RUN.clock-CONFIG.introSec);
   const nnn=Math.ceil(left);
@@ -2176,7 +2303,7 @@ function frame(now){
   } else if (RUN.state==='count'){
     updateCamera(dtReal);
     if (RUN.clock>=CONFIG.introSec+CONFIG.countSec){
-      RUN.state='run'; cardEl.classList.remove('show');
+      RUN.state='run';
     }
   } else if (RUN.state==='run'){
     // fixed physics steps; render at whatever rate the machine gives us
@@ -2199,7 +2326,6 @@ function frame(now){
         if (CONFIG.nextPage) location.href=CONFIG.nextPage; else location.reload();
         return;
       }
-      cardEl.classList.remove('show');
       setTimeout(()=>newRun(), 60);
     }
   }
@@ -2221,8 +2347,12 @@ function updateInfo(dt){
   document.getElementById('info').textContent=
 `seed ${RUN.seed}  ${RUN.riderKey}/${RUN.mode}  cam ${camMode}
 fps ${fpsShow.toFixed(0)}  plan ${RUN.planMs.toFixed(0)} ms
-v ${ (SIM.v*3.6).toFixed(1) } km/h  μ ${T.mu0[i].toFixed(2)}  rough ${T.rough[i].toFixed(2)}
-sight ${T.sight[i].toFixed(0)} m  slides ${SIM.slides}
+v ${ (SIM.v*3.6).toFixed(1) } km/h  μ ${T.mu0[i].toFixed(2)}  crr ${T.crr[i].toFixed(3)}  rough ${T.rough[i].toFixed(2)}
+surface ${SURFS[T.surf[i]].name}  grade ${(Math.tan(PLAN.thP[i]||T.theta[i])*100).toFixed(0)}%  camber ${(T.camber? (T.camber[i]/DEG).toFixed(0)+'°' : 'n/a')}
+lean ${(SIM.lean/DEG).toFixed(0)}°  max lean ${(SIM.maxLean/DEG).toFixed(0)}°  brakes f${(SIM.brakeAf||0).toFixed(1)}/r${(SIM.brakeAr||0).toFixed(1)}  pwr ${SIM.pedalW.toFixed(0)} W
+avg ${SIM.time>0? (SIM.distance/SIM.time*2.23694).toFixed(1) : '0.0'} mph  top ${(SIM.maxV*2.23694).toFixed(0)} mph
+sight ${T.sight[i].toFixed(0)} m  slides ${SIM.slides}  air ${SIM.tAir.toFixed(1)}s x${SIM.airN||0}  rear-skid ${SIM.tSkid.toFixed(1)}s
+surfaces ${surfBreakdown().map(s=>SURFS[s.id].name+' '+(s.frac*100).toFixed(0)+'%').join(' · ')}
 t ${fmtTime(SIM.time)}${RUN.predicted? '  pred '+fmtTime(RUN.predicted):''}
 keys: n new · m other mode · r other rider · c cam · p pause · t self-test`;
 }

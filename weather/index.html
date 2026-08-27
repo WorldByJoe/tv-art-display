@@ -64,17 +64,16 @@
     padding-top: 1.6em; padding-bottom: 0.7em;
   }
 </style>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: every page here runs its setup at the
+     end of an INLINE script, which executes before any deferred bottom
+     tag. Loaded at the bottom, Wall was undefined exactly when the first
+     episode tried to speak. It touches the DOM only inside its calls, so
+     the head is safe. nav.js stays at the bottom and still sees it. -->
+<script src="wall.js"></script>
 </head>
 <body>
 <canvas id="cv"></canvas>
-<div id="hud">
-  <div class="big" id="hTitle">—</div>
-  <div class="clock" id="hClock">loading…</div>
-  <div class="sub" id="hSub"></div>
-  <div id="warn"></div>
-</div>
-<div id="days"></div>
-<div id="caption"><div class="what"></div><div class="params"></div></div>
 <div id="info"></div>
 <script>
 /* ---- rotation navigation (remote D-pad) --------------------------------
@@ -201,13 +200,12 @@ const rgbs=(c)=>`rgb(${c[0]},${c[1]},${c[2]})`;
 
 const canvas=document.getElementById('cv');
 const ctx=canvas.getContext('2d',{alpha:false});
-const hTitle=document.getElementById('hTitle');
-const hClock=document.getElementById('hClock');
-const hSub=document.getElementById('hSub');
-const warnEl=document.getElementById('warn');
+/* The banner, the forecast card and the caption band are gone; what the
+   page still needs to remember is the daily block, so a Lane sentence can be
+   said when the playhead walks into a new day. */
+let DAILY=null, saidDay=-1;
 const infoEl=document.getElementById('info');
-const capWhat=document.querySelector('#caption .what');
-const capParams=document.querySelector('#caption .params');
+
 
 let W=0,H=0,DPR=1;
 let loc=null, locIndex=-1;
@@ -235,8 +233,38 @@ function computeMap(){
   if(!loc) return;
   cosLat=Math.cos((loc.latMin+loc.latMax)/2*Math.PI/180);
   const dLon=(loc.lonMax-loc.lonMin)*cosLat, dLat=(loc.latMax-loc.latMin);
-  mapS=Math.min(W*0.94/dLon, H*0.80/dLat);
+  /* COVER FIT, NOT CONTAIN FIT.
+     This single Math.min was the worst-composed frame on the wall: the
+     basemaps are near-square (1237x1125, 1442x1356, 1261x1183), so fitting
+     the whole region inside a 16:9 screen left the map occupying 48% of the
+     width and 47% of the frame dead black, with all four corners black and a
+     text block stranded 500 px from anything it described.
+
+     max() instead of min() fills the screen and crops the region. That is a
+     real cost: Colorado's drawn aspect is 1.06, so latitude crops to about
+     0.85 degrees and roughly 40% of the region goes off-screen; Chesapeake
+     loses the head of the Bay. The proper fix is to re-render the basemaps at
+     16:9 bounds in build_weather_maps.py, which needs a network build against
+     DEM tiles. Until then this is the right trade - the picture is the point,
+     and every place this page actually LABELS survives the crop.
+
+     "Survives the crop" is asserted rather than assumed, because a future
+     bounds edit could silently drop a mark off a page whose whole subject is
+     which son is standing in the sun. */
+  mapS=Math.max(W/dLon, H/dLat);
   mapX=(W-dLon*mapS)/2; mapY=(H-dLat*mapS)/2;
+
+  const pad=40;
+  const offscreen=[];
+  const check=(name,lat,lon)=>{
+    const x=mapX+(lon-loc.lonMin)*cosLat*mapS, y=mapY+(loc.latMax-lat)*mapS;
+    if(x<pad||x>W-pad||y<pad||y>H-pad) offscreen.push(`${name} (${x|0},${y|0})`);
+  };
+  if(loc.lat!=null&&loc.lon!=null) check(loc.city||loc.key, loc.lat, loc.lon);
+  for(const m of (loc.marks||[])) check(m.label||m.name||'mark', m.lat, m.lon);
+  if(offscreen.length) console.warn('[weather] CROPPED OUT OF FRAME by the cover '
+    +'fit: '+offscreen.join(', ')+'. Re-render this region at 16:9 in '
+    +'build_weather_maps.py, or widen its bounds in LOCATIONS.');
 }
 const toX=(lon)=> mapX+(lon-loc.lonMin)*cosLat*mapS;
 const toY=(lat)=> mapY+(loc.latMax-lat)*mapS;
@@ -341,32 +369,10 @@ function conditionFor(code, sunSec, dayabSec){
   return 'Overcast';
 }
 
-function renderDaily(d){
-  const box=document.getElementById('days');
-  if(!box) return;
-  if(!d){ box.style.display='none'; return; }
-  box.style.display='';
-  const F=(c)=>Math.round(c*9/5+32);
-  const rows=[];
-  for(let i=0;i<Math.min(2,d.time.length);i++){
-    const label=(i===d.time.length-1)?'TODAY':'YESTERDAY';
-    const cond=conditionFor(d.weather_code[i], d.sunshine_duration[i]||0,
-                            (d.daylight_duration&&d.daylight_duration[i])||0);
-    const hi=d.temperature_2m_max[i], lo=d.temperature_2m_min[i];
-    const pr=d.precipitation_sum[i], wd=d.wind_speed_10m_max[i];
-    const sun=(d.sunshine_duration[i]||0)/3600;
-    rows.push(
-      '<div class="row">'
-      + '<div class="day">'+label+'</div>'
-      + '<div class="cond">'+cond+'</div>'
-      + '<div class="temp">'+F(hi)+'° <small>/ '+F(lo)+'°F</small></div>'
-      + '<div class="misc">'+sun.toFixed(1)+' h sun'
-        + '  ·  wind to '+(wd*2.23694).toFixed(0)+' mph'
-        + (pr>0.05?('  ·  '+(pr/25.4).toFixed(2)+' in'):'  ·  dry')
-      + '</div></div>');
-  }
-  box.innerHTML=rows.join('');
-}
+/* renderDaily() built the two-day forecast panel. The panel is gone; its
+   content is now a Lane sentence from dayLine(). */
+function renderDaily(d){ DAILY=d||null; }
+
 
 async function fetchData(){
   const {lats,lons}=gridPoints();
@@ -866,7 +872,12 @@ function draw(){
    are watching last night or tomorrow morning. */
 function drawTimeline(){
   const w=Math.round(W*0.34), h=Math.round(3*DPR);
-  const x=Math.round((W-w)/2), y=Math.round(H*0.876);
+  /* TOP of the safe rectangle, not H*0.876. The bottom band is the Lane's,
+     and the Lane's height varies with its sentence, so no fixed bottom offset
+     can clear it - that is precisely the bug that put gravity's caption
+     inside gravity's own mass bar. A timeline reads as a timeline at either
+     edge. 76 wall px of 2160 is the house safe inset. */
+  const x=Math.round((W-w)/2), y=Math.round(76*(H/2160)*DPR);
   const nowF=(data.nowOffset||0)/Math.max(1,data.hours-1);
   const curF=hourF/Math.max(1,data.hours-1);
 
@@ -878,9 +889,13 @@ function drawTimeline(){
   const nx=x+Math.round(w*nowF);
   ctx.fillStyle='rgba(255,225,175,0.85)';
   ctx.fillRect(nx-Math.max(1,DPR), y-6*DPR, Math.max(2,2*DPR), h+12*DPR);
-  ctx.font=`${Math.round(11*DPR)}px ui-monospace, Menlo, monospace`;
+  /* 11 px on a 3840-wide wall is about 0.9 arcmin from the sofa - not small,
+     invisible. --t4 is the floor for anything on the wall: 37 wall px scaled
+     by the 3.5 m distance factor. */
+  const tf=Math.round(37*1.167*(W/3840));
+  ctx.font=`${tf}px ui-monospace, Menlo, monospace`;
   ctx.textAlign='center';
-  ctx.fillText('now', nx, y-11*DPR);
+  ctx.fillText('now', nx, y-Math.round(tf*0.7));
 
   // cursor
   const cx2=x+Math.round(w*curF);
@@ -888,8 +903,14 @@ function drawTimeline(){
   ctx.beginPath(); ctx.arc(cx2, y+h/2, 4.5*DPR, 0, 6.2832); ctx.fill();
 
   ctx.fillStyle='rgba(150,172,205,0.55)';
-  ctx.textAlign='left';  ctx.fillText(`-${CONFIG.pastHours} h`, x, y+20*DPR);
-  ctx.textAlign='right'; ctx.fillText(`+${CONFIG.aheadHours} h`, x+w, y+20*DPR);
+  /* THE CLOCK RIDES THE CURSOR. It used to be the second line of a banner in
+     the top-left corner, about 900 px from the timeline it was describing.
+     The "-18 h" and "+18 h" end labels are gone with it: this says the same
+     thing continuously, in words, attached to the thing it is true of. */
+  ctx.textAlign='center'; ctx.fillStyle='rgba(236,243,252,.95)';
+  ctx.shadowColor='rgba(4,6,11,.95)'; ctx.shadowBlur=Math.round(tf*0.5);
+  ctx.fillText(clockText(), cx2, y+Math.round(tf*1.9));
+  ctx.shadowBlur=0;
   ctx.textAlign='left';
 }
 
@@ -922,23 +943,50 @@ function clockText(){
 
 function updateText(){
   if(!data) return;
-  hTitle.textContent=loc.name;
-  hClock.textContent=clockText();
-  hSub.textContent=`${loc.city} · ${localReadout()}`;
-  const ageMin=Math.round((Date.now()-data.when)/60000);
-  if(data.source==='live')       warnEl.textContent='';
-  else if(data.source==='cache') warnEl.textContent=`cached forecast, ${ageMin} min old — no network`;
-  else                           warnEl.textContent='SAMPLE FIELD — not a forecast (no network, no cached data)';
+  /* WHAT THIS USED TO WRITE. A three-line top-left banner (place, clock,
+     "city - wind - insolation - temperature"), a warning block, a full-bleed
+     bottom scrim carrying a two-sentence paragraph, and a parameter line at
+     about half the size floor. Seventeen strings in four unrelated regions,
+     with 500 px of dead black between the banner and the map it described -
+     and the paragraph was byte-identical across two DIFFERENT PLACES ON
+     DIFFERENT DAYS in the reference photographs.
 
-  capWhat.textContent =
-    'The land is veiled in grey and the sun lifts the veil: the map shows through where sunlight is reaching the ground, and stays hidden through the night. Streaks are surface wind, drawn by letting tracers ride the field. '
-  + 'The window runs from eighteen hours ago to eighteen ahead, so you see how the day actually went as well as where it is going.';
-  capParams.textContent =
-    `${data.times[0] ? new Date(data.times[0]).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric'}) : '?'}`
-  + ` → ${data.times[data.hours-1] ? new Date(data.times[data.hours-1]).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric'}) : '?'}`
-  + `  ·  ${data.hours} h in ${Math.round(data.hours*CONFIG.secPerHour)} s`
-  + `  ·  ${CONFIG.gridLat}x${CONFIG.gridLon} sample points, ${CONFIG.particles} tracers`
-  + `  ·  ${data.source==='live' ? 'Open-Meteo (past 18 h observed-analysis + 18 h forecast)' : data.source}`;
+     All of it is gone except the one thing that is a standing obligation:
+     where the numbers come from, and - when the network is down - the fact
+     that what is on screen is not a forecast at all. That is the Signature,
+     the only permanent string this page is allowed.
+
+     Wind and insolation are NOT restated anywhere now. Both are already
+     drawn: the 3,600 tracer streaks ARE the wind field and the brightening
+     ground IS the insolation, so a number for either was the picture read
+     aloud. Temperature has no form in the picture, so it is the one value
+     that rides the city dot. Everything else is in #info. */
+  const ageMin=Math.round((Date.now()-data.when)/60000);
+  if(data.source==='live')
+    Wall.signature('Open-Meteo  ·  past 18 h observed-analysis + 18 h forecast');
+  else if(data.source==='cache')
+    Wall.signature(`Open-Meteo  ·  cached ${ageMin} min ago, no network`);
+  else
+    Wall.signature('SAMPLE FIELD - not a forecast  ·  no network, no cached data');
+}
+
+/* ---- the day summary, said rather than tabulated ------------------------
+   The two-day forecast card was a bordered, blurred panel holding eight
+   strings in four type sizes, and its 1-px border was the page admitting it
+   was a widget. The CONTENT was the best thing on the page. So it is spoken:
+   one sentence, when the playhead crosses into that day, which is the moment
+   it becomes true of the picture. YESTERDAY is dropped - the playhead has
+   already walked through yesterday by the time anyone reads it. */
+function dayLine(d, idx){
+  if(!d || idx<0 || idx>=d.time.length) return '';
+  const F=(c)=>Math.round(c*9/5+32);
+  const cond=conditionFor(d.weather_code[idx], d.sunshine_duration[idx]||0,
+                          (d.daylight_duration&&d.daylight_duration[idx])||0);
+  const sun=((d.sunshine_duration[idx]||0)/3600).toFixed(1);
+  const pr=d.precipitation_sum[idx]||0;
+  return `${cond} over ${loc.city} today, ${F(d.temperature_2m_max[idx])}°F down to `
+       + `${F(d.temperature_2m_min[idx])}°F, with ${sun} hours of sun`
+       + (pr>0.1? ` and ${(pr/25.4).toFixed(2)} in of rain.` : ' and no rain.');
 }
 
 function updateInfo(){
@@ -979,13 +1027,25 @@ async function nextLocation(){
   computeMap();
   data=null; hourF=0; startedAt=performance.now();
   ctx.fillStyle='#04060b'; ctx.fillRect(0,0,W,H);
-  hTitle.textContent=loc.name; hClock.textContent='loading…'; hSub.textContent='';
+  /* A new location IS a new episode. The place, the window and the mechanism
+     are one sentence, said once, then gone - not a banner held for 63
+     seconds over dead black. */
+  saidDay=-1; Wall.clearEpisode();
   renderDaily(null);                       // clear last place's panel
   data=await fetchData();
   fetchDaily().then(renderDaily);          // side panel, independent of the map
   buildBasemap(); lastBaseHour=-1;
   seedParticles();
   updateText();
+
+  /* The opening sentence: where this is, how long a window is being played,
+     and what the picture is actually showing. Wind and insolation are named
+     here ONCE, in words, rather than restated as numbers in a corner for the
+     whole minute - the streaks and the brightening ground are the readout. */
+  Wall.episode(
+    `${loc.name}. Thirty-seven hours over ${loc.city}, played in about a minute: `
+    + `the ground brightens where sunlight is actually reaching it, and the `
+    + `streaks are the surface wind, drawn by letting tracers ride the field.`);
 }
 
 function frame(now){
@@ -1002,7 +1062,33 @@ function frame(now){
   }
   draw();
   updateText();
+  sayDayIfCrossed();
   if(document.body.classList.contains('showinfo')) updateInfo();
+}
+
+/* ---- the day boundary is the event on this page -------------------------
+   Everything else here is continuous - the light creeps, the streaks drift -
+   so the one moment where something genuinely CHANGES is the playhead walking
+   into a new calendar day. That is when the day's summary becomes true of the
+   picture, so that is when it is said.
+
+   It waits for the opening sentence to finish rather than talking over it;
+   wall.js enforces one voice at a time, so an un-deferred beat would simply
+   cut the opening sentence off mid-read. If the crossing happens while the
+   opener is still up, the day line is skipped for this pass and the next
+   location says its own. That is a real, small loss rather than a bug. */
+function sayDayIfCrossed(){
+  if(!data || !DAILY || !data.times) return;
+  const i=Math.min(data.hours-1, Math.max(0, Math.round(hourF)));
+  const t=data.times[i]; if(!t) return;
+  const day=new Date(t).getDate();
+  if(day===saidDay) return;
+  if(saidDay===-1){ saidDay=day; return; }   // the opener already covers day one
+  saidDay=day;
+  if(document.body.classList.contains('lane-lit')) return;
+  const idx=DAILY.time.length-1;             // the block's last entry is today
+  const line=dayLine(DAILY, idx);
+  if(line) Wall.lane(line);
 }
 
 addEventListener('keydown',(e)=>{

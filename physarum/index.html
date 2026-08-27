@@ -8,53 +8,30 @@
   html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; }
   canvas { display:block; width:100vw; height:100vh; image-rendering:auto; }
   * { cursor:none; }
-  #info { position:fixed; left:2vw; bottom:3vh; z-index:10; display:none;
-    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,Menlo,monospace;
-    color:#dfe6ee; background:rgba(0,0,0,.6); padding:.7em 1em; border-radius:.4em;
-    border:1px solid rgba(255,255,255,.15); white-space:pre; }
-  body.showinfo #info { display:block; }
-  #title { position:fixed; left:0; right:0; top:5vh; z-index:9; text-align:center;
-    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out; }
-  #title.show { opacity:1; }
-  #title .name { font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.22em; text-transform:uppercase; color:rgba(226,236,248,.85); }
-  #title .blurb { margin-top:.9em; font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.06em; color:rgba(190,205,225,.55); }
+  /* #info, the type tokens and the four language surfaces live in wall.css.
 
-  /* ---- persistent caption ----------------------------------------------
-     Stays for the whole run, unlike the title card which dissolves. Two
-     lines: what this is, and the settings that produced this version. */
-  #caption {
-    position:fixed; left:0; right:0; bottom:var(--cap-bottom, 2.2vh);
-    z-index:8; text-align:center; pointer-events:none; padding:0 4vw;
-  }
-  #caption .what {
-    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.055em; color:rgba(206,220,240,.66);
-  }
-  #caption .params {
-    margin-top:.45em;
-    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
-    letter-spacing:.02em; color:rgba(150,172,205,.44);
-  }
-  :root { --cap-bottom: 2.4vh; }
+     THIS PAGE USED TO CARRY TWO PERMANENT BLOCKS - a title band for nine
+     seconds and a caption for the whole run - and the caption said the same
+     thing about slime moulds in general no matter which of the four species
+     was on screen. Photographed twice 48 seconds apart, a green net and a
+     blue net carried byte-identical words. Both blocks are gone; language is
+     now an episode beat through Wall.lane(). See WALL_REVIEW.md.
 
-  /* ---- scrim behind the caption ----------------------------------------
-     The caption used to sit directly on the artwork. On a black field that is
-     fine; over a lit basemap, a bright mosaic or a pale plume it becomes
-     unreadable exactly when there is something worth reading it about. A soft
-     upward fade keeps the text legible without drawing a visible box. */
-  #caption {
-    background: linear-gradient(to top,
-                rgba(3,5,10,0.88) 0%, rgba(3,5,10,0.70) 55%, rgba(3,5,10,0) 100%);
-    padding-top: 1.6em; padding-bottom: 0.7em;
-  }
+     The full-width scrim went with them. It was doing almost nothing - in the
+     photograph the words "one of" crossed a bright vein and half-dissolved
+     into it - and the Lane's fitted plate at the measured .70 alpha is what
+     replaces it. */
 </style>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: every page here runs its setup at the
+     end of an INLINE script, which executes before any deferred bottom
+     tag. Loaded at the bottom, Wall was undefined exactly when the first
+     episode tried to speak. It touches the DOM only inside its calls, so
+     the head is safe. nav.js stays at the bottom and still sees it. -->
+<script src="wall.js"></script>
 </head>
 <body>
 <canvas id="cv"></canvas>
-<div id="title"><div class="name"></div><div class="blurb"></div></div>
-<div id="caption"><div class="what"></div><div class="params"></div></div>
 <div id="info"></div>
 <script>
 /* ---- rotation navigation (remote D-pad) --------------------------------
@@ -68,16 +45,6 @@ function rotateTo(step){
   let i = ROTATION.indexOf(here);
   if (i < 0) i = 0;
   location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
-}
-
-/* ---- caption -----------------------------------------------------------
-   setCaption(what, params) writes the two persistent lines at the bottom of
-   the screen. Called whenever a new scenario starts. */
-const capWhat   = document.querySelector('#caption .what');
-const capParams = document.querySelector('#caption .params');
-function setCaption(what, params) {
-  if (capWhat)   capWhat.textContent   = what || '';
-  if (capParams) capParams.textContent = params || '';
 }
 
 /* =======================================================================
@@ -101,6 +68,20 @@ function setCaption(what, params) {
 const CONFIG = {
   targetCells: 620000,   // grid budget; the blur is the cost, so cap area not width
   agentsPerCell:  0.22,  // population relative to grid area
+  /* WHAT FRACTION OF THE AGENTS ARE DRAWN AS THEMSELVES.
+
+     They were not drawn at all. The page rendered only the TRAIL each agent
+     deposits, so what reached the screen was the network and never the things
+     building it - while the caption said "each dot follows three rules",
+     which was a promise the picture did not keep. Joe's note was that the
+     individual dots are almost invisible and it is hard to tell what you are
+     looking at; they were not almost invisible, they were absent.
+
+     Not all of them: at 0.22 agents per cell, drawing every one would put a
+     lit pixel on a fifth of the grid and the trail underneath would vanish
+     under its own workforce. A sample of one in sixteen is enough to read as
+     a swarm, and leaves the network it is drawing plainly visible through it. */
+  agentShown:    0.062,
   holdMs:       48000,   // how long one species runs before the next
   speciesPerTurn:   2,   // species shown before handing the screen on
   fadeMs:        1400,
@@ -118,13 +99,13 @@ const SPECIES = [
      smooth mega-curves and no network forms. Jones's original uses a rotation
      angle about twice the sensor angle, which is what lets filaments split
      as readily as they merge. */
-  { name: 'Veins',      blurb: 'Sense far ahead, turn hard — long highways with sparse junctions',
+  { name: 'Veins',      line:  'This one looks a long way ahead, so it lays down few roads and runs them a long way.',
     sensorAng: 0.39, sensorDist: 9,  turn: 0.79, speed: 1.00, deposit: 1.00, decay: 0.920 },
-  { name: 'Lace',       blurb: 'Sense close, turn harder — a fine reticulated mesh',
+  { name: 'Lace',       line:  'This one only looks as far as its own body, and weaves a mesh that never opens out.',
     sensorAng: 0.72, sensorDist: 5,  turn: 1.40, speed: 0.90, deposit: 1.00, decay: 0.900 },
-  { name: 'Roots',      blurb: 'Narrow sensors, slow decay — branches that persist and thicken',
+  { name: 'Roots',      line:  'This one forgets slowly. Every road it finds stays, and the busy ones grow fat.',
     sensorAng: 0.30, sensorDist: 13, turn: 0.62, speed: 1.10, deposit: 1.10, decay: 0.950 },
-  { name: 'Turbulence', blurb: 'Twitchy sensors, fast decay — restless filaments that never settle',
+  { name: 'Turbulence', line:  'This one forgets almost at once, so nothing it builds ever gets the chance to settle.',
     sensorAng: 0.22, sensorDist: 7,  turn: 1.60, speed: 1.35, deposit: 0.90, decay: 0.880 }
 ];
 
@@ -145,9 +126,6 @@ function ramp(pal, t) {
 
 const canvas = document.getElementById('cv');
 const ctx = canvas.getContext('2d', { alpha:false });
-const titleEl = document.getElementById('title');
-const nameEl = titleEl.querySelector('.name');
-const blurbEl = titleEl.querySelector('.blurb');
 const infoEl = document.getElementById('info');
 
 let GW=0, GH=0;                 // grid dimensions
@@ -179,6 +157,16 @@ function sizeGrid() {
   buf = img.data;
   buf32 = new Uint32Array(buf.buffer);
 }
+
+/* Packed ABGR, the same byte order buf32 uses.
+
+   COOL, BECAUSE EVERY TRAIL PALETTE IS WARM. The first attempt drew the
+   agents warm-white and they disappeared into the very filaments they had
+   just built - the trunks saturate near white, so a white dot on a trunk is
+   no dot at all. Against a fire palette a pale cyan is the one hue that
+   cannot be mistaken for trail at any brightness, so the swarm reads as
+   something moving OVER the structure rather than as part of it. */
+const AGENT_PIX = (255<<24) | (255<<16) | (238<<8) | 178;
 
 /* A 256-entry lookup turns the per-pixel colour mapping into one array read.
    Computing the ramp per pixel would cost more than the simulation. */
@@ -216,13 +204,24 @@ function newSpecies() {
   buildLut(palette);
   seedAgents();
   startedAt = performance.now();
-  nameEl.textContent = species.name;
-  blurbEl.textContent = species.blurb;
-  titleEl.classList.add('show');
-  setTimeout(() => titleEl.classList.remove('show'), 9000);
-  setCaption(
-    'Each dot follows three rules: sniff ahead-left, ahead and ahead-right; turn toward the strongest trail; step forward and deposit a little trail of its own. Nothing in the model knows what a network is.',
-    `sensor ${species.sensorAng.toFixed(2)} rad at ${species.sensorDist} px  ·  turn ${species.turn.toFixed(2)} rad  ·  speed ${species.speed.toFixed(2)}  ·  deposit ${species.deposit.toFixed(2)}  ·  decay ${species.decay}  ·  ${nAgents.toLocaleString()} agents on ${GW}x${GH}`);
+
+  /* ---- the episode's one sentence -------------------------------------
+     A new species IS a new episode, so this is where the wall speaks. Two
+     sentences alternate by position in the turn rather than both firing:
+
+       MECHANISM - why this page is science and not a screensaver. It is the
+         only thing here worth saying twice, so it opens a turn and comes
+         round every third episode.
+       CHARACTER - what THIS net is about to do, which is the sentence the
+         old permanent caption could never be, because it was written once
+         for all four species.
+
+     Firing both back to back would put roughly 27 of every 48 seconds under
+     glass, and the whole point is that two thirds of the time the wall is
+     only the net. */
+  const MECHANISM = 'Each dot sniffs ahead, turns toward the strongest trail, '
+                  + 'and leaves one of its own. Nothing here knows what a network is.';
+  Wall.episode(speciesIndex % 3 === 0 ? MECHANISM : species.line);
 }
 
 /* Bilinear-free point sample: agents are dense enough that nearest-neighbour
@@ -303,6 +302,28 @@ function render() {
     if (v > 1) v = 1;
     buf32[i] = lut[(v*255)|0];
   }
+
+  /* THE AGENTS, ON TOP OF THE FIELD THEY MADE. Written straight into the
+     pixel buffer rather than drawn as canvas shapes: there are thousands of
+     them every frame and a fillRect each would cost more than the entire
+     simulation. Sampled by stride rather than at random so a given agent is
+     drawn every frame or never - a random sample twinkles, and twinkling
+     reads as noise rather than as motion. */
+  /* TWO CELLS ACROSS, not one. The grid is about 1050 wide and the screen is
+     3840, so one cell is under four screen pixels - roughly a millimetre on
+     the glass, which is below what anybody can see from a sofa. A 2x2 block
+     is about 7 px, which reads. */
+  const stride = Math.max(1, Math.round(1/CONFIG.agentShown));
+  const last = GW*GH - GW - 1;
+  for (let k = 0; k < nAgents; k += stride) {
+    const gx = ax[k]|0, gy = ay[k]|0;
+    if (gx < 0 || gy < 0 || gx >= GW-1 || gy >= GH-1) continue;
+    const o = gy*GW + gx;
+    if (o > last) continue;
+    buf32[o] = AGENT_PIX; buf32[o+1] = AGENT_PIX;
+    buf32[o+GW] = AGENT_PIX; buf32[o+GW+1] = AGENT_PIX;
+  }
+
   ctx.putImageData(img, 0, 0);
 }
 
@@ -312,6 +333,8 @@ function updateInfo() {
     `grid      ${GW} x ${GH}\n` +
     `agents    ${nAgents.toLocaleString()}\n` +
     `sensor    ${species.sensorAng.toFixed(2)} rad @ ${species.sensorDist}px\n` +
+    `turn      ${species.turn.toFixed(2)} rad\n` +
+    `speed     ${species.speed.toFixed(2)}   deposit ${species.deposit.toFixed(2)}\n` +
     `decay     ${species.decay}\n` +
     `elapsed   ${((performance.now()-startedAt)/1000).toFixed(0)}s\n` +
     `fps       ${fps.toFixed(0)}${paused ? '  [PAUSED]' : ''}`;
@@ -320,6 +343,10 @@ function updateInfo() {
 function handOff() {
   if (handingOff) return;
   handingOff = true;
+  /* Kill the language schedule before the fade. A Lane beat that fires during
+     the hand-off writes into a document that is on its way out, and one that
+     is still lit while the page dissolves reads as the NEXT page's caption. */
+  Wall.clearEpisode(); Wall.clearTimers();
   document.body.style.transition = `opacity ${CONFIG.fadeMs}ms ease-in-out`;
   document.body.style.opacity = '0';
   /* An EMPTY nextPage means there is nowhere to hand on to - which is what

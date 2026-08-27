@@ -31,16 +31,17 @@
         would remove the only way this piece can capture the display. On a
         wall that runs unattended for weeks this is the one I would fix first.
 
-     2. NO PERSISTENT CAPTION.  Every other display carries two fixed lines at
-        the bottom: one plain-language sentence on what is being illustrated,
-        and one line of the parameter values behind THIS run. Joe asked for
-        this across all displays. The title card here dissolves after 9 s and
-        the ticker carries only state (year / height / shoots), so a viewer
-        arriving mid-run cannot tell what they are watching. The other pages
-        expose setCaption(what, params); copying that pattern would make this
-        consistent. Worth putting the SEED in the params line - makeTree(seed)
-        already takes one, and a seed on screen is what lets a particularly
-        good tree be found again.
+     2. NO PERSISTENT CAPTION.  [DONE, THEN REVERSED - see WALL_REVIEW.md,
+        2026-08-24.] The persistent caption asked for here was built, and it
+        was the wrong cure: a fixed sentence plus a fixed parameter strip is
+        wrong about a changing picture most of the time, and this page ended up
+        printing the SAME SENTENCE twice per run at two sizes at opposite
+        edges. The diagnosis - "a viewer arriving mid-run cannot tell what they
+        are watching" - was right, and it is answered instead by re-running the
+        opening sentence near the halfway mark, because this run is 205 s long.
+        The seed is on screen under the i key rather than on the wall: it is
+        for somebody at a keyboard, and at 16 wall pixels nobody on the sofa
+        could read it anyway.
 
      3. THE 16:9 PANEL IS MOSTLY EMPTY.  fitView() works, but a tall narrow
         subject fitted by height leaves roughly the outer thirds of a 4K
@@ -91,59 +92,39 @@
   }
   #curtain.on { opacity:1; }
 
-  #info {
-    position:fixed; left:2vw; bottom:9vh; z-index:10; display:none;
-    font:500 clamp(12px,1.05vw,20px)/1.5 ui-monospace,"SF Mono",Menlo,monospace;
-    color:#3a3128; background:rgba(239,231,215,.82); padding:.7em 1em;
-    border-radius:.4em; border:1px solid rgba(90,74,58,.25); white-space:pre;
-  }
-  body.showinfo #info { display:block; }
+  /* THE TITLE BAND AND THE CAPTION BAND ARE GONE.  (Episode review, 2026-08-24.)
 
-  /* Title, faded in at the start of each run. Dark ink on the cream page -- this piece
-     is a drawing, so the text is drawn on the paper rather than lit over a dark scene. */
-  #title {
-    position:fixed; left:0; right:0; top:0; z-index:9; text-align:center;
-    padding:5vh 6vw 9vh; box-sizing:border-box;
-    pointer-events:none; opacity:0; transition:opacity 1.6s ease-in-out;
-  }
-  #title.show { opacity:1; }
-  #title .name {
-    font:300 clamp(18px,2.3vw,52px)/1.2 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.22em; text-transform:uppercase; color:rgba(58,49,40,.78);
-  }
-  #title .blurb {
-    margin-top:.9em;
-    font:300 clamp(11px,1.05vw,22px)/1.4 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.06em; color:rgba(78,66,54,.55);
-  }
+     What used to be here: #title printed "HEARTWOOD" over a one-line blurb for
+     nine seconds, and #caption printed a sentence plus a parameter strip for
+     the whole 205-second run. Two of those four elements WERE THE SAME
+     SENTENCE, printed twice per run, at two sizes, at opposite edges of the
+     frame -- and the permanent copy said it three metres of growth apart, so
+     it was a sentence about nothing in particular. The parameter strip
+     measured 21 and 16 wall pixels against a sofa floor of 37, jammed into a
+     40-pixel line a thousand wall pixels away from the tree it described.
 
-  /* Two persistent lines, the convention every other page in the rotation
-     carries: one plain sentence saying what is being illustrated, one line of
-     the parameters behind THIS run. The title card dissolves after nine
-     seconds, so without these a viewer arriving mid-run has no idea what they
-     are looking at. Dark ink on the cream page rather than the light-on-dark
-     the other pages use. (Pi session note 2.) */
-  #caption {
-    position:fixed; left:0; right:0; bottom:2.4vh; z-index:8;
-    text-align:center; pointer-events:none; padding:0 4vw;
-    opacity:0; transition:opacity 1.2s ease-in-out;
-  }
-  #caption.show { opacity:1; }
-  #caption .what {
-    font:300 clamp(11px,1.02vw,21px)/1.45 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.055em; color:rgba(58,49,40,.62);
-  }
-  #caption .params {
-    margin-top:.45em;
-    font:400 clamp(9px,0.78vw,16px)/1.4 ui-monospace,Menlo,monospace;
-    letter-spacing:.02em; color:rgba(78,66,54,.44);
-  }
+     Language now belongs to an EPISODE rather than to this page, and it lives
+     in wall.css's .lane: it arrives, says one true thing about the picture
+     underneath it, and dissolves. The run's numbers live in #info, which is
+     what a keyboard is for. The single number that survives on the wall is the
+     year, drawn INTO the picture at the ground line by drawYearMark() below.
+
+     The private #info styling went with them. wall.css defines #info, it loads
+     after this block, and both selectors have the same specificity -- so these
+     rules were already being overridden in full. They only looked like they
+     were in charge, which is exactly the sort of per-page copy that made the
+     wall thirteen dialects of the same idea. */
 </style>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: every page here runs its setup at the
+     end of an INLINE script, which executes before any deferred bottom
+     tag. Loaded at the bottom, Wall was undefined exactly when the first
+     episode tried to speak. It touches the DOM only inside its calls, so
+     the head is safe. nav.js stays at the bottom and still sees it. -->
+<script src="wall.js"></script>
 </head>
 <body>
 <canvas id="page"></canvas>
-<div id="title"><div class="name"></div><div class="blurb"></div></div>
-<div id="caption"><div class="what"></div><div class="params"></div></div>
 <div id="info"></div>
 <div id="curtain"></div>
 
@@ -226,7 +207,9 @@ const CONFIG = {
   runMs:       205000,     // wall-clock target for the growth phase
   holdMs:       11000,     // finished tree held on screen before the fade
   fadeMs:        1400,
-  titleMs:       9000,
+  /* titleMs is gone with the title card. The opening sentence now holds for as
+     long as its own length says it should -- wall.js works that out, so the
+     wall speaks at one pace instead of thirteen. */
   runsPerTurn:      1,
   /* The ring closes through descent.html, which then hands back to the
      mosaic. Keep this in step with the ROTATION array above - the arrows
@@ -1732,6 +1715,9 @@ function drawPerson(T, V) {
   const bx = Math.cos(az) * rmax * 1.25, by = Math.sin(az) * rmax * 1.25;
   const foot = project(bx, by, 0, V);
   const head = project(bx, by, PERSON_H, V);
+  /* Remembered so the year Mark can sit on the OTHER side of the trunk without
+     walking every node a second time to re-derive the crown radius. */
+  V.personX = foot[0];
   const hpx = foot[1] - head[1];                          // screen height of 1.75 m
   if (hpx < 6) return;                                    // too small to read; leave it out
 
@@ -1765,6 +1751,23 @@ function layout() {
   cv.style.width = W + 'px'; cv.style.height = H + 'px';
   cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  markPx = tokenPx('--t4', 37 * 1.167 * W / 3840);
+}
+
+/* Resolve one of wall.css's type tokens to real pixels. Canvas cannot read a
+   custom property -- getPropertyValue hands back the unevaluated max()/calc()
+   -- so a throwaway span is styled with it and the computed font-size read
+   back. Once per layout, never per frame. The point is that the Mark sits on
+   the same ladder as every other piece of type on the wall, instead of a
+   private copy of the arithmetic that drifts the first time --ts changes
+   because the sofa moved. */
+function tokenPx(name, fallback) {
+  const el = document.createElement('span');
+  el.style.cssText = 'position:absolute;visibility:hidden;font-size:var(' + name + ')';
+  document.body.appendChild(el);
+  const px = parseFloat(getComputedStyle(el).fontSize);
+  el.remove();
+  return (px > 0) ? px : fallback;
 }
 
 /* The view. A growing tree spans 9x in height over the piece, so a frame fitted
@@ -2017,22 +2020,83 @@ function draw(T, V, autumn) {
     }
   }
   ctx.globalAlpha = 1;
+
+  drawYearMark(T, V);
   return drawn;
+}
+
+/* =======================================================================
+   THE YEAR MARK -- the one number left on the wall.
+
+   WHY IT IS DRAWN AND NOT PRINTED. Height, trunk width and crown spread are
+   all drawn at true size against a 1.75 m human, so a viewer can read them off
+   the picture. Time is the one dimension the picture cannot carry: nothing in
+   the frame says whether this is year 3 or year 20. So the year is drawn into
+   the artwork by the same code that draws the tree, and it moves when the tree
+   moves -- change the window aspect and it stays at the foot of the trunk,
+   which is the test that separates a Mark from an orphaned strip.
+
+   WHERE. At the ground line, on the side of the trunk the human is NOT on.
+   drawPerson() offsets the figure ALONG the view azimuth, and project() maps
+   that to a purely rightward screen displacement, so the figure is always to
+   the right of the trunk and the left of the ground line is always clear.
+
+   CONTRAST. A halo of the page's own cream, not a plate. This ground is the
+   quietest surface in the rotation; a pill on it would read as chrome bolted
+   to a drawing.
+
+   IT YIELDS TO THE LANE. Both want the bottom of the frame -- the closest this
+   wall comes to re-running gravity's caption-inside-its-own-instrument bug.
+   Rather than compute an offset to clear a box whose height is variable by
+   design, the Mark simply stays dark while a sentence is lit: wall.js sets
+   body.lane-lit for exactly this. It arrives at about second sixteen, when the
+   opening sentence has dissolved, and nothing is lost by that.
+   ======================================================================= */
+function drawYearMark(T, V) {
+  if (!markPx) return;
+  const want = document.body.classList.contains('lane-lit') ? 0 : 1;
+  /* Eased, not switched. draw() runs at up to ten paints a second, so 0.18 a
+     paint is a fade of about eight tenths of a second -- long enough to read as
+     arriving rather than blinking on. */
+  markA += (want - markA) * 0.18;
+  if (markA < 0.01) return;
+
+  const label = 'year ' + (T.day / 365).toFixed(1) + ' of ' + CONFIG.simYears;
+  ctx.save();
+  ctx.font = '400 ' + markPx.toFixed(1) + 'px ui-monospace,"SF Mono",Menlo,monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  const w = ctx.measureText(label).width;
+
+  /* Mirror of the human's screen offset about the trunk, then clamped: never
+     inside the trunk, never outside the safe rectangle (--safe-x is 134 wall
+     px; televisions overscan and LG's Just Scan resets itself on an HDMI
+     source change). */
+  const safe = W * (134 / 3840);
+  let x = (V.personX != null) ? V.cx - (V.personX - V.cx) : V.cx - W * 0.16;
+  x = Math.min(x, V.cx - w * 0.5 - markPx);
+  x = Math.max(x, safe + w * 0.5);
+  const y = V.cy - markPx * 0.30;                 // sits ON the drawn ground line
+
+  ctx.globalAlpha = markA;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(2, 12 * W / 3840);     // a 6 wall px halo; stroke is centred
+  ctx.strokeStyle = 'rgba(245,240,227,0.92)';     // PAL.page, the paper itself
+  ctx.strokeText(label, x, y);
+  ctx.fillStyle = 'rgba(46,38,28,0.95)';          // --ink-lt from wall.css
+  ctx.fillText(label, x, y);
+  ctx.restore();
 }
 
 /* =======================================================================
    THE CYCLE
    ======================================================================= */
-const titleEl = document.getElementById('title');
-const capWhat   = document.querySelector('#caption .what');
-const capParams = document.querySelector('#caption .params');
-const capEl     = document.getElementById('caption');
-
-/* setCaption(what, params) -- the shared signature the other pages expose. */
-function setCaption(what, params) {
-  capWhat.textContent   = what;
-  capParams.textContent = params;
-}
+/* titleEl, capWhat, capParams, capEl and setCaption() are gone with the two
+   bands they wrote into. setCaption(what, params) was copied from the other
+   pages in the rotation and it is the shape of the problem: a signature that
+   takes a PERMANENT sentence and a PERMANENT parameter strip cannot help but
+   produce a caption that is wrong about the picture most of the time. The
+   episode calls below take a sentence and a moment to say it. */
 const infoEl  = document.getElementById('info');
 const curtain = document.getElementById('curtain');
 
@@ -2041,16 +2105,29 @@ let runStart = 0, lastStepAt = 0, dayDebt = 0, finishedAt = 0;
 let paused = false, handingOff = false, stepIdx = 0;
 let fps = 0, lastFrame = performance.now(), lastDrawn = 0, msSim = 0, msDraw = 0, paints = 0;
 let simFails = 0, camAz = 0, lastPaintAt = 0;
+/* The leader retirement fires ONCE per run, so the flip has to be watched from
+   out here rather than announced from inside events() -- the model file stays
+   free of anything to do with language. markA is the year Mark's own fade. */
+let wasHandedOff = false, markA = 0, markPx = 0;
 
 const TOTAL_DAYS = () => CONFIG.simYears * 365;
 
-function showTitle() {
-  titleEl.querySelector('.name').textContent = 'Heartwood';
-  titleEl.querySelector('.blurb').textContent =
-    'A sugar maple, grown from one shoot. Light decides which buds open; the rest are shed.';
-  titleEl.classList.add('show');
-  setTimeout(() => titleEl.classList.remove('show'), CONFIG.titleMs);
-}
+/* ---- WHAT THIS PAGE SAYS, AND WHEN ---------------------------------------
+   One sentence, three times in a 205-second run, and silence otherwise.
+
+   The Name beat is the old title-card blurb, which was the better-written of
+   the two duplicated sentences, with the one fact the caption had that the
+   blurb did not folded into it: about seven in ten shoots are shed. That fact
+   is the most interesting thing on the page and it is also the one thing a
+   viewer cannot recover by looking, because dead shoots are not drawn. It
+   therefore rides the sentence rather than a strip.
+
+   On a REPEAT run (?pin, or r pressed) the wall's rule is that a returning
+   episode says only what changed, so the second and later trees get the short
+   line instead of the full recital. */
+const NAME_LINE  = 'A sugar maple grows one shoot at a time; light decides which '
+                 + 'buds open, and about seven in ten are shed.';
+const AGAIN_LINE = 'Another seed, and the same rules build a different maple.';
 
 function newRun() {
   const seed = 1 + Math.floor(Math.random()*999998);
@@ -2059,10 +2136,35 @@ function newRun() {
   V = {};
   stepIdx = 0; dayDebt = 0; finishedAt = 0; simFails = 0; camAz = 0; lastPaintAt = 0;
   runStart = performance.now(); lastStepAt = runStart;
+  wasHandedOff = false; markA = 0;
   fitView(T, V, 1);
-  showTitle();
-  capEl.classList.add('show');
-  updateTicker();
+
+  /* THE EPISODE. Wall.episode() holds its tongue for two seconds first, so the
+     seedling and the human establish alone -- the picture is the piece, and the
+     old title card started talking over frame one. */
+  Wall.clearTimers();
+  Wall.episode(runIndex === 0 ? NAME_LINE : AGAIN_LINE, { light: true });
+  /* THE HALFWAY REPEAT. This is the longest run in the rotation by some way,
+     and a single opening sentence leaves anybody who arrives at minute two
+     looking at an unexplained tree for three minutes. The wall's rule is that
+     a run past about 150 s re-runs its Name beat once, near the middle. It
+     costs a dozen seconds of silence and no new box. */
+  Wall.after(CONFIG.runMs * 0.5, () => Wall.lane(NAME_LINE, { light: true }));
+}
+
+/* The tip of the leader, in CSS pixels, for the Moment to sit beside. Frame
+   centre would be wrong here: on this page the trunk owns the centre line, so
+   a centred word lands on the tree it is talking about. */
+function leaderTip(T, V) {
+  let bz = -1e9, best = null;
+  for (let i = 0; i < T.n; i++) {
+    if (!T.alive[i] || T.kind[i] !== KIND.TRUNK) continue;
+    const t = tipOf(T, i);
+    if (t[2] > bz) { bz = t[2]; best = t; }
+  }
+  if (!best) return null;
+  const p = project(best[0], best[1], best[2], V);
+  return { x: p[0], y: p[1] };
 }
 
 function simulate(nSteps) {
@@ -2083,31 +2185,31 @@ function simulate(nSteps) {
   msSim = msSim*0.85 + (performance.now() - t0)*0.15;
 }
 
-function updateTicker() {
-  if (!T) return;
-  setCaption(
-    'A sugar maple grown one shoot at a time. Light decides which buds open; '
-    + 'about seven in ten shoots are shed before the tree is grown.',
-    'seed ' + T.seed + ' · ' + LOOK.name
-      + '   ·   year ' + (T.day / 365).toFixed(1) + ' of ' + CONFIG.simYears
-      + '   ·   ' + T.H.toFixed(2) + ' m tall, ' + (2*Math.sqrt(T.area[0]/Math.PI)*100).toFixed(0) + ' cm at the base'
-      + '   ·   ' + T.nAlive.toLocaleString() + ' live shoots, ' + T.deaths.toLocaleString() + ' shed'
-      + '   ·   ' + (T.handedOff
-            ? 'leader retired at ' + P.handoff_h + ' m, ' + T.apexCount + ' co-leaders'
-            : 'single leader')
-  );
-}
+/* updateTicker() is gone. It rewrote the caption strip SIXTY TIMES A SECOND
+   with seed, look, year, height, base diameter, shoot counts and leader state
+   -- six live figures at 16 wall pixels, a thousand wall pixels from the tree,
+   scrolling past illegibly for the whole run. Every one of them is still
+   available: the year is drawn into the picture, the shoot counts are spoken
+   once at the close, the leader retirement is a Moment when it happens, and
+   the rest is in #info under the i key, which is where a number nobody can
+   read from a sofa belongs. */
 function updateInfo() {
   if (!T) return;
   const dbh = 2*Math.sqrt(T.area[0]/Math.PI)*100;
   infoEl.textContent =
+    /* The seed and the render recipe both left the wall (the recipe read as a
+       data legend for a colour channel that does not exist), and they are what
+       lets a particularly good tree be found again -- so they land here. */
     'seed      ' + T.seed + '\n' +
+    'look      ' + LOOK.name + '\n' +
     'day       ' + T.day.toFixed(0) + '  (yr ' + (T.day/365).toFixed(1) + ')\n' +
     'height    ' + T.H.toFixed(2) + ' m\n' +
     'base dia  ' + dbh.toFixed(1) + ' cm   H/D ' + (dbh > 0 ? (T.H*100/dbh).toFixed(0) : '-') + '\n' +
     'nodes     ' + T.nAlive + ' alive / ' + T.n + ' born   ' + T.deaths + ' dead\n' +
     'leafy     ' + T.nLeafy + '   leaves ' + (T.leaves|0) + '\n' +
-    'apices    ' + T.apexCount + (T.handedOff ? '  (handoff yr ' + (T.handoffDay/365).toFixed(1) + ')' : '') + '\n' +
+    'apices    ' + T.apexCount + (T.handedOff
+        ? '  (leader retired at ' + P.handoff_h + ' m, yr ' + (T.handoffDay/365).toFixed(1) + ')'
+        : '  (single leader)') + '\n' +
     'C         ' + T.C.toFixed(1) + '   f_Ce ' + (T.lastCe||0).toFixed(2) + '\n' +
     'drawn     ' + lastDrawn + ' leaf sprites\n' +
     'sim/draw  ' + msSim.toFixed(1) + ' / ' + msDraw.toFixed(1) + ' ms\n' +
@@ -2118,6 +2220,13 @@ function updateInfo() {
 function handOff() {
   if (handingOff) return;
   handingOff = true;
+  /* Both, and first. clearEpisode() puts out whatever sentence is lit;
+     clearTimers() kills the schedule behind it. A halfway repeat that fires
+     during the curtain narrates a tree that is already fading out, and a
+     sentence left lit through the fade is the one thing a hand-off cannot
+     take back. */
+  Wall.clearEpisode();
+  Wall.clearTimers();
   curtain.classList.add('on');
   setTimeout(() => {
     runIndex++;
@@ -2170,8 +2279,26 @@ function frame(now) {
       catch (err) { console.error('[tree] sim step failed', err); simFails++; }
       if (simFails > 40) { handOff(); return; }
     }
+    /* THE MOMENT. The tree loses its single leader to a ring of co-leaders --
+       the event that turns a spire into a dome, and the one thing on this page
+       that happens rather than accumulates. Four words, beside the leader that
+       just retired, four seconds, gone. It cannot be seen coming and it cannot
+       be read off the finished picture, which is what a Moment is for. The old
+       parameter strip carried it as "leader retired at 4.5 m" for the rest of
+       the run, i.e. as a state label, which is precisely what a Moment is not.
+       The height and the year are in #info. */
+    if (T.handedOff && !wasHandedOff) {
+      wasHandedOff = true;
+      Wall.moment('Leader retired', { at: leaderTip(T, V), light: true });
+    }
   } else if (!finishedAt) {
     finishedAt = now;
+    /* THE CLOSE BEAT. The run's actual result, spoken once, in the ten seconds
+       the finished tree is held before the fade -- and true only now, which is
+       why it was never a caption. About seven in ten shoots born were shed to
+       get this crown, and here are the two numbers. */
+    Wall.lane('The tree kept ' + T.nAlive.toLocaleString() + ' shoots and shed '
+              + T.deaths.toLocaleString() + '.', { figures: true, light: true });
   }
 
   /* The finale. Growth stops, the leaves turn, and the piece ends on the bare
@@ -2207,7 +2334,6 @@ function frame(now) {
     msDraw = msDraw*0.85 + (performance.now() - t0)*0.15;
     paints++;
   }
-  updateTicker();
   if (document.body.classList.contains('showinfo')) updateInfo();
 }
 

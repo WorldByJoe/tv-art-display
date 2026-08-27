@@ -7,7 +7,7 @@ A car drives a real street network with a methane analyser on the roof. Gas disp
 Open `index.html` in a browser. That is the whole of it - one file, no build,
 no server, no keys. It is written for a 4K screen and scales down.
 
-Pin a neighbourhood with <code>?hood=</code>: ftcollins, bowie, levittown, northend, chicago, phoenix, trussville, tulane, norcross.
+Pin a neighbourhood with <code>?hood=</code>: ftcollins, bowie, levittown, northend, chicago, baltimore, trussville, tulane, norcross.
 
 Press `i` for the parameters it is running, and the arrows appear if you move
 a pointer.
