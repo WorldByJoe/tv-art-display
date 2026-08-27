@@ -59,9 +59,13 @@
      numbers, which is the exact collision this layout exists to end. The
      `body` prefix out-ranks wall.css's own .lane rule, which loads after
      this block. */
-  /* The maker's mark, below the map credits: present, never loud. */
-  #wbj{ margin-top:calc(24*var(--wu)); opacity:.5; }
-  #wbj svg{ display:block; width:calc(300*var(--wu)); height:auto; }
+  /* The maker's mark rides the band's right end, on a light chip so the
+     near-black wordmark reads against the dark panel. order:99 keeps it
+     last: the instrument is appended to the band at runtime. */
+  #wbj{ order:99; margin-left:auto; flex:0 0 auto;
+        background:#E7E2D8; border-radius:calc(12*var(--wu));
+        padding:calc(14*var(--wu)) calc(22*var(--wu)); opacity:.85; }
+  #wbj svg{ display:block; width:calc(360*var(--wu)); height:auto; }
   body .lane{ right:var(--railW); bottom:calc(var(--bandH) + 60*var(--wu)); }
 
   #info { position:fixed; left:2vw; bottom:13vh; z-index:10; display:none;
@@ -95,7 +99,10 @@
   <div class="instr mounted">
     <div class="row"><span class="k" id="cornerHood"></span><span class="v" id="cornerCity"></span></div>
     <div class="fine">Streets © OpenStreetMap, ODbL<br>Buildings © Overture Maps</div>
-    <div id="wbj"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 120" 
+    
+  </div>
+</div></div>
+<div id="band"><div id="wbj"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 120" 
      role="img" aria-label="World by Joe">
   <title>World by Joe</title>
   <g><defs><clipPath id="wbj"><circle cx="60" cy="60" r="52"/></clipPath></defs>
@@ -407,10 +414,7 @@
 </g>
   <text x="150" y="74" font-family="Futura,'Futura PT','Century Gothic','Avenir Next',Questrial,'Trebuchet MS',sans-serif" font-size="34" font-weight="600"
         letter-spacing="5.4" fill="#2B2118">WORLD <tspan font-weight="400" fill="#8A7F6D">BY</tspan> JOE</text>
-</svg></div>
-  </div>
-</div></div>
-<div id="band"></div>
+</svg></div></div>
 <div id="info"></div>
 <script>
 /* ---- rotation navigation (remote D-pad) --------------------------------
@@ -671,7 +675,12 @@ const MAP_RIGHT=1.0;
 const SAFE_X=0.035, SAFE_Y=0.035;   // 134 / 76 wall px of 3840 x 2160
 /* The reserve layout's one number. 0.155 of 3840 is a 595 px rail - enough
    for the leak table at house sizes - and 0.155 of 2160 is a 335 px band. */
-const PANEL={ inset:0.155 };
+/* Two fractions now, not one: Joe judged the shared 0.155 band too tall -
+   one row of numbers in a 335 px panel, bought by cropping the map. The
+   rail keeps 0.155 of the width; the band takes 0.085 of the height and
+   the map gets the difference. Both still drive CSS vars AND projection
+   from here - the one-place rule stands. */
+const PANEL={ inset:0.155, band:0.085 };
 let MAPW=0, MAPH=0;
 let act=null, actIndex=-1, finishedAt=0;
 let GW=0,GH=0, conc=null, logOdds=null, concImg=null, concCv=null, concCtx=null;
@@ -738,7 +747,7 @@ function resize(){
      disagreeing about where the map ends. */
   const iw=innerWidth||1920, ih=innerHeight||1080;
   document.documentElement.style.setProperty('--railW', Math.round(iw*PANEL.inset)+'px');
-  document.documentElement.style.setProperty('--bandH', Math.round(ih*PANEL.inset)+'px');
+  document.documentElement.style.setProperty('--bandH', Math.round(ih*PANEL.band)+'px');
   // mPerPx is set by projectHood(), from the neighbourhood's real extent
   const cs=CONFIG.cellPx*DPR;
   GW=Math.ceil(W/cs); GH=Math.ceil(H/cs);
@@ -779,7 +788,7 @@ function projectHood(){
      edges; the furniture is opaque and drawn above the canvas, so overflow
      dies underneath it instead of bleeding into the readouts. */
   MAPW=Math.round(W*(1-PANEL.inset));
-  MAPH=Math.round(H*(1-PANEL.inset));
+  MAPH=Math.round(H*(1-PANEL.band));
   projS=Math.max(MAPW/dLon, MAPH/dLat);
   projX=(MAPW-dLon*projS)/2;
   projY=(MAPH-dLat*projS)/2;
@@ -2021,7 +2030,7 @@ function drawLegend(){
          drawPeakCallouts() draws it on the map (PPMPAL at a typical few-ppm
          reading), so a viewer can match them at a glance. */
       { k:'leak indication', items:[
-        { c:'rgb(130,215,105)', ring:true, label:'ppm reading' },
+        { c:'rgb(130,215,105)', ring:true, label:'' },
       ]},
     ],
   });
