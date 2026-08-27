@@ -386,7 +386,10 @@
           for (const it of (sp.items || [])) {
             const cell = sws.appendChild(el('div', 'st'));
             const sw = cell.appendChild(document.createElement('i'));
-            sw.style.background = it.c || 'transparent';
+            /* ring:true keys a map MARKER (plume's indication circle):
+               same slot, drawn hollow the way it appears on the ground. */
+            if (it.ring) sw.className = 'ring', sw.style.borderColor = it.c || 'transparent';
+            else sw.style.background = it.c || 'transparent';
             const lb = cell.appendChild(document.createElement('b'));
             lb.textContent = it.label == null ? '' : String(it.label);
           }

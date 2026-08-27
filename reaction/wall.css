@@ -359,6 +359,11 @@ body.lane-lit .signature{ opacity:.35; transition:opacity .6s; }
                    gap:calc(5 * var(--wu)); }
 .instr .strip .st i{ display:block; width:calc(74 * var(--wu));
                      height:calc(22 * var(--wu)); border-radius:calc(5 * var(--wu)); }
+/* A strip cell keying a map RING rather than painted ground: a hollow
+   circle in the marker's own colour (set inline as border-color). */
+.instr .strip .st i.ring{ width:calc(38 * var(--wu)); height:calc(38 * var(--wu));
+                          border-radius:50%; background:transparent;
+                          border:calc(5 * var(--wu)) solid; }
 .instr .strip .st b{ font:400 var(--t4)/1 var(--font-num); font-weight:400;
                      color:var(--ink-2); }
 .instr.on-light .strip .st b{ color:var(--ink-lt-2); }
