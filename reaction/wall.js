@@ -329,7 +329,7 @@
       'k' + keys.length,
       (spec.strips || (spec.strip ? [spec.strip] : []))
         .map(sp => 's' + (sp.items || []).length + (sp.k || '')).join('~') || '-',
-      spec.cap != null ? 'c' : '-',
+      spec.cap != null ? (spec.capTop ? 'C' : 'c') : '-',
       spec.cols === 1 ? '1' : '2',
     ].join('/');
 
@@ -396,7 +396,15 @@
           instrEl.appendChild(st);
         }
       }
-      if (spec.cap != null) instrNodes.cap = instrEl.appendChild(el('div', 'cap'));
+      /* capTop puts the caption ABOVE its content - a heading rather than a
+         footnote. Wanted where the caption names a LIST (Joe, 2026-08-29:
+         "move the most common species title to the top of the column"),
+         since a label under eight rows reads as belonging to nothing. */
+      if (spec.cap != null) {
+        instrNodes.cap = el('div', spec.capTop ? 'cap top' : 'cap');
+        if (spec.capTop) instrEl.insertBefore(instrNodes.cap, instrEl.firstChild);
+        else instrEl.appendChild(instrNodes.cap);
+      }
       inst.shape = shape;
     }
     const instrNodes = inst.nodes, instrLast = inst.last;

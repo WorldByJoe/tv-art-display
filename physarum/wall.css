@@ -367,6 +367,9 @@ body.lane-lit .signature{ opacity:.35; transition:opacity .6s; }
 .instr .strip .st b{ font:400 var(--t4)/1 var(--font-num); font-weight:400;
                      color:var(--ink-2); }
 .instr.on-light .strip .st b{ color:var(--ink-lt-2); }
+/* A caption placed ABOVE its list is a heading: it needs its space below it,
+   not above, or it crowds the first row. */
+.instr .cap.top{ margin:0 0 calc(14 * var(--wu)); }
 .instr .cap{ font:400 var(--t4)/1.3 var(--font-num); letter-spacing:.1em;
              text-transform:uppercase; color:var(--ink-2); }
 /* Courtesy type: attribution inside a panel, same deliberate below-the-floor
