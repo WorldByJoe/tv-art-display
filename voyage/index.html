@@ -1,0 +1,1360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Voyage</title>
+<style>
+  /* =====================================================================
+     VOYAGE - from our solar system to a randomly drawn one that is real.
+
+     Joe's ask (2026-08-27, reshaped 2026-08-30): open on our corner of the
+     Galaxy with both ends of the trip marked in it; peel the catalogue away
+     farthest-first until only the corridor of stars we actually pass is left;
+     fly round that corridor to see it in three dimensions; drop in on home;
+     leave; take two minutes to cross, with the rungs of the ladder going by;
+     then tour the destination's planets one by one, gallery-style. The point
+     of the repeat viewing is the ladder: which stars are near, which are far,
+     and how differently the ladder is spaced in different directions.
+
+     THE DATA IS REAL and baked: exoplanets.js is a snapshot of the NASA
+     Exoplanet Archive - 4,737 host stars with sky positions and distances,
+     and full parameters for every system with three or more known planets.
+     The star map you see IS the discovery record, cone-shaped where Kepler
+     stared at one patch of sky for four years.
+
+     THE PHYSICS IS HONEST ABOUT ITS LIES, AND THERE ARE THREE. Two are
+     cartographic and named where they are told - the log-squeezed radius that
+     lets one picture hold a neighbour at 4 light years and the bulge at
+     27,000, and the six-times across-track stretch that opens the corridor
+     into something you can look at. The third is the engine. The departure
+     slingshot is
+     real physics (a Jupiter flyby is how real probes leave); the crossing
+     is not - no drive we have crosses thousands of light years. The ship flies
+     a constant-1g relativistic brachistochrone, the standard "torch drive"
+     of hard science fiction, and the two clocks in the panel are computed
+     with actual special relativity: ship years from rapidity, Earth years
+     from coordinate time. The fiction is the engine, never the arithmetic.
+
+     THE VIEW NEVER GETS INSIDE THE SHIP (Joe, 2026-08-29). One camera runs
+     the whole voyage and the ship stays a mark on the chart, because the
+     point of a crossing is WHERE you are, and a cockpit cannot show you
+     that. The camera's only trick is how far back it sits: in close on the
+     Sun's neighbours, out to the whole discovery catalogue, and once per run
+     far enough out that the catalogue is a speck against the Milky Way -
+     whose centre is drawn at the origin of galactic coordinates, four
+     arcminutes off Sagittarius A* itself and 8.18 kpc away.
+
+     THE TOUR uses the reserve layout from the artworks page: the planet
+     owns the stage, the words own a rail. Portraits are drawn from each
+     planet's real numbers - radius, temperature, insolation - because
+     almost no individual exoplanet has a NASA image (the old per-planet
+     image API was retired into science.nasa.gov), and a procedural render
+     driven by measurements is more honest than a stock painting anyway.
+     ===================================================================== */
+  html, body { margin:0; padding:0; height:100%; background:#04060c; overflow:hidden; }
+  * { cursor:none; }
+  canvas { display:block; }
+
+  :root { --railW: calc(1050 * var(--wu)); }
+  #rail { position:fixed; top:0; right:0; bottom:0; width:var(--railW);
+    box-sizing:border-box; z-index:5; background:#0A0E15;
+    border-left:1px solid rgba(255,255,255,.14);
+    display:flex; flex-direction:column;
+    padding:calc(110*var(--wu)) calc(64*var(--wu)) calc(56*var(--wu));
+    opacity:0; transition:opacity 1.1s ease-in-out; pointer-events:none; }
+  #rail.show { opacity:1; }
+  #pname  { font:italic 400 var(--t1)/1.15 Georgia, "Times New Roman", serif; color:var(--ink); }
+  #psub   { margin-top:calc(10*var(--wu));
+    font:400 var(--t4)/1.4 var(--font-num); letter-spacing:.08em; color:var(--ink-2); }
+  #rail .sep { height:1px; background:var(--edge); margin:calc(30*var(--wu)) 0; }
+  #pfacts { display:grid; grid-template-columns:1fr 1fr;
+    gap:calc(18*var(--wu)) calc(40*var(--wu)); }
+  #pfacts .k { font:400 var(--t4)/1.3 var(--font-num); letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-2); }
+  #pfacts .v { font:300 var(--t3)/1.2 var(--font-ui); color:var(--ink); }
+  #pdesc  { margin-top:calc(34*var(--wu));
+    font:300 var(--t3)/1.5 var(--font-ui); color:var(--ink); max-width:44ch; }
+  #rail .foot { margin-top:auto; }
+  body .lane { right:0; }
+  body.touring .lane { right:var(--railW); }
+</style>
+<link rel="stylesheet" href="wall.css">
+<script src="wall.js"></script>
+<script src="exoplanets.js"></script>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="rail">
+  <div id="pname"></div>
+  <div id="psub"></div>
+  <div class="sep"></div>
+  <div id="pfacts"></div>
+  <div id="pdesc"></div>
+  <div class="foot">
+    <div class="instr mounted"><div class="fine">NASA Exoplanet Archive · Caltech/IPAC · parameters as published</div></div>
+  </div>
+</div>
+<div id="info"></div>
+
+<script>
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+const CONFIG = {
+  galaxySec:  16,    // our corner of the Galaxy, with the two ends of the trip in it
+  thinSec:    20,    // the catalogue peels away, farthest first
+  flySec:     18,    // round the corridor, to see it in three dimensions
+  solSec:     13,    // home
+  departSec:  10,    // the Jupiter slingshot
+  cruiseSec: 120,    // the crossing: two minutes of ladder
+  planetSec:  17,    // per planet on the tour
+  maxPlanets:  8,    // the whole catalogue: only KOI-351 (Kepler-90, 8 planets) and TRAPPIST-1 (7) need more than 6
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,
+};
+/* Light years throughout - Joe, 2026-08-30. The archive publishes parsecs and
+   the file still holds them, but nothing on screen is ever in parsecs again. */
+const LY=3.26156;
+function ly(v){
+  if (v<10)   return v.toFixed(1)+' ly';
+  if (v<1000) return Math.round(v)+' ly';
+  return Math.round(v).toLocaleString()+' ly';
+}
+const PINNED = /[?&]pin\b/.test(location.search);
+const FORCED = new URLSearchParams(location.search).get('host');
+
+const canvas=document.getElementById('cv'), ctx=canvas.getContext('2d',{alpha:false});
+const infoEl=document.getElementById('info');
+let W=0,H=0;
+function resize(){
+  W=Math.min(1920, innerWidth||1920);           // render cap, as descent does
+  H=Math.round(W*( (innerHeight||1080)/(innerWidth||1920) ));
+  canvas.width=W; canvas.height=H;
+  canvas.style.width=(innerWidth||1920)+'px'; canvas.style.height=(innerHeight||1080)+'px';
+}
+addEventListener('resize', resize); resize();
+
+const TAU=Math.PI*2;
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const ease=t=>t*t*(3-2*t);
+const R01=Math.random;
+
+/* ================= the cast ============================================ */
+/* Our eight, for the overture: [name, colour, radius_px, orbit_AU, period_yr] */
+const SOL=[
+  ['Mercury','#9c8e7d', 1.6, 0.39, 0.24],
+  ['Venus',  '#d9b98a', 2.6, 0.72, 0.62],
+  ['Earth',  '#6f9fd8', 2.8, 1.00, 1.00],
+  ['Mars',   '#c67b57', 2.0, 1.52, 1.88],
+  ['Jupiter','#cfa678', 8.0, 5.20, 11.9],
+  ['Saturn', '#d8c294', 6.8, 9.54, 29.5],
+  ['Uranus', '#9fc7cc', 4.4, 19.2, 84.0],
+  ['Neptune','#7a93d8', 4.2, 30.1, 165 ],
+];
+/* Orbits are log-compressed or Neptune is a pixel and Mercury is inside the
+   sun - the standard cartographer's lie, told the same way every time. */
+const orbR=au=>Math.log10(1+au*3)*0.34;
+/* Bounded by the WIDTH as well as the height. Scaled off H alone, Neptune's
+   orbit ran past the frame edge at 16:9 and took Uranus and Saturn with it on
+   anything narrower. */
+const orbPx=(au,scale)=>orbR(au)*Math.min(H*1.35, W*0.72)*scale;
+
+/* The destination: a real multi-planet system, near ones favoured a little
+   so the map's line does not always vanish into the Kepler cone. */
+function pickDest(){
+  const names=Object.keys(EXO.sys);
+  if (FORCED && EXO.sys[FORCED]) return FORCED;
+  const stars={}; for(const s of EXO.stars) stars[s[0]]=s;
+  const pool=names.filter(n=>stars[n]);
+  const w=pool.map(n=>1/Math.sqrt(10+stars[n][3]));
+  let sum=w.reduce((a,b)=>a+b,0), r=R01()*sum;
+  for(let i=0;i<pool.length;i++){ r-=w[i]; if(r<=0) return pool[i]; }
+  return pool[0];
+}
+
+/* ================= where the Galaxy is ================================= */
+/* Everything on this chart sits in a real direction. The Sun is the origin of
+   the coordinates; the galactic centre used here is the origin of the galactic
+   coordinate system (l=0, b=0 - four arcminutes off Sgr A* itself), 26,700
+   light years away (GRAVITY Collaboration 2019, 8.178 kpc); the disk rings lie
+   in the true galactic plane, which leans about 63 degrees to the celestial
+   equator. The deep end of the catalogue is not decoration either - the SWEEPS
+   transit hosts and the KMT and OGLE microlensing hosts 27,000 light years out
+   were found by staring straight INTO the bulge, so the chart's farthest
+   planets really do lie toward the core. (SWEEPS is HST transit photometry,
+   Sahu 2006 - it sits in the same window as the microlensing surveys, but it
+   is not one.) */
+const D2R=Math.PI/180;
+function unitDir(raDeg,decDeg){ const ra=raDeg*D2R, dec=decDeg*D2R;
+  return [Math.cos(dec)*Math.cos(ra), Math.sin(dec), Math.cos(dec)*Math.sin(ra)]; }
+function cross(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+const GC_DIR=unitDir(266.4050,-28.9362);      // l=0 b=0; Sgr A* is 4' off it
+const NGP   =unitDir(192.8595, 27.1284);      // north galactic pole
+const GC_LY =26670;                           // Sun to centre, light years
+const GC_VEC=[GC_DIR[0]*GC_LY, GC_DIR[1]*GC_LY, GC_DIR[2]*GC_LY];
+const GPV=(function(){ const v=cross(NGP,GC_DIR), n=Math.hypot(v[0],v[1],v[2]);
+  return [v[0]/n, v[1]/n, v[2]/n]; })();      // the other in-plane axis
+const ORIGIN=[0,0,0];
+
+/* The rings, and what each one IS. Joe watched the disk come up as unlabelled
+   hoops (2026-08-30) and could not tell what he was looking at, which is a
+   fair verdict on a circle with no name on it. The middle ring is the one
+   worth having: it passes through the Sun, so it is the Sun's own lap of the
+   Galaxy. (The familiar 230-250 Myr goes with the older 8.5 kpc; at GRAVITY's
+   distance and a circular speed near 229 km/s the lap is about 220.) */
+const GAL_N=140;
+const GAL_RINGS=[
+  {R:13000, w:1.0, a:.13, lab:null, seat:-1},
+  {R:GC_LY, w:1.5, a:.32, lab:"THE SUN'S ORBIT  ·  one lap every 220 million years", seat:-1},
+  {R:49000, w:1.7, a:.34, lab:'RIM OF THE BRIGHT DISK  ·  49,000 ly from the centre', seat:-1},
+];
+let galPts=null;                              // ring vertices, light years
+function buildGal(){
+  galPts=GAL_RINGS.map(function(g){
+    const pts=new Float64Array(3*(GAL_N+1));
+    for (let i=0;i<=GAL_N;i++){
+      const th=i/GAL_N*TAU, c=Math.cos(th), sn=Math.sin(th);
+      pts[i*3  ]=GC_VEC[0]+g.R*(c*GC_DIR[0]+sn*GPV[0]);
+      pts[i*3+1]=GC_VEC[1]+g.R*(c*GC_DIR[1]+sn*GPV[1]);
+      pts[i*3+2]=GC_VEC[2]+g.R*(c*GC_DIR[2]+sn*GPV[2]);
+    }
+    return pts;
+  });
+}
+
+/* ================= the camera ========================================== */
+/* THE CAMERA IS BUILT ON THE LINE OF THE VOYAGE. Its first axis is the
+   Sun-to-destination direction, so that line lies flat across the screen and
+   stays there for the whole run: home always to the left, destination always
+   to the right, and `spin` walks the eye around the line rather than around
+   some arbitrary sky pole. That is what makes the corridor legible - you are
+   always looking at the same rod of space from a different side.
+
+   off is the zoom: how far back the eye sits in chart units. The chart is
+   log-squeezed, so a given off always shows the same span in SQUEEZED units -
+   half the frame reaches log10(1+d/SQ) = VIS_K*off - and reading that
+   backwards gives the light years on screen. */
+const SQ=26;                                  // the squeeze scale, light years
+const CAM={spin:0, tilt:.28, off:2.6, xpand:1};
+const VIS_K=0.53;
+function offForRadius(v){ return Math.log10(1+v/SQ)/VIS_K; }
+function radiusForOff(off){ return SQ*(Math.pow(10, VIS_K*off)-1); }
+
+let AXU=[1,0,0], AXP=[0,1,0], AXQ=[0,0,1];
+function buildFrame(u){
+  AXU=[u[0],u[1],u[2]];
+  let up=(Math.abs(u[1])>0.94)? [1,0,0] : [0,1,0];
+  const d=up[0]*u[0]+up[1]*u[1]+up[2]*u[2];
+  let q=[up[0]-d*u[0], up[1]-d*u[1], up[2]-d*u[2]];
+  const n=Math.hypot(q[0],q[1],q[2]);
+  AXP=[q[0]/n,q[1]/n,q[2]/n];
+  AXQ=cross(AXU,AXP);
+}
+/* ACROSS-TRACK EXAGGERATION. Eleven light years of corridor width against six
+   hundred of corridor length is a hair: viewed honestly the whole cylinder is
+   a horizontal line and there is no three dimensions to see. xpand stretches
+   whatever lies ACROSS the line of the voyage, leaving distance ALONG it
+   alone, so the corridor opens into a tube you can fly round. It is a stated
+   lie, like the log squeeze it sits on top of, and it goes back to 1 before
+   the ship leaves - the flight itself is not exaggerated.
+
+   It costs nothing per star. Stretching a vector across the axis is
+   m' = X*m + (1-X)(m.U)U, which is linear, so it folds straight into the row
+   vectors: R' = X*R + (1-X)(R.U)U. */
+function acrossStretch(r, X){
+  const d=r[0]*AXU[0]+r[1]*AXU[1]+r[2]*AXU[2], k=1-X;
+  return [X*r[0]+k*d*AXU[0], X*r[1]+k*d*AXU[1], X*r[2]+k*d*AXU[2]];
+}
+/* The frame change, both camera rotations and the stretch fold into three row
+   vectors, once a frame, so a star still costs one 3x3 multiply. spin turns
+   the eye about the line; tilt tips the line itself out of the screen plane,
+   which is what makes the corridor recede instead of lying flat. */
+function camPrep(cam){
+  const cs=Math.cos(cam.spin), sn=Math.sin(cam.spin);
+  const ct=Math.cos(cam.tilt), st=Math.sin(cam.tilt);
+  const sx=AXP[0]*sn+AXQ[0]*cs, sy=AXP[1]*sn+AXQ[1]*cs, sz=AXP[2]*sn+AXQ[2]*cs;
+  let r1=[AXU[0]*ct-sx*st, AXU[1]*ct-sy*st, AXU[2]*ct-sz*st];
+  let r2=[AXP[0]*cs-AXQ[0]*sn, AXP[1]*cs-AXQ[1]*sn, AXP[2]*cs-AXQ[2]*sn];
+  let r3=[AXU[0]*st+sx*ct, AXU[1]*st+sy*ct, AXU[2]*st+sz*ct];
+  const X=cam.xpand||1;
+  if (X!==1){ r1=acrossStretch(r1,X); r2=acrossStretch(r2,X); r3=acrossStretch(r3,X); }
+  return {
+    r1x:r1[0], r1y:r1[1], r1z:r1[2],
+    r2x:r2[0], r2y:r2[1], r2z:r2[2],
+    r3x:r3[0], r3y:r3[1], r3z:r3[2],
+    off:cam.off };
+}
+/* Chart units -> screen. Null behind the eye. */
+function projMap(mx,my,mz,C){
+  const zc=(mx*C.r3x+my*C.r3y+mz*C.r3z)*1.4 + C.off;
+  if (zc<=.06) return null;
+  const f=H*0.95/zc;
+  return [W/2+(mx*C.r1x+my*C.r1y+mz*C.r1z)*f,
+          H/2-(mx*C.r2x+my*C.r2y+mz*C.r2z)*f, zc];
+}
+/* Light years -> screen, squeezed about the viewer at P. */
+function place(vx,vy,vz,P,C){
+  const dx=vx-P[0], dy=vy-P[1], dz=vz-P[2];
+  const d=Math.sqrt(dx*dx+dy*dy+dz*dz);
+  if (d<1e-9) return projMap(0,0,0,C);
+  const k=Math.log10(1+d/SQ)/d;
+  return projMap(dx*k,dy*k,dz*k,C);
+}
+
+/* ================= little signs ======================================== */
+/* A sign is drawn only if its box is clear of every sign already placed this
+   frame, and callers place them most-important-first. Unculled, a 4K chart of
+   4,737 stars turns into a grey smear of overlapping type. */
+let signs=[];
+/* The chart shares the screen with the panel, the lane, the moment and the
+   rail. A sign that slides under one of them is unreadable, so every frame
+   starts with those rectangles already claimed. They are DOM elements in CSS
+   pixels; the canvas is a scaled backing store, hence the conversion. */
+function keepOut(){
+  const sx=W/(innerWidth||1920), sy=H/(innerHeight||1080);
+  const els=document.querySelectorAll('.instr, .lane, .moment, #rail');
+  for (let i=0;i<els.length;i++){
+    const e=els[i];
+    /* Effective visibility, ancestors included: the rail's own nested .instr
+       keeps opacity 1 while the rail around it is faded to 0, so reading only
+       the element's own opacity claimed a dead band down the right of the
+       chart for the whole voyage. */
+    if (e.checkVisibility){
+      if (!e.checkVisibility({opacityProperty:true, visibilityProperty:true})) continue;
+    } else if (parseFloat(getComputedStyle(e).opacity||'1') < .05) continue;
+    const r=e.getBoundingClientRect();
+    if (r.width<2 || r.height<2) continue;
+    signs.push([r.left*sx-6, r.top*sy-6, r.right*sx+6, r.bottom*sy+6]);
+  }
+}
+function sign(x,y,text,col,px,opt){
+  opt=opt||{};
+  const a=(opt.alpha===undefined)?1:opt.alpha;
+  if (a<=.03) return false;
+  ctx.font='400 '+px+'px ui-monospace,Menlo,monospace';
+  const w=ctx.measureText(text).width, h=px*1.2;
+  const dy0=(opt.dy===undefined)?4:opt.dy;
+  /* Right of the mark is the seat everything wants. Rather than lose a name
+     to the first collision, try the other seats round the mark - it is how
+     Earth keeps its label when Venus has taken the obvious spot. */
+  const RING=[[11,4],[11,px+10],[11,-px-6],[-w-11,4],[-w-11,px+10],[-w-11,-px-6]];
+  let seats;
+  if (opt.left) seats=[[-w-14, dy0]];          // pinned to the frame rim
+  else if (opt.dx!==undefined || opt.dy!==undefined)
+    /* A caller's offset is a PREFERENCE, not the only seat. Forcing it meant
+       the most important labels - the destination, the ship, the Sun - were
+       the only ones with no second chance, and lost to a neighbour. */
+    seats=[[(opt.dx===undefined)?11:opt.dx, dy0]].concat(RING);
+  else seats=RING;
+  for (let k=0;k<seats.length;k++){
+    const lx=x+seats[k][0], ly=y+seats[k][1];
+    const box=[lx-5, ly-h, lx+w+5, ly+5];
+    if (box[0]<4 || box[2]>W-4 || box[1]<4 || box[3]>H-4) continue;
+    let clash=false;
+    for (let i=0;i<signs.length;i++){ const b=signs[i];
+      if (box[0]<b[2] && box[2]>b[0] && box[1]<b[3] && box[3]>b[1]){ clash=true; break; } }
+    if (clash) continue;
+    signs.push(box);
+    ctx.globalAlpha=a*.4; ctx.strokeStyle=col; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x+(seats[k][0]<0? -3 : 3), y);
+    ctx.lineTo(lx+(seats[k][0]<0? w+4 : -4), ly-h*.35); ctx.stroke();
+    ctx.globalAlpha=a; ctx.fillStyle=col; ctx.textAlign='left';
+    ctx.fillText(text, lx, ly);
+    ctx.globalAlpha=1;
+    return true;
+  }
+  return false;
+}
+
+/* ================= relativity, done straight =========================== */
+/* Constant 1 g out, flip, constant 1 g in - the brachistochrone every hard
+   SF drive flies. In units of years and lightyears, a = 1.032 ly/yr^2, and
+   the closed forms are exact:
+     coordinate time to cover x (accelerating):  T = sqrt(x^2 + 2x/a)
+     proper (ship) time:                         tau = acosh(1 + a x)/a
+     speed:                                      v/c = aT / sqrt(1+(aT)^2)  */
+const A1G=1.032;
+function legT(x){ return Math.sqrt(x*x + 2*x/A1G); }
+function legTau(x){ return Math.acosh(1 + A1G*x)/A1G; }
+function relClocks(x, D){
+  const half=D/2;
+  if (x<=half){ const T=legT(x), tau=legTau(x);
+    return {T, tau, v: A1G*T/Math.sqrt(1+A1G*T*A1G*T)}; }
+  const xr=D-x, Th=legT(half), tauh=legTau(half);
+  const T2=legT(xr), tau2=legTau(xr);
+  return {T: 2*Th-T2, tau: 2*tauh-tau2, v: A1G*T2/Math.sqrt(1+A1G*T2*A1G*T2)};
+}
+
+/* ================= the run ============================================= */
+let dest=null, destStar=null, destVec=null, destU=null, planets=null;
+let t0=0, phase='galaxy';
+let shipV=0, earthYr=0, shipYr=0, distLy=0, doneLy=0;
+let tourIdx=0, tourT=0, handingOff=false;
+let corridorOff=2.2, midPoint=[0,0,0];
+let paused=false, pausedAt=0, fps=0, lastFrame=performance.now();
+
+function newRun(){
+  dest=pickDest();
+  const stars={}; for(const s of EXO.stars) stars[s[0]]=s;
+  destStar=stars[dest];
+  distLy=destStar[3]*LY;
+  destU=unitDir(destStar[1], destStar[2]);                 // the line out
+  destVec=[destU[0]*distLy, destU[1]*distLy, destU[2]*distLy];
+  midPoint=[destVec[0]*.5, destVec[1]*.5, destVec[2]*.5];
+  destIdx=starIndex(dest);
+  buildFrame(destU);                                       // the camera rides this line
+  buildCorridor();
+  /* Inner to outer, which is what the arrival line promises and what the
+     orbit rings behind the portraits are drawn at. Nine of the 346 systems
+     are not in that order in the archive. Sort is stable, so planets with no
+     orbit to sort on keep their catalogue order. */
+  planets=EXO.sys[dest].slice()
+            .sort(function(a,b){ return smaOf(a,0)-smaOf(b,0); })
+            .slice(0, CONFIG.maxPlanets);
+  /* corridorOff is set by sizeCorridorView, from what will actually be on
+     screen rather than from the path length. */
+  sizeCorridorView();
+  earthYr=0; shipYr=0; shipV=0; doneLy=0; tourIdx=0; tourT=0;
+  handingOff=false; paused=false; pausedAt=0;
+  document.body.style.transition=''; document.body.style.opacity='';
+  t0=performance.now(); phase='galaxy';
+  CAM.spin=0; CAM.tilt=.50; CAM.off=5.8;
+  chartSpan=60; closeOff=1.6;
+  document.body.classList.remove('touring');
+  document.getElementById('rail').classList.remove('show');
+  Wall.clearEpisode(); Wall.clearTimers();
+  Wall.signature('NASA Exoplanet Archive · Caltech/IPAC');
+  Wall.episode('Our corner of the Milky Way. The Sun rides the middle ring, '
+    +'one lap every 220 million years. Tonight we are going to '+dest+', '
+    +ly(distLy)+' out.');
+  console.log('[voyage] -> '+dest+', '+Math.round(distLy)+' ly, '
+    +planets.length+' planets');
+}
+
+const PHASES=['galaxy','thin','fly','sol','depart','cruise','tour'];
+function enterPhase(p){
+  phase=p;
+  if (p==='thin'){
+    Wall.episode(EXO.stars.length.toLocaleString()+' stars are known to carry '
+      +'planets, and almost none of them are on our way. Watch the rest go.');
+  } else if (p==='fly'){
+    Wall.clearEpisode();
+    let t='What is left is the corridor: '+corrIdx.length+' planet-bearing '
+      +'stars, none of them more than '+ly(corrR)+' off the line we are about '
+      +'to fly. That is the whole ladder between here and '+dest+'.';
+    /* The hairline sentence is only true when the corridor really is slender.
+       On the seven nearest destinations the cylinder has to open wider than
+       the journey is long before it holds nine stars, and the same words then
+       say the opposite of what is on screen. */
+    t += (corrR < distLy/4)
+      ? ' Across the corridor the scale is stretched six times over - '+ly(corrR)
+        +' against '+ly(distLy)+' of length would be a hairline otherwise.'
+      : ' On a hop this short almost nothing lies directly on the way, so the '
+        +'corridor opens out wider than the journey is long; across it the '
+        +'scale is still stretched six times.';
+    Wall.lane(t, {hold:11000});
+  } else if (p==='sol'){
+    Wall.lane('Home first. Eight planets around one star - for most of history '
+      +'the only planetary system anyone could point to.', {hold:8000});
+  } else if (p==='depart'){
+    Wall.lane('The way out is real physics: a dive past Jupiter, stealing a '
+      +'sliver of its orbital speed. Every probe that has ever left the Solar '
+      +'System left this way.', {hold:5000});   // the SLINGSHOT moment hides the lane at 5.7 s
+  } else if (p==='cruise'){
+    Wall.lane('From here the engine is fiction - a torch drive holding one '
+      +'gravity of thrust for years. The clocks are not fiction: at these '
+      +'speeds the ship genuinely ages more slowly than the Earth it left.',
+      {hold:9000});
+  } else if (p==='tour'){
+    /* Snap the clocks to their arrival values. Normally cruise already left
+       them there; if the walker jumped straight here the panel must not
+       claim a zero-year crossing. */
+    const rc=relClocks(distLy, distLy);
+    earthYr=rc.T; shipYr=rc.tau; doneLy=distLy; shipV=0;
+    document.body.classList.add('touring');
+    document.getElementById('rail').classList.add('show');
+    tourIdx=0; tourT=0; showRail(planets[0]);
+    Wall.lane(dest+': arrival. '+planets.length+' worlds, inner to outer.', {hold:6000});
+  }
+}
+
+function handOff(){
+  if (handingOff) return;
+  handingOff=true;
+  Wall.clearEpisode(); Wall.clearTimers();
+  document.body.style.transition='opacity 1400ms ease-in-out';
+  document.body.style.opacity='0';
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=CONFIG.nextPage;
+                   else location.reload(); }, 1400);
+}
+
+/* ================= drawing ============================================= */
+function starColour(teff){
+  if (!teff) return '#cdd6e4';
+  if (teff>7500) return '#aebfff'; if (teff>6000) return '#e8ecff';
+  if (teff>5000) return '#ffe9c4'; if (teff>3800) return '#ffc48a';
+  return '#ff9d6b';
+}
+
+function drawSolSystem(cx,cy,scale,alpha,tSec){
+  ctx.save(); ctx.globalAlpha=alpha;
+  const seats=[];
+  const g=ctx.createRadialGradient(cx,cy,0,cx,cy,26*scale);
+  g.addColorStop(0,'#fff7e0'); g.addColorStop(.25,'#ffd27a'); g.addColorStop(1,'rgba(255,180,80,0)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(cx,cy,26*scale,0,TAU); ctx.fill();
+  for(const [name,col,pr,au,per] of SOL){
+    const r=orbPx(au,scale);
+    ctx.strokeStyle='rgba(160,175,205,.16)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.ellipse(cx,cy,r,r*.42,0,0,TAU); ctx.stroke();
+    const a=(tSec/per)*TAU*0.18 + au*2.4;         // sped up, phases scattered
+    const px=cx+Math.cos(a)*r, py=cy+Math.sin(a)*r*.42;
+    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(px,py,Math.max(1.1,pr*scale*.9),0,TAU); ctx.fill();
+    if (name==='Saturn' && scale>.5){
+      ctx.strokeStyle='rgba(216,194,148,.7)'; ctx.lineWidth=Math.max(1,1.3*scale);
+      ctx.beginPath(); ctx.ellipse(px,py,pr*1.9*scale,pr*0.7*scale,-.4,0,TAU); ctx.stroke();
+    }
+    seats.push([name,px,py]);
+  }
+  /* The signs go on afterwards and in an order of our choosing. Drawn inline
+     the eight would be labelled Mercury-first, and Earth - the one worth
+     naming - would be the one the declutter dropped when Venus crowded it. */
+  if (scale>.55){
+    const px_=Math.round(H*0.018);
+    sign(cx,cy,'The Sun','rgba(255,238,190,.9)',Math.round(H*0.019),
+         {alpha:alpha*.92, dx:14, dy:-8});
+    ['Earth','Jupiter','Saturn','Mars','Venus','Neptune','Uranus','Mercury']
+      .forEach(function(want){
+        for (let i=0;i<seats.length;i++) if (seats[i][0]===want)
+          sign(seats[i][1], seats[i][2], want, 'rgba(214,226,244,.88)', px_,
+               {alpha:alpha*.92});
+      });
+  }
+  ctx.restore();
+}
+
+/* ================= the chart =========================================== */
+/* Every host star, the Galaxy behind them, and signs on the ones worth
+   knowing.
+
+   THE SQUEEZE IS ALWAYS ABOUT THE VIEWER. Chart radius is log10(1+d/SQ) with d
+   in light years from the SHIP, not from the Sun. Held to the Sun it would
+   flatten the sky around a ship 1,000 light years out: the log there is
+   forty times shallower than it is at home, so the ship's own neighbours would
+   pile into a single point and a close view would show nothing at all.
+
+   THE CATALOGUE IS NOT ALL SHOWN. 4,737 stars is a fog. Each star carries a
+   cull value and the chart draws only those below the current cut, so the run
+   can start with everything and peel it away farthest-first until only the
+   corridor is left. See buildCorridor. */
+let STAR=null, SPC=null, DSUN=null, SN=0, destIdx=-1, cullMax=1;
+function buildPools(){
+  STAR=EXO.stars.filter(function(s){ return s[3]>0; });
+  SN=STAR.length;
+  SPC=new Float64Array(SN*3); DSUN=new Float64Array(SN);
+  cullMax=1;
+  for (let i=0;i<SN;i++){
+    const s=STAR[i], u=unitDir(s[1],s[2]), d=s[3]*LY;   // the archive's parsecs, converted once
+    SPC[i*3]=u[0]*d; SPC[i*3+1]=u[1]*d; SPC[i*3+2]=u[2]*d;
+    DSUN[i]=d; if (d>cullMax) cullMax=d;
+  }
+}
+function starIndex(name){
+  if (!STAR) buildPools();
+  for (let i=0;i<SN;i++) if (STAR[i][0]===name) return i;
+  return -1;
+}
+
+/* ---- the corridor ------------------------------------------------------ */
+/* Joe's ask (2026-08-30): stop showing four thousand stars and show the
+   handful we actually pass. Take the cylinder around the line from the Sun to
+   the destination and open it until it holds nine hosts - measured over all
+   346 reachable systems that radius comes out at 6.3 to 32.9 light years,
+   median 11.1, quartiles 9.7 and 12.6, and it barely moves whether the trip is
+   40 light years or 6,600 (the widest is the SHORTEST trip, Barnard's star,
+   where a nine-star cylinder ends up wider than the journey is long). That
+   near-constant width IS the thing worth learning from repeat viewings.
+
+   Three tiers come out of it. -3 the destination, -2 on the way, -1 near the
+   way (drawn very faint, so the corridor has a little depth behind it), and
+   everything else carries its distance from the Sun, which is what lets the
+   thinning peel the sky off farthest-first. */
+const CORRIDOR_N=9;
+/* How far the across-track stretch opens the corridor while we look at it from
+   outside. Six is enough to turn a hairline into a tube without throwing the
+   nearest rungs off frame. */
+const XPAND=6;
+let AXL=null, RADL=null, CULL=null, DIM=null, corrR=12, corrIdx=[];
+function buildCorridor(){
+  if (!AXL){ AXL=new Float64Array(SN); RADL=new Float64Array(SN);
+             CULL=new Float64Array(SN); DIM=new Float64Array(SN); }
+  const D=distLy, ux=destU[0], uy=destU[1], uz=destU[2], cand=[];
+  for (let i=0;i<SN;i++){
+    const x=SPC[i*3], y=SPC[i*3+1], z=SPC[i*3+2];
+    const a=x*ux+y*uy+z*uz;
+    const px=x-a*ux, py=y-a*uy, pz=z-a*uz;
+    const r=Math.sqrt(px*px+py*py+pz*pz);
+    AXL[i]=a; RADL[i]=r;
+    /* The 3% dead zone at each end is not an arbitrary trim. Near the line's
+       origin a star is close to the LINE simply by being close to the Sun, so
+       without it the nine "rungs" fill up with Proxima Cen and tau Cet on
+       every long crossing. Measured over all 346 destinations: widening the
+       zone to an absolute 30 ly, or narrowing it to 12, changes the count of
+       genuinely-missed close passes by less than 5% and every star it
+       re-admits is another home-neighbourhood artifact of exactly this kind. */
+    if (i!==destIdx && a>0.03*D && a<0.97*D) cand.push([r,i]);
+  }
+  cand.sort(function(m,n){ return m[0]-n[0]; });
+  const take=Math.min(CORRIDOR_N, cand.length);
+  /* No padding. corrR IS the ninth radius, so the tier test below picks out
+     exactly the nine in corrIdx - pad it and the tier quietly grows (count in
+     a cylinder goes as r squared, so 8% of radius is ~17% more stars) and the
+     panel then under-reports the stars it is boosting and drawing. */
+  corrR = take? cand[take-1][0] : 12;
+  corrIdx=[];
+  for (let k=0;k<take;k++) corrIdx.push(cand[k][1]);
+  corrIdx.sort(function(m,n){ return AXL[m]-AXL[n]; });      // in the order we meet them
+  const near=corrR*3;
+  for (let i=0;i<SN;i++){
+    const a=AXL[i], r=RADL[i];
+    if (i===destIdx){ CULL[i]=-3; DIM[i]=1; }
+    else if (a>0.03*D && a<0.97*D && r<=corrR){ CULL[i]=-2; DIM[i]=1; }
+    else if (a>-0.10*D && a<1.10*D && r<=near){ CULL[i]=-1; DIM[i]=.26; }
+    else { CULL[i]=DSUN[i]; DIM[i]=1; }
+  }
+  /* The rest of the sky then carries its RANK rather than its distance.
+     Ranked farthest-first and swept linearly, a steady number of stars leaves
+     the picture every second, which is what "watch the rest go" should look
+     like. Swept on raw light years it is a four-second burst at the very end,
+     because almost the whole catalogue sits inside a tenth of the depth of the
+     deepest microlensing host. */
+  const rest=[];
+  for (let i=0;i<SN;i++) if (CULL[i]>=0) rest.push(i);
+  rest.sort(function(m,n){ return DSUN[n]-DSUN[m]; });
+  for (let k=0;k<rest.length;k++) CULL[rest[k]]=1-k/rest.length;
+  cullMax=1;
+  console.log('[voyage] corridor: '+corrIdx.length+' stars within '
+    +corrR.toFixed(1)+' ly of a '+Math.round(D)+' ly line');
+}
+
+/* How far back the eye must sit to hold the whole corridor from its middle.
+   It has to be computed from what will really be on screen - the stretch
+   included - not from the length of the path: sized from length alone, a short
+   hop with a wide corridor threw two thirds of its rungs off frame the moment
+   the six-times across-track stretch came on (measured over all 346
+   destinations: HD 69830, 41 light years, kept 36% of its nine). */
+function sizeCorridorView(){
+  const HW=(W||1920)*.46, HH=(H||1080)*.44, F=(H||1080)*0.95;
+  let need=1.05;
+  /* Solved rather than estimated. For a point whose camera-space components
+     are (Xv, Yv, A), the depth is zc = 1.4*A + off and the screen offsets are
+     Xv*F/zc and Yv*F/zc, so the smallest depth that keeps it in frame is
+     known outright - and off follows. A first cut that ignored what tilt does
+     to depth put the far end of the corridor off frame on EVERY run: tilt
+     swings one end toward the eye, and the end that comes closer is the one
+     that overflows. */
+  for (let t=0;t<3;t++){
+    const tilt=.30+.22*(t/2), ct=Math.cos(tilt), st=Math.sin(tilt);
+    for (let sp=0; sp<12; sp++){
+      const spin=sp/12*TAU, cs=Math.cos(spin), sn=Math.sin(spin);
+      for (let k=-2;k<corrIdx.length;k++){
+        let vx,vy,vz;
+        if (k===-2){ vx=0; vy=0; vz=0; }                     // home
+        else if (k===-1){ vx=destVec[0]; vy=destVec[1]; vz=destVec[2]; }
+        else { const i=corrIdx[k]; vx=SPC[i*3]; vy=SPC[i*3+1]; vz=SPC[i*3+2]; }
+        const dx=vx-midPoint[0], dy=vy-midPoint[1], dz=vz-midPoint[2];
+        const d=Math.sqrt(dx*dx+dy*dy+dz*dz);
+        if (d<1e-9) continue;
+        const m=Math.log10(1+d/SQ)/d;
+        const mx=dx*m, my=dy*m, mz=dz*m;
+        const ca=mx*AXU[0]+my*AXU[1]+mz*AXU[2];              // along the line
+        const pp=(mx*AXP[0]+my*AXP[1]+mz*AXP[2])*XPAND;      // across it, stretched
+        const qq=(mx*AXQ[0]+my*AXQ[1]+mz*AXQ[2])*XPAND;
+        const Yv=pp*cs-qq*sn, Zs=pp*sn+qq*cs;
+        const Xv=ca*ct-Zs*st, A=ca*st+Zs*ct;
+        const zmin=Math.max(Math.abs(Xv)*F/HW, Math.abs(Yv)*F/HH, 0.12);
+        need=Math.max(need, zmin-1.4*A);
+      }
+    }
+  }
+  corridorOff=clamp(need, 1.05, 6.0);
+}
+
+/* The neighbours, kept as a running shortlist while the star loop runs. The
+   first few get signs; one of them sets how wide the close view has to open,
+   so the picture is never empty however thin the sky has become. */
+const NEAR_K=60;
+const nearI=new Int32Array(NEAR_K), nearD=new Float64Array(NEAR_K);
+let nearN=0, chartSpan=60, closeOff=1.6;
+function nearOffer(i,d){
+  if (nearN===NEAR_K && d>=nearD[NEAR_K-1]) return;
+  let j=(nearN<NEAR_K)? nearN++ : NEAR_K-1;
+  while (j>0 && nearD[j-1]>d){ nearD[j]=nearD[j-1]; nearI[j]=nearI[j-1]; j--; }
+  nearD[j]=d; nearI[j]=i;
+}
+
+/* Nearer stars are drawn bigger and brighter, and the ramp is far steeper than
+   any real photometry: size falls as distance^-0.35, brightness as ^-0.22. On
+   a slowly turning chart the eye cannot read depth out of parallax, so size
+   has to carry the distance parallax cannot. Joe asked for the exaggeration
+   (2026-08-30).
+
+   It comes out of a table because two Math.pow calls per star per frame is
+   real work on the Pi. The table is indexed by the squeezed radius, which the
+   star loop has already computed - so the grading costs no new arithmetic at
+   all, just a shift and a lookup. */
+const LUT_N=384, LUT_HI=3.4, LUT_K=(LUT_N-1)/LUT_HI;
+const LUT_R=new Float32Array(LUT_N), LUT_A=new Float32Array(LUT_N);
+(function(){
+  for (let i=0;i<LUT_N;i++){
+    const lg=i/LUT_K, d=Math.max(1, SQ*(Math.pow(10,lg)-1));
+    LUT_R[i]=clamp(14.3*Math.pow(d,-0.35), .5, 11);
+    LUT_A[i]=clamp(1.48*Math.pow(d,-0.22), .16, 1);
+  }
+})();
+
+const rimX=new Float64Array(GAL_N+1), rimY=new Float64Array(GAL_N+1),
+      rimZ=new Float64Array(GAL_N+1);
+function drawGalaxy(P, C, a){
+  if (!galPts) buildGal();
+  ctx.save();
+  /* The rim is projected once and kept - it is drawn twice, as the edge of the
+     wash and as the outermost ring. */
+  const rim=galPts[GAL_RINGS.length-1];
+  let minZ=1e9;
+  for (let i=0;i<=GAL_N;i++){
+    const q=place(rim[i*3],rim[i*3+1],rim[i*3+2],P,C);
+    if (!q){ rimZ[i]=-1; minZ=-1; continue; }
+    rimX[i]=q[0]; rimY[i]=q[1]; rimZ[i]=q[2];
+    if (q[2]<minZ) minZ=q[2];
+  }
+  /* A wash inside the rim, so the rings read as a galaxy and not as three
+     unexplained hoops - faded out as the rim comes at the eye rather than
+     dropped in one frame. Filled right up to the near plane the polygon is not
+     the disk any more: 1/zc throws those vertices tens of thousands of pixels
+     out and it becomes a screen-wide flare, so the alpha has to reach zero
+     BEFORE any vertex gets close. It used to blink off mid-crossing, two
+     thirds of the canvas moving in a single frame. */
+  const wash=clamp((minZ-0.06)/1.5, 0, 1);
+  if (wash>0.01){
+    ctx.beginPath();
+    for (let i=0;i<=GAL_N;i++){
+      if (i===0) ctx.moveTo(rimX[i],rimY[i]); else ctx.lineTo(rimX[i],rimY[i]);
+    }
+    ctx.globalAlpha=a*.055*wash; ctx.fillStyle='rgb(150,180,235)'; ctx.fill();
+  }
+  const last=GAL_RINGS.length-1;
+  for (let r=0;r<GAL_RINGS.length;r++){
+    const g=GAL_RINGS[r], pts=galPts[r];
+    ctx.globalAlpha=a*g.a; ctx.strokeStyle='rgb(160,190,240)'; ctx.lineWidth=g.w;
+    ctx.beginPath(); let up=false;
+    for (let i=0;i<=GAL_N;i++){
+      let qx,qy;
+      if (r===last){ if (rimZ[i]<0){ up=false; continue; } qx=rimX[i]; qy=rimY[i]; }
+      else { const q=place(pts[i*3],pts[i*3+1],pts[i*3+2],P,C);
+             if (!q){ up=false; continue; } qx=q[0]; qy=q[1]; }
+      if (!up){ ctx.moveTo(qx,qy); up=true; } else ctx.lineTo(qx,qy);
+    }
+    ctx.stroke();
+  }
+  const gq=place(GC_VEC[0],GC_VEC[1],GC_VEC[2],P,C);
+  if (gq){
+    const R=clamp(70/gq[2],8,110);
+    ctx.globalAlpha=a;
+    const rg=ctx.createRadialGradient(gq[0],gq[1],0,gq[0],gq[1],R);
+    rg.addColorStop(0,'rgba(255,240,205,.90)');
+    rg.addColorStop(.35,'rgba(255,206,132,.42)');
+    rg.addColorStop(1,'rgba(255,170,80,0)');
+    ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(gq[0],gq[1],R,0,TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+/* Ring signs try eight points spread round each ring and take the first seat
+   that lands clear - but last frame's seat is tried FIRST. Rescanning the
+   fixed order every frame made a name jump right across its ring whenever a
+   higher-priority label briefly took its usual spot. */
+function ringSigns(P, C, a){
+  for (let r=0;r<GAL_RINGS.length;r++){
+    const g=GAL_RINGS[r]; if (!g.lab) continue;
+    const pts=galPts[r];
+    for (let t=-1;t<8;t++){
+      const i = t<0 ? g.seat : (t*17+3)%GAL_N;
+      if (i<0) continue;
+      const q=place(pts[i*3],pts[i*3+1],pts[i*3+2],P,C);
+      if (!q) continue;
+      if (sign(q[0],q[1],g.lab,'rgba(186,208,246,.92)',Math.round(H*0.019),{alpha:a})){
+        g.seat=i; break; }
+    }
+  }
+}
+
+/* Which way is it? Marked where it is when that is in frame, and pinned to the
+   rim with a chevron when it is not, so however far the camera swings the
+   picture never loses its bearings. */
+function compass(vx,vy,vz,P,C,label,col,alpha,showCross){
+  const dx=vx-P[0], dy=vy-P[1], dz=vz-P[2];
+  const d=Math.sqrt(dx*dx+dy*dy+dz*dz);
+  if (d<1e-9) return;
+  const k=Math.log10(1+d/SQ)/d;
+  const mx=dx*k, my=dy*k, mz=dz*k;
+  const X=mx*C.r1x+my*C.r1y+mz*C.r1z;
+  const Y=mx*C.r2x+my*C.r2y+mz*C.r2z;
+  const zc=(mx*C.r3x+my*C.r3y+mz*C.r3z)*1.4 + C.off;
+  const q = zc>.06 ? [W/2+X*H*0.95/zc, H/2-Y*H*0.95/zc] : null;
+  const m=Math.round(H*0.07);
+  if (q && q[0]>m && q[0]<W-m && q[1]>m && q[1]<H-m){
+    if (showCross){
+      ctx.save(); ctx.globalAlpha=alpha*.7; ctx.strokeStyle=col; ctx.lineWidth=1.3;
+      ctx.beginPath(); ctx.arc(q[0],q[1],7,0,TAU); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(q[0]-12,q[1]); ctx.lineTo(q[0]-9,q[1]);
+      ctx.moveTo(q[0]+9,q[1]);  ctx.lineTo(q[0]+12,q[1]);
+      ctx.moveTo(q[0],q[1]-12); ctx.lineTo(q[0],q[1]-9);
+      ctx.moveTo(q[0],q[1]+9);  ctx.lineTo(q[0],q[1]+12); ctx.stroke();
+      ctx.restore(); ctx.globalAlpha=1;
+    }
+    sign(q[0],q[1],label,col,Math.round(H*0.021),{alpha:alpha});
+    return;
+  }
+  /* Off frame, the direction comes straight from camera space. It must be
+     (X, -Y), the SAME combination the on-screen branch produces, or the arrow
+     flips to the opposite rim the instant zc crosses the near plane and then
+     points away from its target for the whole rear hemisphere. */
+  let ax, ay;
+  if (q){ ax=q[0]-W/2; ay=q[1]-H/2; } else { ax=X; ay=-Y; }
+  const L=Math.hypot(ax,ay)||1; ax/=L; ay/=L;
+  const sc=Math.min((W/2-m*1.4)/Math.max(Math.abs(ax),1e-3),
+                    (H/2-m)/Math.max(Math.abs(ay),1e-3));
+  const x=W/2+ax*sc, y=H/2+ay*sc;
+  ctx.save(); ctx.globalAlpha=alpha*.8; ctx.strokeStyle=col; ctx.lineWidth=2;
+  ctx.translate(x,y); ctx.rotate(Math.atan2(ay,ax));
+  ctx.beginPath(); ctx.moveTo(-9,-7); ctx.lineTo(2,0); ctx.lineTo(-9,7); ctx.stroke();
+  ctx.restore(); ctx.globalAlpha=1;
+  sign(x,y,label,col,Math.round(H*0.020),{alpha:alpha, left: ax>0, dy:-10});
+}
+
+/* The corridor drawn as hoops of the chosen radius strung along the line.
+   TRIED AND DROPPED (2026-08-30): under the log squeeze the near hoops swell
+   into frame-filling arcs while the far ones vanish, so instead of a tube you
+   get a handful of unrelated curves - worse on a short hop, where a 9.6 ly
+   radius against a 40 ly path makes the hoops wider than the journey. The
+   corridor reads perfectly well without them, from the scatter of the rungs,
+   the line down the middle and the radius in the panel. Kept, unused, because
+   it is the obvious thing to reach for again. */
+function drawCorridor(P, C, a){
+  if (a<=0.01 || !destU) return;
+  const D=distLy, N=9, SEG=28;
+  ctx.save(); ctx.strokeStyle='rgba(150,205,255,1)'; ctx.lineWidth=1;
+  for (let k=1;k<=N;k++){
+    const t=k/(N+1), ax=destVec[0]*t, ay=destVec[1]*t, az=destVec[2]*t;
+    ctx.globalAlpha=a*.22; ctx.beginPath();
+    let up=false;
+    for (let j=0;j<=SEG;j++){
+      const th=j/SEG*TAU, c=Math.cos(th)*corrR, sn=Math.sin(th)*corrR;
+      const q=place(ax+AXP[0]*c+AXQ[0]*sn,
+                    ay+AXP[1]*c+AXQ[1]*sn,
+                    az+AXP[2]*c+AXQ[2]*sn, P, C);
+      if (!q){ up=false; continue; }
+      if (!up){ ctx.moveTo(q[0],q[1]); up=true; } else ctx.lineTo(q[0],q[1]);
+    }
+    ctx.stroke();
+  }
+  ctx.restore(); ctx.globalAlpha=1;
+}
+
+function drawChart(cam, alpha, o){
+  o=o||{};
+  if (!STAR)   buildPools();
+  if (!galPts) buildGal();
+  const C=camPrep(cam), P=o.pivot||ORIGIN;
+  const zk=clamp(2.6/cam.off, .5, 1.5);
+  /* CULL is a rank in [0,1] for the ordinary sky and negative for the three
+     corridor tiers, so the default cut sits clear above everything and the
+     fade band is a fraction of the sweep. */
+  const cut=(o.cut===undefined)? 2 : o.cut;
+  const band=0.05;
+  const thinT=o.thin||0;
+  nearN=0;
+  ctx.save(); ctx.globalAlpha=alpha;
+
+  if (o.gal>0.01) drawGalaxy(P, C, o.gal*alpha);
+  if (o.tube>0.01) drawCorridor(P, C, o.tube*alpha);
+
+  /* One pass, no allocation: skip what has been thinned away, shift to the
+     viewer, squeeze, turn, project, grade, draw - and keep the running
+     shortlist of neighbours. */
+  let hi=null;
+  for (let i=0;i<SN;i++){
+    if (CULL && CULL[i]>=cut) continue;
+    const dx=SPC[i*3]-P[0], dy=SPC[i*3+1]-P[1], dz=SPC[i*3+2]-P[2];
+    const d=Math.sqrt(dx*dx+dy*dy+dz*dz);
+    if (d<1e-9) continue;
+    /* The shortlist is offered BEFORE any camera culling, so chartSpan - and
+       through it the close zoom - depends only on where the ship is, never on
+       where the camera happens to be pointing. */
+    if (i!==destIdx) nearOffer(i,d);
+    const lg=Math.log10(1+d/SQ), k=lg/d;
+    const mx=dx*k, my=dy*k, mz=dz*k;
+    const zc=(mx*C.r3x+my*C.r3y+mz*C.r3z)*1.4 + C.off;
+    if (zc<=.06) continue;
+    const f=H*0.95/zc;
+    const sx=W/2+(mx*C.r1x+my*C.r1y+mz*C.r1z)*f;
+    const sy=H/2-(mx*C.r2x+my*C.r2y+mz*C.r2z)*f;
+    if (i===destIdx){ hi=[sx,sy]; continue; }
+    if (sx<-30||sx>W+30||sy<-30||sy>H+30) continue;
+    let li=(lg*LUT_K)|0; if (li<0) li=0; else if (li>=LUT_N) li=LUT_N-1;
+    /* Stars on the way never fade; the rest dissolve as the cut sweeps past
+       them, and the near-the-way tier dims down as the thinning finishes. */
+    const cl=CULL? CULL[i] : 0;
+    const fade = (cl<0)? 1 : clamp((cut-cl)/band, 0, 1);
+    const dim  = DIM? (1+(DIM[i]-1)*thinT) : 1;
+    let r=LUT_R[li]*zk, av=LUT_A[li];
+    /* A rung of the ladder never shrinks into the background. Six hundred
+       light years from anywhere its honest size is a fraction of a pixel, and
+       the whole run is about watching it go by. */
+    if (cl===-2 && thinT>0){
+      const boost=thinT;
+      r  = r + (Math.max(r,5.0)-r)*boost;
+      av = av + (Math.max(av,.95)-av)*boost;
+    }
+    ctx.globalAlpha=alpha*av*fade*dim;
+    ctx.fillStyle=starColour(STAR[i][5]);
+    if (r<=2.6) ctx.fillRect(sx-r*.5, sy-r*.5, r, r);
+    else {
+      ctx.beginPath(); ctx.arc(sx,sy,r*.5,0,TAU); ctx.fill();
+      ctx.globalAlpha*=.20;                  // a breath of air round the near ones
+      ctx.beginPath(); ctx.arc(sx,sy,r*1.7,0,TAU); ctx.fill();
+    }
+  }
+  ctx.globalAlpha=alpha;
+
+  const sol=place(0,0,0,P,C);
+  if (sol){
+    const sg=ctx.createRadialGradient(sol[0],sol[1],0,sol[0],sol[1],12);
+    sg.addColorStop(0,'rgba(255,248,222,.95)'); sg.addColorStop(.35,'rgba(255,226,150,.45)');
+    sg.addColorStop(1,'rgba(255,200,110,0)');
+    ctx.fillStyle=sg; ctx.beginPath(); ctx.arc(sol[0],sol[1],12,0,TAU); ctx.fill();
+    ctx.fillStyle='#fff8e2'; ctx.beginPath(); ctx.arc(sol[0],sol[1],2.8,0,TAU); ctx.fill();
+  }
+
+  /* The ship sits at the origin of its own chart, so the track behind it and
+     the track ahead are both straight radial lines - same directions, only
+     the spacing squeezed. */
+  let sq=null;
+  if (o.ship){
+    sq=projMap(0,0,0,C);
+    if (sol && sq){
+      ctx.strokeStyle='rgba(150,220,255,.45)'; ctx.lineWidth=1.6;
+      ctx.beginPath(); ctx.moveTo(sq[0],sq[1]); ctx.lineTo(sol[0],sol[1]); ctx.stroke();
+    }
+    if (hi && sq){
+      ctx.strokeStyle='rgba(140,255,200,.26)'; ctx.setLineDash([5,9]); ctx.lineWidth=1.2;
+      ctx.beginPath(); ctx.moveTo(sq[0],sq[1]); ctx.lineTo(hi[0],hi[1]); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    if (sq){
+      ctx.save(); ctx.shadowColor='rgba(180,225,255,.95)'; ctx.shadowBlur=14;
+      ctx.fillStyle='#eaf6ff'; ctx.beginPath(); ctx.arc(sq[0],sq[1],4.2,0,TAU); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  if (hi){
+    const pulse=1+.25*Math.sin(performance.now()/300);
+    ctx.strokeStyle='rgba(140,255,200,.95)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(hi[0],hi[1],9*pulse,0,TAU); ctx.stroke();
+    ctx.fillStyle='#bfffe0'; ctx.beginPath(); ctx.arc(hi[0],hi[1],2.4,0,TAU); ctx.fill();
+    if (sol && o.line>0){
+      ctx.strokeStyle='rgba(140,255,200,'+(.55*o.line)+')';
+      ctx.setLineDash([6,8]); ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(sol[0],sol[1]);
+      ctx.lineTo(sol[0]+(hi[0]-sol[0])*o.line, sol[1]+(hi[1]-sol[1])*o.line);
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  ctx.restore();
+
+  /* Signs, most important first - the declutter drops whatever comes last,
+     and it must never be the ones carrying the story. */
+  const destLab=dest+'  ·  '+ly(distLy);
+  const destOn = hi && hi[0]>4 && hi[0]<W-4 && hi[1]>4 && hi[1]<H-4;
+  if (destOn) sign(hi[0],hi[1], destLab,
+                'rgba(191,255,224,.97)', Math.round(H*0.024), {alpha:alpha, dy:-9});
+  else if (destVec) compass(destVec[0],destVec[1],destVec[2],P,C, destLab,
+                'rgba(191,255,224,.95)', alpha, false);
+  if (o.ship && sq) sign(sq[0],sq[1], 'SHIP', 'rgba(226,245,255,.97)',
+                Math.round(H*0.022), {alpha:alpha, dy:26});
+  if (o.ship) compass(0,0,0,P,C,'THE SUN  ·  home','rgba(255,240,196,.94)',alpha,false);
+  else if (sol && o.sun!==false)
+    sign(sol[0],sol[1], 'The Sun', 'rgba(255,242,200,.95)',
+         Math.round(H*0.022), {alpha:alpha});
+  /* Measured from the pivot, like everything else on this chart - during the
+     crossing the ship is not where the Sun is. */
+  const gcD=Math.hypot(GC_VEC[0]-P[0], GC_VEC[1]-P[1], GC_VEC[2]-P[2]);
+  compass(GC_VEC[0],GC_VEC[1],GC_VEC[2],P,C,'GALACTIC CENTRE  ·  '+ly(gcD),
+          'rgba(255,226,175,.93)', alpha, (o.gal||0)<.5);
+  if (o.gal>0.15) ringSigns(P, C, alpha*Math.min(1,o.gal*1.4));
+
+  /* The rungs get their names, and nothing else does. There used to be a
+     second pass here that named the nearest stars and a list of famous ones as
+     well; with the corridor in force it put twenty labels on screen and buried
+     the nine that matter, so it is gone rather than switched off. */
+  if (o.rungs>0.01 && CULL){
+    for (let n=0;n<corrIdx.length;n++){
+      const i=corrIdx[n], st=STAR[i];
+      if (CULL[i]>=cut) continue;
+      const q=place(SPC[i*3],SPC[i*3+1],SPC[i*3+2],P,C);
+      if (!q) continue;
+      /* Distance from the Sun, not the along-track coordinate. Elsewhere in
+         this file "out" always means straight-line distance from home, and a
+         rung sitting eleven light years off the line is not where its foot
+         lands on it. */
+      sign(q[0],q[1], st[0]+'  \u00b7  '+ly(DSUN[i])+' out',
+           'rgba(224,238,255,.95)', Math.round(H*0.021), {alpha:alpha*o.rungs});
+    }
+  }
+  /* How far out the neighbourhood reaches, for next frame's close zoom - the
+     fourth nearest, so a couple of rungs are always in frame at once. */
+  chartSpan = nearN? nearD[Math.min(3,nearN-1)] : 60;
+  return hi;
+}
+
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0;
+  let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t;
+  return ((t^t>>>14)>>>0)/4294967296; } }
+
+/* ---- the tour: the system drawn from its own numbers ------------------ */
+function smaOf(p, idx){
+  if (p[4]) return p[4];
+  if (p[3] && destStar[6]) return Math.cbrt((p[3]/365.25)**2 * (destStar[6]||1));
+  if (p[3]) return Math.cbrt((p[3]/365.25)**2);
+  return 0.1*(idx+1);
+}
+function planetLook(p){
+  const rade=p[1]||2, eqt=p[5];
+  const giant=rade>6, neptune=rade>1.8 && rade<=6;
+  let base, band=null;
+  if (eqt && eqt>1200)      base=['#3a2a26','#ff9b54'];
+  else if (eqt && eqt>700)  base= giant? ['#8a6a4d','#c99a63'] : ['#7d5b45','#b98a5a'];
+  else if (giant)           base=['#b09877','#d9c39a'];
+  else if (neptune)         base=['#5d86a8','#8fb7cf'];
+  else if (eqt && eqt>=180 && eqt<=320) base=['#4a7a8c','#7fae90'];
+  else if (eqt && eqt<180)  base=['#aebfca','#e3edf4'];
+  else                      base=['#8d7f70','#b5a794'];
+  if (giant || neptune) band=true;
+  return {base, band, giant};
+}
+function drawPlanetPortrait(p, cx, cy, R, tSec){
+  const look=planetLook(p);
+  const g=ctx.createRadialGradient(cx-R*.45,cy-R*.4,R*.1,cx,cy,R);
+  g.addColorStop(0,look.base[1]); g.addColorStop(.75,look.base[0]); g.addColorStop(1,'#101318');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(cx,cy,R,0,TAU); ctx.fill();
+  if (look.band){
+    ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,R,0,TAU); ctx.clip();
+    const rng=mulberry32((p[0].length*131+7)|0);
+    for(let b=0;b<7;b++){
+      const y=cy-R+ (b+.5)*R*2/7 + Math.sin(tSec*.15+b)*R*.015;
+      ctx.fillStyle=`rgba(${b%2? '255,255,255':'20,16,10'},${.05+rng()*.07})`;
+      ctx.fillRect(cx-R, y-R*.09, R*2, R*.18);
+    }
+    ctx.restore();
+  } else {
+    ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,R,0,TAU); ctx.clip();
+    const rng=mulberry32((p[0].length*577+13)|0);
+    ctx.fillStyle='rgba(0,0,0,.12)';
+    for(let s=0;s<9;s++){
+      const a=rng()*TAU, rr=rng()*R*.8, sr=R*(.05+rng()*.10);
+      ctx.beginPath(); ctx.arc(cx+Math.cos(a)*rr, cy+Math.sin(a)*rr*.9, sr,0,TAU); ctx.fill();
+    }
+    ctx.restore();
+  }
+  const t=ctx.createRadialGradient(cx+R*.55,cy,R*.2,cx,cy,R*1.05);
+  t.addColorStop(0,'rgba(0,0,0,0)'); t.addColorStop(.72,'rgba(0,0,0,0)'); t.addColorStop(1,'rgba(2,4,8,.85)');
+  ctx.fillStyle=t; ctx.beginPath(); ctx.arc(cx,cy,R,0,TAU); ctx.fill();
+}
+function planetSentence(p){
+  const rade=p[1], masse=p[2], per=p[3], eqt=p[5], insol=p[6], yr=p[7], how=(p[8]||'').toLowerCase();
+  const kind = !rade? (masse>100? 'a giant world':'a world')
+    : rade>6? 'a gas giant' : rade>4? 'a Neptune'          // Neptune is 3.86 R-earth
+    : rade>1.8? 'a sub-Neptune' : rade>1.25? 'a super-Earth' : 'a rocky world';
+  const size = rade? (rade>6? `${(rade/11.2).toFixed(1)} times Jupiter's width`
+                            : `${rade.toFixed(1)} times Earth's width`) : '';
+  const orbit = per? (per<10? `racing round its star every ${per<2? per.toFixed(1): Math.round(per)} days`
+    : per<400? `orbiting every ${Math.round(per)} days`
+    : `taking ${(per/365.25).toFixed(1)} years to orbit`) : '';
+  const heat = eqt? (eqt>1200? 'hot enough to melt rock'
+    : eqt>700? 'hotter than any oven'
+    : eqt>=180 && eqt<=320? 'in the range where liquid water is conceivable'
+    : eqt<180? 'deep in the cold' : '') : '';
+  const found = yr? `Found in ${yr}`+(how? ` by the ${how} method`:'') : '';
+  return [ [kind, size].filter(Boolean).join(', '),
+           [orbit, heat].filter(Boolean).join(' — '),
+           found ].filter(Boolean).join('. ') + '.';
+}
+
+function showRail(p){
+  document.getElementById('pname').textContent=p[0];
+  document.getElementById('psub').textContent=
+    `${dest} system  ·  ${ly(distLy)} from Earth  ·  planet ${tourIdx+1} of ${planets.length}`;
+  const facts=[];
+  if (p[1]) facts.push(['radius', p[1].toFixed(2)+' R⊕']);
+  if (p[2]) facts.push(['mass', p[2]>=1000? (p[2]/317.8).toFixed(1)+' M♃' : Math.round(p[2])+' M⊕']);
+  if (p[3]) facts.push(['period', p[3]<100? p[3].toFixed(1)+' days' : Math.round(p[3])+' days']);
+  if (p[4]) facts.push(['orbit', p[4].toFixed(2)+' AU']);
+  if (p[5]) facts.push(['temperature', p[5]+' K']);
+  if (p[6]) facts.push(['sunlight', p[6].toFixed(1)+'× Earth']);
+  if (p[7]) facts.push(['discovered', String(p[7])]);
+  if (p[8]) facts.push(['method', p[8].toLowerCase()]);
+  document.getElementById('pfacts').innerHTML =
+    facts.map(f=>`<div><div class="k">${f[0]}</div><div class="v">${f[1]}</div></div>`).join('');
+  document.getElementById('pdesc').textContent=planetSentence(p);
+}
+
+/* ================= frame =============================================== */
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt=Math.min(.1,(now-lastFrame)/1000); lastFrame=now;
+  fps=fps? fps*.9+(1/dt)*.1 : 1/dt;
+  if (paused||handingOff) return;
+  const el=(now-t0)/1000;
+  ctx.fillStyle='#04060c'; ctx.fillRect(0,0,W,H);
+  signs.length=0; keepOut();           // the sign field is rebuilt every frame
+
+  const A=CONFIG.galaxySec, B=A+CONFIG.thinSec, C=B+CONFIG.flySec,
+        D=C+CONFIG.solSec, E=D+CONFIG.departSec, F=E+CONFIG.cruiseSec;
+
+  /* Phase ENTRIES are walked strictly in order, never skipped. The old form -
+     `if (phase==='map'){ phase='depart'; ... }` inside each branch - silently
+     skips a phase's one-shot side effects when a single long frame gap (TV
+     wake, a stalled tab) throws el across a whole phase; a skipped tour entry
+     would mean no rail for the entire visit. Drawing still keys on el; only
+     the entry work lives in enterPhase. */
+  const want = el<A?0 : el<B?1 : el<C?2 : el<D?3 : el<E?4 : el<F?5 : 6;
+  while (PHASES.indexOf(phase) < want) enterPhase(PHASES[PHASES.indexOf(phase)+1]);
+
+  if (el<A){ /* -------- our corner of the Galaxy -------- */
+    const u=el/CONFIG.galaxySec;
+    CAM.spin += dt*0.045;
+    CAM.tilt = lerp(.50,.38, ease(u));
+    CAM.off  = 5.8;
+    CAM.xpand= 1;
+    drawChart(CAM, 1, {pivot:ORIGIN, gal:1, names:0, rungs:0, tube:0,
+                       line:clamp((el-4)/5,0,1), ship:false});
+  }
+  else if (el<B){ /* -------- the sky peels away, farthest first -------- */
+    const u=(el-A)/CONFIG.thinSec;
+    CAM.spin += dt*0.05;
+    CAM.tilt = lerp(.38,.30, ease(u));
+    CAM.off  = lerp(5.8, corridorOff, ease(clamp((u-.22)/.78,0,1)));
+    /* The cut walks the whole catalogue down to nothing over the first three
+       quarters; only the corridor and its immediate surroundings, which carry
+       negative cull values, are left standing at the end. */
+    const cutv=lerp(1.02, 0, ease(clamp(u/.76,0,1)));
+    const thinT=ease(clamp((u-.45)/.55,0,1));
+    const gal=1-ease(clamp((u-.12)/.34,0,1));
+    const w=ease(clamp((u-.15)/.6,0,1));             // the eye slides to the middle
+    CAM.xpand= lerp(1, XPAND, ease(clamp((u-.5)/.5,0,1)));
+    drawChart(CAM, 1, {pivot:[midPoint[0]*w, midPoint[1]*w, midPoint[2]*w],
+                       cut:cutv, thin:thinT, gal:gal, line:1, tube:0,
+                       names:0, rungs:ease(clamp((u-.62)/.3,0,1)), ship:false});
+  }
+  else if (el<C){ /* -------- round the corridor -------- */
+    const u=(el-B)/CONFIG.flySec;
+    CAM.spin += dt*0.34;                        // about one turn over the phase
+    CAM.tilt = .30 + .22*Math.sin(u*Math.PI);
+    CAM.off  = corridorOff;
+    CAM.xpand= XPAND;
+    drawChart(CAM, 1, {pivot:midPoint, cut:0, thin:1, gal:0, line:1, tube:0,
+                       names:0, rungs:1, ship:false});
+  }
+  else if (el<D){ /* -------- home -------- */
+    const u=(el-C)/CONFIG.solSec;
+    const f=ease(clamp(u/.55,0,1));              // chart out, orrery in
+    CAM.spin += dt*0.05;
+    CAM.tilt  = lerp(.30,.16, f);
+    CAM.off   = lerp(corridorOff, 1.0, f);
+    CAM.xpand = lerp(XPAND, 1, f);            // the flight itself is not stretched
+    const w=1-f;
+    if (f<1) drawChart(CAM, 1-f, {pivot:[midPoint[0]*w, midPoint[1]*w, midPoint[2]*w],
+                       cut:0, thin:1, gal:0, line:1-f, tube:0,
+                       names:0, rungs:1-f, ship:false});
+    drawSolSystem(W/2, H/2, .02+f*.88, f, el);   // ends at .9, where depart starts
+  }
+  else if (el<E){ /* -------- the slingshot -------- */
+    const f=(el-D)/CONFIG.departSec;
+    drawSolSystem(W/2,H/2, .9, 1, el);
+    const jr=orbPx(5.2,.9), ja=(el/11.9)*TAU*0.18 + 5.2*2.4;
+    const jx=W/2+Math.cos(ja)*jr, jy=H/2+Math.sin(ja)*jr*.42;
+    let sx,sy;
+    if (f<.55){ const t=ease(f/.55);
+      const ex=W/2+Math.cos(el*TAU*0.18+2.4)*orbPx(1,.9),
+            ey=H/2+Math.sin(el*TAU*0.18+2.4)*orbPx(1,.9)*.42;
+      sx=lerp(ex,jx,t); sy=lerp(ey,jy,t)-30*Math.sin(t*Math.PI);
+      shipV=12+18*t; doneLy=(4.2*t)/63241;         // Earth to Jupiter, in AU
+    } else { const t=(f-.55)/.45;
+      const away=Math.atan2(jy-H/2,jx-W/2)+.9;
+      sx=jx+Math.cos(away)*t*W*.5; sy=jy+Math.sin(away)*t*H*.4;
+      shipV=30+9*t; doneLy=(4.2+30*t)/63241;
+      if (t>.05 && t<.2) Wall.moment('SLINGSHOT', {at:{x:(innerWidth||1920)*.62, y:(innerHeight||1080)*.2}, exact:true});
+    }
+    ctx.save(); ctx.shadowColor='rgba(180,212,255,.95)'; ctx.shadowBlur=16;
+    ctx.fillStyle='#eaf2ff'; ctx.beginPath(); ctx.arc(sx,sy,4.6,0,TAU); ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle='rgba(234,242,255,.55)'; ctx.lineWidth=1.6;
+    ctx.beginPath(); ctx.moveTo(sx-14,sy); ctx.lineTo(sx-4,sy); ctx.stroke();
+  }
+  else if (el<F){ /* -------- the crossing: two minutes of ladder -------- */
+    const u=clamp((el-E)/CONFIG.cruiseSec,0,1);
+    const f=ease(u);
+    /* The floor is the distance at which the 1g solution is already doing the
+       39 km/s the slingshot handed over - eight billionths of a light year, so
+       it moves nothing, but without it the panel's speed drops to zero the
+       instant the torch lights. */
+    const x=Math.max(distLy*f, 8.2e-9);
+    const rc=relClocks(x, distLy);
+    shipV=rc.v*299792; earthYr=rc.T; shipYr=rc.tau; doneLy=x;
+
+    /* The zoom sizes itself to whatever rung is coming: chartSpan is last
+       frame's distance to the fourth nearest star still on the chart, so a
+       couple of them are always in frame and the ones we brush past fill it. */
+    const want=clamp(offForRadius(chartSpan*2.4), 1.05, 4.20);
+    closeOff += (want-closeOff)*clamp(dt*0.9,0,1);
+    CAM.spin += dt*0.035;
+    CAM.tilt  = .30 + .10*Math.sin(u*TAU*0.75);
+    CAM.off   = closeOff;
+    CAM.xpand = 1;
+    /* names:0 - only the rungs, home and the destination are named on the
+       crossing. Naming the near-corridor tier as well put twenty labels on
+       screen and buried the nine that matter. */
+    drawChart(CAM, 1, {pivot:[destVec[0]*f, destVec[1]*f, destVec[2]*f],
+                       cut:0, thin:1, gal:0, line:0, tube:0,
+                       names:0, rungs:1, ship:true});
+  }
+  else { /* -------- the tour -------- */
+    tourT+=dt;
+    if (tourT>CONFIG.planetSec){
+      tourT=0; tourIdx++;
+      if (tourIdx>=planets.length){ if (!PINNED){ handOff(); return; } tourIdx=0; }
+      showRail(planets[tourIdx]);
+    }
+    const stageW=W*(1-1050/3840);
+    const scol=starColour(destStar[5]);
+    const sg=ctx.createRadialGradient(stageW*.5,H*.16,0,stageW*.5,H*.16,H*.13);
+    sg.addColorStop(0,'#fffdf4'); sg.addColorStop(.3,scol); sg.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=sg; ctx.beginPath(); ctx.arc(stageW*.5,H*.16,H*.13,0,TAU); ctx.fill();
+    sign(stageW*.5+H*.10, H*.16-H*.05, dest, 'rgba(255,240,208,.92)',
+         Math.round(H*0.022), {alpha:.95, dx:10});
+    /* The portrait is drawn last but it sits on top, so its disc claims a
+       keep-out before any sibling name is placed - otherwise a label lands
+       behind the planet and reads as a fragment, "-351 d". */
+    const pNow=planets[tourIdx];
+    const zoom=ease(Math.min(1,tourT/2.2));
+    const R=lerp(8, H*.26, zoom)*
+            (pNow[1]? clamp(Math.log2(1+pNow[1])/2.5,.45,1.25) : 1);
+    const pcx=stageW*.5, pcy=H*.62;
+    signs.push([pcx-R-6, pcy-R-6, pcx+R+6, pcy+R+6]);
+    const smas=planets.map((p,i)=>smaOf(p,i));
+    const maxS=Math.max(...smas);
+    planets.forEach((p,i)=>{
+      const r=H*.16 + Math.log10(1+smas[i]/maxS*9)*H*.5;
+      ctx.strokeStyle= i===tourIdx? 'rgba(140,255,200,.35)':'rgba(160,175,205,.14)';
+      ctx.lineWidth=1;
+      ctx.beginPath(); ctx.arc(stageW*.5, H*.16, r, 0, TAU); ctx.stroke();
+      if (i!==tourIdx){
+        /* Fanned across the arc BELOW the star. A fixed step of half a radian
+           per planet walked the outer worlds up over the top of the frame -
+           and off it, silently, for a third of the systems. */
+        const a=Math.PI*.15 + i*(Math.PI*.7/Math.max(1,planets.length-1));
+        const ox=stageW*.5+Math.cos(a)*r, oy=H*.16+Math.sin(a)*r;
+        ctx.fillStyle='rgba(205,214,228,.7)';
+        ctx.beginPath(); ctx.arc(ox,oy,3,0,TAU); ctx.fill();
+        sign(ox,oy, p[0], 'rgba(198,210,228,.82)', Math.round(H*0.019), {alpha:.9});
+      }
+    });
+    drawPlanetPortrait(pNow, pcx, pcy, R, el);
+  }
+
+  /* -------- the permanent instrument -------- */
+  const rows=[];
+  if (phase==='galaxy'){
+    rows.push({k:'destination', v:dest});
+    rows.push({k:'distance', v:ly(distLy)});
+    rows.push({k:'known worlds', v:String(planets.length)});
+    rows.push({k:'systems mapped', v:EXO.stars.length.toLocaleString()});
+  } else if (phase==='thin' || phase==='fly' || phase==='sol'){
+    rows.push({k:'destination', v:dest});
+    rows.push({k:'distance', v:ly(distLy)});
+    rows.push({k:'stars on the way', v:String(corrIdx.length)});
+    rows.push({k:'corridor radius', v:ly(corrR)});
+    /* The stretch comes on part-way through the thinning, before the lane text
+       that explains it. A live row is on screen the whole time it is true. */
+    rows.push({k:'across-track', v: CAM.xpand>1.05? '\u00d7'+CAM.xpand.toFixed(1)+' stretched'
+                                                  : 'true scale'});
+  } else if (phase==='depart' || phase==='cruise'){
+    rows.push({k:'speed', v: shipV<2000? Math.round(shipV)+' km/s'
+                            : Math.min(99.99, shipV/299792*100).toFixed(2)+'% c'});
+    rows.push({k:'covered', v: doneLy<1? (doneLy*63241).toFixed(0)+' AU' : ly(doneLy)});
+    rows.push({k:'to go', v: ly(Math.max(0,distLy-doneLy))});
+    rows.push({k:'earth clock', v:'+'+(earthYr<1? Math.round(earthYr*365)+' days' : earthYr.toFixed(1)+' yr')});
+    rows.push({k:'ship clock', v:'+'+(shipYr<1? Math.round(shipYr*365)+' days' : shipYr.toFixed(1)+' yr')});
+    rows.push({k:'destination', v:dest});
+    rows.push({k:'drive', v: phase==='depart'? 'gravity assist' : 'torch (fiction)'});
+  } else {
+    rows.push({k:'star', v: destStar[5]? destStar[5]+' K '+starClass(destStar[5])
+                                        : 'temperature unpublished'});
+    rows.push({k:'distance', v: ly(distLy)});
+    rows.push({k:'worlds', v: String(planets.length)});
+    rows.push({k:'ship clock', v:'+'+shipYr.toFixed(1)+' yr'});
+  }
+  Wall.instrument({ rows, cap: phase==='tour'? dest.toUpperCase()+' SYSTEM' : 'INTERSTELLAR CHART' });
+
+  if (document.body.classList.contains('showinfo')) updateInfo();
+}
+/* The catalogue holds hosts up to 57,000 K, so the ladder needs a top. */
+function starClass(t){ if(!t) return '';
+  return t>20000?'hot subdwarf':t>10000?'B-type':t>7500?'A-type':t>6000?'F/G-type'
+       : t>5000?'G/K-type':t>3800?'K/M-type':'M dwarf'; }
+
+function updateInfo(){
+  infoEl.textContent=
+`dest      ${dest}  (${ly(distLy)}, corridor ${ly(corrR)} x ${corrIdx.length} stars)
+phase     ${phase}   fps ${fps.toFixed(0)}
+planets   ${planets.map(p=>p[0].replace(dest,'').trim()).join(', ')}
+clocks    earth +${earthYr.toFixed(2)} yr   ship +${shipYr.toFixed(2)} yr
+keys: n new destination · i info · arrows rotate`;
+}
+
+addEventListener('keydown',(e)=>{
+  switch(e.key){
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': newRun(); break;
+    case 'p': case 'P': case ' ':
+      /* The show clock has to stop with the picture. el is measured from t0,
+         so an unrebased pause silently fast-forwards the run - long enough and
+         it wakes up in a different phase. */
+      paused=!paused;
+      if (paused) pausedAt=performance.now();
+      else if (pausedAt){ const now2=performance.now();
+        t0 += now2-pausedAt; lastFrame=now2; pausedAt=0; }
+      break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      if(/^[0-9]$/.test(e.key)){
+        const score=e.key==='0'?10:parseInt(e.key,10);
+        console.log('[voyage] RATING STUB - score', score, 'dest', dest);
+      }
+  }
+});
+
+newRun();
+requestAnimationFrame(frame);
+</script>
+<script src="nav.js"></script>
+</body>
+</html>
