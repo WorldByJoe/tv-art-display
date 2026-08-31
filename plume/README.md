@@ -1,6 +1,6 @@
 # Finding a gas leak from a moving vehicle
 
-A car drives a real street network with a methane analyser on the roof. Gas disperses from hidden leaks as Gaussian puffs carried on a wandering wind; the analyser samples whatever concentration is at the car. Colour on the ground is not the gas - it is the survey's BELIEF about where the leak is, built up reading by reading.
+A car drives a real street network with a methane analyser on the roof. Two to six leaks are hidden along the route; gas disperses from them as Gaussian puffs carried on a wandering wind, and the analyser samples whatever concentration happens to be at the car. Colour on the ground is not the gas - it is the survey's BELIEF about where the leak is, built up reading by reading. At the end the gas is shut off, the map clears, and every leak is marked found or missed.
 
 ## Running it
 
@@ -10,11 +10,15 @@ no server, no keys. It is written for a 4K screen and scales down.
 Pin a neighbourhood with <code>?hood=</code>: ftcollins, bowie, levittown, northend, chicago, baltimore, trussville, tulane, norcross.
 
 Press `i` for the parameters it is running, and the arrows appear if you move
-a pointer.
+a pointer. A standalone copy starts itself again when a run ends; add
+`?pin` to the URL to keep the current run going instead.
 
 ## What it is doing
 
-- Every reading is evidence in both directions. A detection adds belief across the wedge of ground upwind of the car; a clean sample SUBTRACTS it, weighted by the chance a leak there would have put gas over the road at all.
+- Every reading is evidence in both directions. A detection adds belief across the wedge of ground upwind of the car; a clean sample SUBTRACTS it, weighted by the chance a leak there would have put gas over the road at all. The ground carries two encodings at once: belief runs purple to orange, while ruled-out ground takes its colour from how many clean LOOKS it has had - grey after one, blue by three, green by six. A look is not a traverse: driving past a spot the wind was never carrying gas from teaches you nothing, and is not counted.
+- The verdict is a defined test, not an impression. A leak counts as found if the survey's best guess lands within 75 m of it, plus a one-hop rule that also credits a second leak within 46 m of a found one - the 150-foot disk a crew is dispatched to search.
+- Leak sizes are drawn from a truncated log-normal, median 10 SLPM and a geometric standard deviation of 6, so a run spans roughly 0.1 to 880 SLPM. Each is placed on a building's service line a few metres off the kerb, not at a random point. One leak per 900 m of centreline, two to six in all.
+- The wind is the hard part, and it is the other half of the experiment. Four weather scenarios - a steady breeze, a light-wind meander, a gusty afternoon, and a four-pass survey - and a visit shows two of them, with the direction and mean speed re-drawn between passes. Re-driving the same streets only teaches you something new if the air has changed.
 - Streets and buildings are real, fetched at build time from Overture Maps (which merges OpenStreetMap with machine-derived footprints) and embedded in the page, so it runs with no network and no API key.
 - Nine neighbourhoods, chosen for contrasting street pattern - a platted grid offers approaches from four directions, a cul-de-sac tract offers one.
 

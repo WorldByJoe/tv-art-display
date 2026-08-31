@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Gallery</title>
+<style>
+  /* =====================================================================
+     ARTWORKS - great works drawn live from an open museum collection.
+
+     Joe's ask (2026-08-26): pull randomly, caption each work, and where
+     more artist or style information exists (Wikipedia), pull a reasonable
+     amount of text to enhance the description.
+
+     THE SOURCE. The Art Institute of Chicago's open API: 62,000 public-
+     domain works with images, no key, and - verified FROM THE PI, which is
+     the lesson the literature page taught - CORS on the API, on the IIIF
+     image server, and on Wikipedia's summary endpoint. Their default
+     ranking floats the museum's own highlights (is_boosted) to the front,
+     so the first few pages ARE the famous works: the random draw mixes
+     shallow pages (Van Gogh's Bedroom, Seurat, Caillebotte) with deep ones
+     (the whole collection), which is what "great works, randomly" wants.
+     The Met and Cleveland could join later; one source done well first.
+
+     THE LAYOUT is the reserve pattern from the plume page: the artwork owns
+     a letterboxed stage and the words own a rail, and neither ever touches
+     the other. A painting is the one artwork on this wall that must NEVER
+     be cropped or overlaid - cover-fit or a floating plate would both be
+     vandalism here - so the stage fits the whole canvas and the rail reads
+     like the label wall beside a gallery hanging.
+     ===================================================================== */
+  html, body { margin:0; padding:0; height:100%; background:#0A0E15; overflow:hidden; }
+  * { cursor:none; }
+
+  #stage { position:fixed; top:0; left:0; right:var(--railW); bottom:0;
+    display:flex; align-items:center; justify-content:center;
+    padding:calc(90*var(--wu)); box-sizing:border-box; }
+  /* Two stacked images crossfade between works, so the wall is never blank
+     between one painting and the next. */
+  #stage img { position:absolute; max-width:calc(100% - 180*var(--wu));
+    max-height:calc(100% - 180*var(--wu));
+    opacity:0; transition:opacity 1.6s ease-in-out;
+    box-shadow:0 calc(14*var(--wu)) calc(70*var(--wu)) rgba(0,0,0,.65); }
+  #stage img.show { opacity:1; }
+
+  :root { --railW: calc(1050 * var(--wu)); }
+  #rail { position:fixed; top:0; right:0; bottom:0; width:var(--railW);
+    box-sizing:border-box; z-index:5; background:#0A0E15;
+    border-left:1px solid rgba(255,255,255,.14);
+    display:flex; flex-direction:column;
+    padding:calc(110*var(--wu)) calc(64*var(--wu)) calc(56*var(--wu));
+    opacity:0; transition:opacity 1.2s ease-in-out; }
+  #rail.show { opacity:1; }
+
+  /* The label stack. Serif for the title - the same instinct that put the
+     literature page in a book face: this text is naming an artwork, not
+     reporting telemetry. Everything else is the house type. */
+  #artist { font:400 var(--t2)/1.25 var(--font-ui); color:var(--ink); }
+  #life   { margin-top:calc(6*var(--wu));
+    font:400 var(--t4)/1.3 var(--font-num); letter-spacing:.06em; color:var(--ink-2); }
+  #wtitle { margin-top:calc(34*var(--wu));
+    font:italic 400 var(--t2)/1.3 Georgia, "Times New Roman", serif; color:var(--ink); }
+  #medium { margin-top:calc(18*var(--wu));
+    font:400 var(--t4)/1.45 var(--font-num); color:var(--ink-2); }
+  #style  { margin-top:calc(22*var(--wu)); align-self:flex-start;
+    font:400 var(--t4)/1 var(--font-num); letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-2);
+    border:1px solid var(--edge); border-radius:var(--r-pill);
+    padding:calc(10*var(--wu)) calc(22*var(--wu)); }
+  #style:empty { display:none; border:0; padding:0; }
+  #rail .sep { height:1px; background:var(--edge); margin:calc(30*var(--wu)) 0; }
+  #desc   { font:300 var(--t3)/1.5 var(--font-ui); color:var(--ink); max-width:46ch; }
+  /* The Wikipedia paragraph is the ENHANCEMENT, not the caption, so it sits
+     a tier down in the hierarchy - present, readable, subordinate. */
+  #wiki   { margin-top:calc(26*var(--wu));
+    font:300 var(--t4)/1.5 var(--font-ui); color:var(--ink-2); max-width:50ch; }
+  #wiki .src { font:400 calc(28*var(--wu))/1 var(--font-num);
+    letter-spacing:.08em; color:var(--ink-2); opacity:.7; }
+  #rail .foot { margin-top:auto; padding-top:calc(24*var(--wu)); }
+  /* The source, named where a gallery names itself - lower right, one tier
+     up from the courtesy print so it can actually be read from the sofa. */
+  #museum { font:400 var(--t4)/1.3 var(--font-num); letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-2);
+    margin-bottom:calc(14*var(--wu)); }
+
+  /* The opening sentence hangs over the STAGE, never the rail. */
+  body .lane { right:var(--railW); }
+</style>
+<link rel="stylesheet" href="wall.css">
+<script src="wall.js"></script>
+</head>
+<body>
+<div id="stage"><img id="imgA" alt=""><img id="imgB" alt=""></div>
+<div id="rail">
+  <div id="artist"></div>
+  <div id="life"></div>
+  <div id="wtitle"></div>
+  <div id="medium"></div>
+  <div id="style"></div>
+  <div class="sep"></div>
+  <div id="desc"></div>
+  <div id="wiki"></div>
+  <div class="foot">
+    <div id="museum"></div>
+    <div class="instr mounted"><div class="fine">Images CC0 · descriptions CC BY 4.0 · artist notes: Wikipedia, CC BY-SA</div></div>
+  </div>
+</div>
+<div id="info"></div>
+
+<script>
+/* ---- rotation navigation (remote D-pad) --------------------------------
+   Keep this list in step with the nextPage chain and every other page. */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+const CONFIG = {
+  holdMs:      55000,   // one work on the wall - long enough to actually look
+  worksPerTurn:    5,   // ~4.6 minutes, in step with the rest of the rotation
+  famousBias:    0.5,   // half the draws come from the boosted front pages
+  /* AIC's image server enforces a size ALLOWLIST - the old best-fit box
+     request (!2400,2400) began answering 403 for every work (measured
+     2026-08-28, 8/8 sampled: the gallery sat black on the wall and
+     locally). 843 is the width the museum documents as always available;
+     1686 is the retina step, there for most works. Sharp first, then the
+     guaranteed size. */
+  imgSizes: [1686, 843],
+  fetchLimit:     40,   // works per API page
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,
+};
+const PINNED = /[?&]pin\b/.test(location.search);
+const FORCED_ID = new URLSearchParams(location.search).get('id');
+
+const API='https://api.artic.edu/api/v1/artworks';
+const FIELDS='id,title,artist_title,artist_display,date_display,medium_display,'
+            +'place_of_origin,style_title,description,short_description,thumbnail,image_id';
+
+const imgs=[document.getElementById('imgA'), document.getElementById('imgB')];
+const railEl=document.getElementById('rail'), infoEl=document.getElementById('info');
+let queue=[], shown=0, front=0, timer=null, current=null, wikiCache={}, failStreak=0;
+let stats={fetched:0, skipped:0, wikiHits:0, errors:0};
+
+/* ---- drawing the pool --------------------------------------------------
+   Two draws with different depths. The API's default ranking puts the
+   museum's own boosted highlights on the first pages, so a shallow page IS
+   a page of famous works; a deep page is the honest breadth of a 62,000-
+   work collection - Japanese prints, Greek pots, photographs. Half and
+   half, shuffled, is "great works, randomly". */
+/* THE 1,000-RESULT WALL, learned the hard way: the search endpoint refuses
+   (403) any page beyond a thousand results, so "pick a random page out of
+   1,550" - the obvious way to sample 62,000 works - is not available. The
+   randomness lives inside the cap instead. No query at all ranks the
+   museum's boosted icons first, so its front pages are the famous works;
+   adding a QUERY WORD re-ranks the whole collection around that word, and
+   every word exposes a different top thousand. A rotating word list is a
+   different window into the depths each turn - a night of rivers, a night
+   of saints, a night of winter. */
+const SEEDS=['landscape','portrait','flowers','sea','night','gold','horse',
+             'saint','city','mountain','dance','winter','garden','bridge',
+             'music','storm','bird','moon','harvest','silk'];
+async function fetchPage(page, q){
+  const u=`${API}/search?query[term][is_public_domain]=true&fields=${FIELDS}`
+         +`&limit=${CONFIG.fetchLimit}&page=${page}`
+         +(q ? `&q=${encodeURIComponent(q)}` : '');
+  const r=await fetch(u);
+  if(!r.ok) throw new Error('AIC '+r.status);
+  return (await r.json()).data||[];
+}
+async function buildQueue(){
+  if(FORCED_ID){
+    const r=await fetch(`${API}/${FORCED_ID}?fields=${FIELDS}`);
+    if(r.ok) return [(await r.json()).data];
+  }
+  const shallow=1+Math.floor(Math.random()*3);              // the icons
+  const word=SEEDS[Math.floor(Math.random()*SEEDS.length)]; // the variety
+  const wordPage=1+Math.floor(Math.random()*8);             // within the cap
+  const [a,b]=await Promise.all([fetchPage(shallow), fetchPage(wordPage, word)]);
+  stats.fetched=a.length+b.length;
+  /* Only works that actually have an image; a label with no painting is a
+     wall with a hole in it. */
+  const ok=x=>x&&x.image_id;
+  const famous=a.filter(ok), broad=b.filter(ok);
+  shuffle(famous); shuffle(broad);
+  const out=[];
+  for(let i=0;i<CONFIG.worksPerTurn*2;i++)
+    out.push((Math.random()<CONFIG.famousBias ? famous : broad).pop() || famous.pop() || broad.pop());
+  return out.filter(Boolean);
+}
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1));
+  [a[i],a[j]]=[a[j],a[i]]; } }
+
+function iiif(w, sz){ return `https://www.artic.edu/iiif/2/${w.image_id}/full/${sz},/0/default.jpg`; }
+
+/* ---- text preparation --------------------------------------------------
+   The museum's own description first (curatorial, work-specific), the
+   short_description as understudy, the image alt text as last resort. HTML
+   stripped, trimmed to a sentence boundary: a caption that stops mid-
+   sentence reads as a broken page, not a shortened one. */
+function stripHtml(s){ const d=document.createElement('div'); d.innerHTML=s||'';
+  return (d.textContent||'').replace(/\s+/g,' ').trim(); }
+function trimSentences(s, maxLen){
+  if(!s) return '';
+  if(s.length<=maxLen) return s;
+  const cut=s.slice(0, maxLen);
+  const end=Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('.” '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  return end>60 ? cut.slice(0, end+1) : cut.slice(0, cut.lastIndexOf(' '))+'…';
+}
+function lifeDatesOf(w){
+  /* artist_display reads "Vincent van Gogh (Dutch, 1853–1890)" - the
+     parenthetical is the label line under the name. */
+  const m=/\(([^)]+)\)/.exec(w.artist_display||'');
+  return m ? m[1] : (w.place_of_origin||'');
+}
+
+/* Wikipedia, for the artist. The summary endpoint sends CORS and a clean
+   two-to-four-sentence extract; disambiguation pages say so and are
+   dropped rather than shown. Cached per artist for the turn - five works
+   sometimes share a painter. */
+/* Returns the extract AND the article it came from. The title is not
+   decoration: the museum's half of this rail is CC0 and CC BY and is covered
+   by naming the Art Institute, but Wikipedia text is CC BY-SA, which wants
+   the source and the licence named. On a wall in a house nobody was going to
+   check; on a public URL it is the least this can do. */
+async function wikiFor(name){
+  if(!name) return {text:'', title:''};
+  if(name in wikiCache) return wikiCache[name];
+  let out={text:'', title:''};
+  try{
+    const r=await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/'
+                        +encodeURIComponent(name.replace(/ /g,'_')));
+    if(r.ok){
+      const d=await r.json();
+      if(d.type==='standard' && d.extract && d.extract.length>80){
+        out={text:trimSentences(d.extract, 460), title:d.title||name};
+        stats.wikiHits++;
+      }
+    }
+  }catch(e){ /* enhancement only - its absence is not an error */ }
+  wikiCache[name]=out;
+  return out;
+}
+
+/* ---- showing one work -------------------------------------------------- */
+async function showWork(w){
+  current=w;
+  const wiki=await wikiFor(w.artist_title);
+
+  const img=imgs[front^=1], other=imgs[front^1];
+  let loaded=false;
+  for(const sz of CONFIG.imgSizes){
+    loaded=await new Promise((res)=>{
+      img.onload=()=>res(true);
+      img.onerror=()=>res(false);
+      img.src=iiif(w, sz);
+    });
+    if(loaded) break;
+  }
+  if(!loaded){ stats.skipped++; throw new Error('image'); }
+
+  document.getElementById('artist').textContent = w.artist_title || w.place_of_origin || 'Unknown maker';
+  document.getElementById('life').textContent   = lifeDatesOf(w);
+  document.getElementById('wtitle').textContent = w.title + (w.date_display ? ', '+w.date_display : '');
+  document.getElementById('medium').textContent =
+    [w.medium_display, w.place_of_origin].filter(Boolean).join('  ·  ');
+  document.getElementById('style').textContent  = w.style_title || '';
+  document.getElementById('desc').textContent   =
+    trimSentences(stripHtml(w.description) || w.short_description
+                  || (w.thumbnail&&w.thumbnail.alt_text) || '', 620);
+  const wk=document.getElementById('wiki');
+  wk.innerHTML='';
+  if(wiki && wiki.text){
+    wk.appendChild(document.createTextNode(wiki.text+' '));
+    const s=document.createElement('span'); s.className='src';
+    s.textContent='— WIKIPEDIA, "'+wiki.title+'", CC BY-SA 4.0';
+    wk.appendChild(s);
+  }
+  /* FIT THE RAIL. The pair of paragraphs is trimmed until nothing pokes
+     past the foot - the literature page's rule: a line that would overflow
+     is silently absent, so drop whole sentences deliberately instead. The
+     enhancement gives way before the caption does. */
+  const foot=railEl.querySelector('.foot');
+  let guard=20;
+  while(guard-- && railEl.scrollHeight > railEl.clientHeight){
+    const wkT=wk.firstChild ? wk.firstChild.textContent.trim() : '';
+    const dsc=document.getElementById('desc');
+    if(wkT.length>140){
+      wk.firstChild.textContent=trimSentences(wkT, wkT.length-120)+' ';
+    } else if(wkT){ wk.innerHTML=''; }
+    else if(dsc.textContent.length>160){
+      dsc.textContent=trimSentences(dsc.textContent, dsc.textContent.length-120);
+    } else break;
+  }
+
+  img.classList.add('show'); other.classList.remove('show');
+  railEl.classList.add('show');
+  shown++;
+  if(document.body.classList.contains('showinfo')) updateInfo();
+}
+
+async function nextWork(){
+  clearTimeout(timer);
+  while(queue.length){
+    const w=queue.shift();
+    try{ await showWork(w); failStreak=0; break; }
+    catch(e){ stats.errors++; failStreak++; }
+    /* Twelve straight failures means the image service itself is refusing
+       us (this page once sat black for days when a size request started
+       403ing) - hand the wall to the next page instead of refilling the
+       queue forever. */
+    if(failStreak>=12 && !PINNED){ handOff(); return; }
+  }
+  if(!queue.length && shown>=CONFIG.worksPerTurn && !PINNED){ handOff(); return; }
+  if(!queue.length){          // refill for a pinned wall that keeps watching
+    try{ queue=await buildQueue(); }catch(e){ if(!PINNED){ handOff(); return; } }
+  }
+  /* Preload the next painting while this one hangs - the crossfade should
+     never wait on the network. */
+  if(queue[0]) (new Image()).src=iiif(queue[0], CONFIG.imgSizes[0]);
+  timer=setTimeout(nextWork, CONFIG.holdMs);
+}
+
+function handOff(){
+  Wall.clearEpisode(); Wall.clearTimers(); clearTimeout(timer);
+  document.body.style.transition='opacity 1400ms ease-in-out';
+  document.body.style.opacity='0';
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=CONFIG.nextPage;
+                   else location.reload(); }, 1400);
+}
+
+function updateInfo(){
+  infoEl.textContent=
+    `work      ${current?current.id:'-'}  (${shown}/${CONFIG.worksPerTurn})\n`+
+    `image     ${current?current.image_id:'-'}\n`+
+    `fetched   ${stats.fetched}  skipped ${stats.skipped}  errors ${stats.errors}\n`+
+    `wiki      ${stats.wikiHits} artists\n`+
+    `keys: n next work · i info · arrows rotate`;
+}
+
+addEventListener('keydown',(e)=>{
+  switch(e.key){
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': nextWork(); break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      if(/^[0-9]$/.test(e.key)){
+        const score=e.key==='0'?10:parseInt(e.key,10);
+        console.log('[artworks] RATING STUB - score', score, 'work', current&&current.id);
+      }
+  }
+});
+
+/* ---- boot ---------------------------------------------------------------
+   No network, no page: this is a PASS-THROUGH before anything draws, the
+   same manners as the precip and occasion screens. A wall showing a black
+   rectangle with an empty label rail would be worse than skipping a turn -
+   and unlike the literature page there is nothing worth caching, because
+   the pictures are the point and pictures need the network anyway. */
+(async ()=>{
+  try{
+    queue=await buildQueue();
+    if(!queue.length) throw new Error('no works');
+  }catch(e){
+    /* An EMPTY nextPage is what build_github.py leaves behind when it cuts
+       this page out of the rotation to publish it, and location.replace('')
+       reloads the page it is on. Without this guard a published copy with no
+       network reloads itself forever. Say so and stop, as ?pin does. */
+    if(!PINNED && CONFIG.nextPage){ location.replace(CONFIG.nextPage); return; }
+    infoEl.textContent='no network - '+e; document.body.classList.add('showinfo');
+    return;
+  }
+  /* No opening splash - Joe's call (2026-08-26 evening): the museum names
+     itself in the lower-right corner instead, permanently, at a readable
+     size. When a second museum joins the pool this line becomes per-work. */
+  document.getElementById('museum').textContent = 'Art Institute of Chicago';
+  nextWork();
+})();
+</script>
+<script src="nav.js"></script>
+</body>
+</html>
