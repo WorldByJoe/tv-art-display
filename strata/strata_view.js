@@ -84,8 +84,13 @@ function create(canvas){
     opts=opts||{}; if(!w) return;
     if(fine.step!==w.step) refreshFine(fine);
     const {nx,ny,dx,layers,rain,zb}=w, {nxf,zr:z,Fr:F,shade}=fine;
-    const f=(RW/2)/Math.tan(FOV/2), horizon=RH*0.5-f*Math.tan(cam.pitch);
+    /* the focal length from the LARGER side: a portrait canvas (the helicopter
+       over a tall course) then gets the 62 degrees vertically, not a fisheye */
+    const f=(Math.max(RW,RH)/2)/Math.tan(FOV/2), horizon=RH*0.5-f*Math.tan(cam.pitch);
     const VE=opts.vexag||1.8, FOG=1.9*nx, showRain=opts.rain!==false;
+    /* ground detail (the chase window): a speckle per fine cell, stronger on
+       rough rock - opts.tex[k] is the roughness of bed k, 0..1 */
+    const tex=opts.tex||null;
     for(let r=0;r<RH;r++){ const u=Math.max(0,Math.min(1,r/Math.max(1,horizon))), v=u*u;
       const cr=SKY_TOP[0]+(SKY_HOR[0]-SKY_TOP[0])*v, cg=SKY_TOP[1]+(SKY_HOR[1]-SKY_TOP[1])*v, cb=SKY_TOP[2]+(SKY_HOR[2]-SKY_TOP[2])*v;
       skyRow[r]=0xff000000|(cb<<16)|(cg<<8)|cr; }
@@ -96,7 +101,7 @@ function create(canvas){
       let ybuf=RH, zprev=null, tprev=1.0, t=1.0, prevDrawn=false, yPrevS=null;
       while(t<2.2*nx){
         const X=cam.x+dirx*t, Y=cam.y+diry*t;
-        let zs, fs=0, ss=0.8, st=0, inside=false;
+        let zs, fs=0, ss=0.8, st=0, inside=false, spk=0;
         if(X>=0&&X<nx-1&&Y>=0&&Y<ny-1){
           inside=true;
           const Xf=X*U, Yf=Y*U, xi=Xf|0, yi=Yf|0, fx=Xf-xi, fy=Yf-yi, c=yi*nxf+xi;
@@ -105,6 +110,10 @@ function create(canvas){
           fs=F[c]*w00+F[c+1]*w10+F[c+nxf]*w01+F[c+nxf+1]*w11;
           ss=shade[c]*w00+shade[c+1]*w10+shade[c+nxf]*w01+shade[c+nxf+1]*w11;
           st=showRain?Math.max(0,Math.min(1,(rain[(Y|0)*nx+(X|0)]-1.7)/4)):0;
+          if(tex){ /* mottle at 2.5x the fine grid, bilinear between its corners so it reads as ground, not tiles */
+            const Xm=Xf*2.5, Ym=Yf*2.5, mx=Xm|0, my=Ym|0, gx=Xm-mx, gy=Ym-my;
+            const hh=(a,b)=>{ let h=(a*374761393+b*668265263)|0; h=(h^(h>>>13))*1274126177|0; return ((h^(h>>>16))>>>0)/4294967296-0.5; };
+            spk=(hh(mx,my)*(1-gx)+hh(mx+1,my)*gx)*(1-gy)+(hh(mx,my+1)*(1-gx)+hh(mx+1,my+1)*gx)*gy; }
         } else zs=zb-20;
         const dp=t*dx*cosr, y=horizon-f*((zs-cam.z)*VE)/dp;
         if(y<ybuf){
@@ -125,10 +134,12 @@ function create(canvas){
                    else { const col=layers[k].color; cr=col[0]; cg=col[1]; cb=col[2];
                           const d1=e-(layers[k].base+fs);
                           if(d1<1.5 && k>0){ const m=0.5*(1-d1/1.5), c2=layers[k-1].color; cr+=(c2[0]-cr)*m; cg+=(c2[1]-cg)*m; cb+=(c2[2]-cb)*m; } } }
-            cr*=sh; cg*=sh; cb*=sh;
+            let shx=sh;
+            if(tex && inside){ let k2=nb-1; while(k2>=0 && e<layers[k2].base+fs) k2--; const tx=k2<0?0.4:tex[k2]; shx=sh*(1+spk*(0.18+0.55*tx)*Math.max(0.15,1-t/(0.3*nx))); }
+            cr*=shx; cg*=shx; cb*=shx;
             if(st>0){ const d=1-0.30*st; cr*=d; cg*=d; cb=cb*d+22*st; }
             cr+=(fr-cr)*fog; cg+=(fg-cg)*fog; cb+=(fb-cb)*fog;
-            px[r*RW+i]=0xff000000|((cb|0)<<16)|((cg|0)<<8)|(cr|0);
+            px[r*RW+i]=0xff000000|((Math.min(255,cb)|0)<<16)|((Math.min(255,cg)|0)<<8)|(Math.min(255,cr)|0);
           }
           ybuf=ytop; prevDrawn=true;
         } else prevDrawn=false;
@@ -157,9 +168,10 @@ function orbitCamera(w, sec, orbitSec){
 
 /* THE MAP: bed colour at the surface with hillshade, seen from above. Draws
    into `ctx` inside box {x,y,W,H}, preserving aspect; returns the placement
-   {x0,y0,s} so callers can put a fine cell (xf,yf) at (x0+xf*s, y0+yf*s). */
+   {x0,y0,s,box} so callers can put a fine cell (xf,yf) at (x0+xf*s, y0+yf*s).
+   `src` = {x0,y0,w,h} in fine cells zooms to that part of the block. */
 const mapCache={fine:null,step:-1,cv:null};
-function drawMap(ctx, view, box){
+function drawMap(ctx, view, box, src){
   const fine=view.fine, w=view.world; if(!fine||!w) return null;
   if(fine.step!==w.step) refreshFine(fine);
   const {nxf,nyf,zr,Fr,shade}=fine, layers=w.layers, nb=layers.length;
@@ -168,16 +180,49 @@ function drawMap(ctx, view, box){
     const mctx=mapCache.cv.getContext('2d'), mimg=mctx.createImageData(nxf,nyf), mpx=new Uint32Array(mimg.data.buffer);
     for(let i=0;i<nxf*nyf;i++){
       const e=zr[i], fs=Fr[i]; let k=nb-1; while(k>=0 && e<layers[k].base+fs) k--;
-      const col=k<0?BASEMENT:layers[k].color, sh=0.30+0.80*shade[i];
+      const col=k<0?BASEMENT:layers[k].color, sh=Math.min(1,0.30+0.80*shade[i]);   // never above 1: a channel past 255 spills into the next (cyan cliffs)
       mpx[i]=0xff000000|(((col[2]*sh)|0)<<16)|(((col[1]*sh)|0)<<8)|((col[0]*sh)|0);
     }
     mctx.putImageData(mimg,0,0); mapCache.fine=fine; mapCache.step=fine.step;
   }
-  const s=Math.min(box.W/nxf, box.H/nyf), x0=box.x+(box.W-nxf*s)/2, y0=box.y+(box.H-nyf*s)/2;
-  ctx.imageSmoothingEnabled=true; ctx.drawImage(mapCache.cv,x0,y0,nxf*s,nyf*s);
-  return {x0,y0,s};
+  const r=src?{x0:Math.max(0,src.x0),y0:Math.max(0,src.y0),w:Math.min(nxf-Math.max(0,src.x0),src.w),h:Math.min(nyf-Math.max(0,src.y0),src.h)}:{x0:0,y0:0,w:nxf,h:nyf};
+  const s=Math.min(box.W/r.w, box.H/r.h), px=box.x+(box.W-r.w*s)/2, py=box.y+(box.H-r.h*s)/2;
+  ctx.imageSmoothingEnabled=true; ctx.drawImage(mapCache.cv,r.x0,r.y0,r.w,r.h,px,py,r.w*s,r.h*s);
+  return {x0:px-r.x0*s, y0:py-r.y0*s, s, frame:{x:px,y:py,W:r.w*s,H:r.h*s}};
 }
 
-global.StrataView={create, orbitCamera, drawMap, makeFine, refreshFine, U};
+/* A HIGH-RESOLUTION MAP of one region: every OUTPUT pixel samples the fine
+   grid bilinearly (surface, fold field, lighting) and looks its bed up, the
+   way the ray-marcher does - so a zoomed map is crisp at screen resolution
+   instead of a magnified 3x grid. Painted in ROW CHUNKS across frames (a
+   frozen world does not change, and the Pi has a show to draw), so the
+   caller asks paintRows(n) until done. src is {x0,y0,w,h} in fine cells. */
+function mapPainter(view, src, outW, outH){
+  const fine=view.fine, w=view.world; if(fine.step!==w.step) refreshFine(fine);
+  const cv=document.createElement('canvas'); cv.width=outW; cv.height=outH;
+  const ctx=cv.getContext('2d'), img=ctx.createImageData(outW,outH), px=new Uint32Array(img.data.buffer);
+  const {nxf,nyf,zr,Fr,shade}=fine, layers=w.layers, nb=layers.length;
+  let row=0;
+  function paintRows(n){
+    const end=Math.min(outH,row+n);
+    for(;row<end;row++){
+      const yf=Math.min(nyf-1.001,Math.max(0,src.y0+(row+0.5)/outH*src.h)), yi=yf|0, fy=yf-yi;
+      for(let x=0;x<outW;x++){
+        const xf=Math.min(nxf-1.001,Math.max(0,src.x0+(x+0.5)/outW*src.w)), xi=xf|0, fx=xf-xi, c=yi*nxf+xi;
+        const w00=(1-fx)*(1-fy), w10=fx*(1-fy), w01=(1-fx)*fy, w11=fx*fy;
+        const e=zr[c]*w00+zr[c+1]*w10+zr[c+nxf]*w01+zr[c+nxf+1]*w11;
+        const fs=Fr[c]*w00+Fr[c+1]*w10+Fr[c+nxf]*w01+Fr[c+nxf+1]*w11;
+        const sh=Math.min(1,0.30+0.80*(shade[c]*w00+shade[c+1]*w10+shade[c+nxf]*w01+shade[c+nxf+1]*w11));
+        let k=nb-1; while(k>=0 && e<layers[k].base+fs) k--;
+        const col=k<0?BASEMENT:layers[k].color;
+        px[row*outW+x]=0xff000000|(((col[2]*sh)|0)<<16)|(((col[1]*sh)|0)<<8)|((col[0]*sh)|0);
+      }
+    }
+    if(row>=outH){ ctx.putImageData(img,0,0); return true; }
+    return false;
+  }
+  return {canvas:cv, paintRows, get done(){ return row>=outH; }, src, outW, outH};
+}
+global.StrataView={create, orbitCamera, drawMap, mapPainter, makeFine, refreshFine, U, FOV};
 }
 StrataViewFactory(typeof window!=='undefined'?window:globalThis);

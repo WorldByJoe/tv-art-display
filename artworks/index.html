@@ -2,6 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- NO REFERRER (2026-09-08). The museum's image server refuses any request
+     that carries another site's Referer (403 with it, 200 without). The wall
+     never sends one - it opens this page from a local file - so the pictures
+     came; the published copy on GitHub sent one with every image and sat
+     black in every browser. Joe found it in Safari. -->
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Open Gallery</title>
 <style>
@@ -90,7 +96,7 @@
 <script src="wall.js"></script>
 </head>
 <body>
-<div id="stage"><img id="imgA" alt=""><img id="imgB" alt=""></div>
+<div id="stage"><img id="imgA" referrerpolicy="no-referrer" alt=""><img id="imgB" referrerpolicy="no-referrer" alt=""></div>
 <div id="rail">
   <div id="artist"></div>
   <div id="life"></div>
@@ -319,7 +325,7 @@ async function nextWork(){
   }
   /* Preload the next painting while this one hangs - the crossfade should
      never wait on the network. */
-  if(queue[0]) (new Image()).src=iiif(queue[0], CONFIG.imgSizes[0]);
+  if(queue[0]){ const pre=new Image(); pre.referrerPolicy='no-referrer'; pre.src=iiif(queue[0], CONFIG.imgSizes[0]); }
   timer=setTimeout(nextWork, CONFIG.holdMs);
 }
 
