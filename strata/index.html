@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Strata</title>
+<!-- ==========================================================================
+  strata.html - a folded sedimentary landscape eroding under rain, on the wall.
+  Joe, 2026-09-04: "simulate landscapes like what we'd see in Utah, where there
+  are different hardnesses of sedimentary layers, different colors, and then
+  rain-based erosion ... the observer would watch the landscape erode away,
+  and different features emerge and morph."  The MODEL is strata_engine.js
+  (pure, seeded); this page steps it, draws it and speaks about it.
+
+  FIRST READ: the landscape - striped cliffs, benches, canyons opening toward
+  you - then the elapsed-time figure bottom-left.
+
+  THE PICTURE. A heightfield ray-marched column by column (the "voxel space"
+  renderer): for every screen column a ray walks out across the map; each
+  ground sample projects to a screen row, and the rows between the previous
+  top and the new one are the terrain in between - a slope or a cliff face.
+  Every one of those rows is coloured by the BED at that elevation in that
+  cell, so a cliff shows its stratigraphy rather than a smear of the surface
+  colour. Hillshade from a low sun front-left, haze with distance, a storm
+  darkens the ground it rains on. The camera orbits the map slowly.
+
+  SMOOTHING (Joe, 2026-09-07: "keep the computational pixels, smooth the
+  visual ones"). The erosion grid is untouched; the renderer draws from a
+  DISPLAY COPY of the surface at THREE times the grid resolution, resampled
+  with a cubic B-spline whenever the worker delivers a new state, with the
+  lighting computed on that fine grid. Bilinear sampling of the raw grid was
+  the culprit: at a cliff the erosion surface is a staircase of cells, and
+  bilinear contours across a staircase zigzag once per cell - bed edges are
+  contour lines, so every edge on a steep face grew teeth. The B-spline rounds
+  the staircase into a ramp before the ray-marcher ever sees it. The slump
+  rule also leaves a one-cell washboard on soft slopes (its risers alternate
+  with the receiver direction), which a faithful resample keeps; a Gaussian a
+  cell wide on the erosion copy, before the resample, takes it out at the cost
+  of rounding cliff lips by about a cell. The bottom 1.5 m of each bed blends
+  into the bed below, and a cliff's shade is a continuous function of its
+  steepness rather than an on/off flag. (A per-span coverage blend at the
+  silhouette was tried and removed: it grew single-column spikes along every
+  rim that I could not explain, and the resample already does the smoothing.)
+
+  In the ring since 2026-09-05 as the 16th and last stop (weatherclocks ->
+  strata -> kiosk), 9-minute dwell, a fresh landscape every 7 minutes. ?pin
+  holds it as the sole page (n for a new world, i for detail) - write
+  "strata.html?pin" to ~/tv_art/current_page on the Pi and restart the kiosk;
+  pinned, it reloads itself with a new seed every 7 min so the watchdog stays
+  quiet. ?steps=N erodes N steps before the first frame and ?seed=N picks the
+  world - both for headless photographs.
+========================================================================== -->
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#04060c; overflow:hidden; }
+  * { cursor:none; }
+  #cv { position:fixed; inset:0; width:100vw; height:100vh; }        /* 1280x720 buffer, stretched 3x: soft by design */
+  #ui { position:fixed; inset:0; width:100vw; height:100vh; pointer-events:none; }
+  /* the lane owns the bottom band; the instrument and the gauge sit above it */
+  body .instr.bl { bottom: calc(var(--band) + 120*var(--wu)); }   /* outranks wall.css, which loads after this block */
+  #pname { position:fixed; left:var(--safe-x); top:var(--safe-y); z-index:6;
+    font:italic 400 var(--t1)/1.1 Georgia, "Times New Roman", serif; color:var(--ink);
+    text-shadow:0 1px 5px rgba(0,0,0,.85), 0 0 18px rgba(0,0,0,.6); }
+</style>
+<link rel="stylesheet" href="wall.css">
+<script src="wall.js"></script>
+<script src="nav.js"></script>
+<script>document.write('<script src="strata_engine.js?v='+Date.now()+'"><\/script>');</script>
+</head>
+<body>
+<canvas id="cv" width="1280" height="720"></canvas>
+<canvas id="ui"></canvas>
+<div id="pname">Strata</div>
+<div id="info"></div>
+<script>
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here=(location.pathname.split('/').pop()||'kiosk.html');
+  let i=ROTATION.indexOf(here); if(i<0) i=0;
+  location.href=ROTATION[(i+step+ROTATION.length)%ROTATION.length];
+}
+const CONFIG = {
+  holdMin: 9,             // minutes on the wall before handing off
+  nextPage: '' /* standalone: nowhere to hand on to; start again */, // back to the mosaic; strata is the ring's last stop (2026-09-05)
+  runMin: 7,              // every landscape runs this long (Joe: 5-10 min is right) - erosion is
+                          // PACED against the clock so a soft world does not finish in a minute
+  target: 0.66,           // fraction of the rock the pacing aims to have removed by the end
+  fpsCap: 8,              // the picture is redrawn at most this often
+  orbitSec: 490,          // one slow lap of the camera (Joe: ~10% faster than 540)
+  vexag: 1.8,             // vertical exaggeration in the picture (stated in i)
+};
+const Q=new URLSearchParams(location.search);
+const PINNED=Q.has('pin');
+let seed=Q.has('seed')?(Q.get('seed')|0):((Math.random()*1e9)|0);
+const TIGHT=Q.has('tight')?Q.get('tight')==='1':undefined;   // force the tight fold on/off, for photographs
+const SELF=location.pathname.split('/').pop()||'strata.html';   // this file's own name (index.html on the site)
+
+/* ---- the ladder, in canvas units (DESIGN_STANDARDS section 7) ------------ */
+const TIER={t0:160,t1:80,t2:58,t3:44,t4:32,t5:26}, FLOOR={t0:56,t1:30,t2:22,t3:17,t4:13,t5:11};
+const TS=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ts'))||1;
+let DPR=1, WU=1, T=k=>0;
+function setTypeScale(){ DPR=devicePixelRatio||1; WU=(innerWidth/3840)*DPR; T=k=>Math.max(FLOOR[k]*DPR, TIER[k]*TS*WU); }
+const INK='rgba(240,246,253,.95)', INK2='rgba(210,224,242,.80)';
+const MONO='ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", monospace';
+
+/* ---- the world ------------------------------------------------------------ */
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const ui=document.getElementById('ui'), uctx=ui.getContext('2d');
+const RW=cv.width, RH=cv.height;
+const img=ctx.createImageData(RW,RH), px=new Uint32Array(img.data.buffer);
+let w=null, startedAt=performance.now(), t0=performance.now(), stepMs=20, frames=0, fps=0, lastFpsAt=performance.now(), handingOff=false, ended=false;
+let stat={step:0,years:0,removed:0,storms:0,cover:null};
+
+/* ---- the worker: erosion on a second core -----------------------------------
+   The main thread keeps a MIRROR world (same seed, same static beds and fold
+   field) for drawing, and receives z + rain after every batch of steps. With
+   ?steps=N (headless photographs) everything runs on the main thread. */
+const USE_WORKER=!Q.has('steps') && typeof Worker!=='undefined';
+let worker=null, busy=false;
+function makeWorker(){
+  const body=`(${StrataFactory.toString()})(self);
+    let w=null;
+    self.onmessage=(e)=>{ const m=e.data;
+      if(m.cmd==='new'){ w=Strata.makeWorld(m.seed,{tight:m.tight}); self.postMessage({cmd:'ready'}); }
+      else if(m.cmd==='step' && w){ const t=Date.now(); for(let i=0;i<m.n;i++) Strata.step(w);
+        const s=Strata.stats(w);
+        self.postMessage({cmd:'state', z:w.z.slice(0), rain:w.rain.slice(0), stat:{step:s.step,years:s.years,removed:s.removed,storms:s.storms,cover:s.cover}, ms:(Date.now()-t)/m.n}); } };`;
+  const wk=new Worker(URL.createObjectURL(new Blob([body],{type:'text/javascript'})));
+  wk.onmessage=(e)=>{ const m=e.data;
+    if(m.cmd==='ready'){ busy=false; }
+    else if(m.cmd==='state'){ w.z.set(m.z); w.rain.set(m.rain); w.step=m.stat.step; w.removed=m.stat.removed; stat=m.stat; stepMs=0.8*stepMs+0.2*m.ms; busy=false; } };
+  return wk;
+}
+function newWorld(s){
+  seed=s; w=Strata.makeWorld(seed,{tight:TIGHT}); stat=Strata.stats(w);
+  t0=performance.now(); ended=false;
+  if(USE_WORKER){ if(!worker) worker=makeWorker(); busy=true; worker.postMessage({cmd:'new',seed,tight:TIGHT}); }
+  Wall.clearEpisode(); Wall.clearTimers(); schedule();
+  console.log('[strata] seed',seed,'beds',w.L,'worker',USE_WORKER);
+}
+
+/* ---- the words ------------------------------------------------------------ */
+const LEAD='Folded beds of sandstone and shale, cut by rain: the hard beds hold up cliffs while the soft ones strip away.';
+function schedule(){
+  Wall.episode(LEAD);
+  Wall.every(1000,tick);
+}
+function tick(){
+  if(!w) return;
+  const runFor=performance.now()-t0;
+  if(!ended && (runFor>CONFIG.runMin*60000 || w.step>=w.P.maxSteps)){
+    ended=true;
+    Wall.lane((w.step*w.P.dt/1e6).toFixed(1)+' million years have passed and '+Math.round(100*w.removed)+'% of the rock is gone. A new landscape folds, and the rain begins again.');
+    const next=(seed*1664525+1013904223)>>>0;
+    /* Pinned as the sole page, the page RELOADS itself with the next seed
+       rather than reseeding in place: the wall's watchdog restarts any page
+       whose URL has not changed in 25 min, and a fresh URL every 7 keeps it
+       quiet (and the tab memory-fresh). In the ring it reseeds in place. */
+    Wall.after(12000,()=>{ if(PINNED) location.replace(SELF+'?pin&seed='+next); else newWorld(next); });
+  }
+  if(!PINNED && CONFIG.nextPage && performance.now()-startedAt>CONFIG.holdMin*60000) handOff();
+}
+function handOff(){
+  if(handingOff) return; handingOff=true;
+  Wall.clearEpisode(); Wall.clearTimers();
+  document.body.style.transition='opacity 1400ms ease-in-out'; document.body.style.opacity='0';
+  setTimeout(()=>{ location.href=CONFIG.nextPage; },1500);
+}
+
+/* ---- stepping: paced against the clock ---------------------------------------
+   The rock-removed fraction is asked to track a straight line from 0 to
+   CONFIG.target over runMin; steps run only while erosion is behind that line,
+   plus a trickle so a hard world never stands still. A soft world therefore
+   erodes slowly and a hard one at full speed, and both fill the dwell. */
+let paused=false, trickleAt=0;
+setInterval(()=>{
+  if(!w||paused||ended||w.step>=w.P.maxSteps) return;
+  const now=performance.now(), goal=CONFIG.target*Math.min(1,(now-t0)/(CONFIG.runMin*60000));
+  const behind=w.removed<goal, trickle=now-trickleAt>400;
+  if(!behind && !trickle) return;
+  const n=behind?3:1; trickleAt=now;
+  if(USE_WORKER){ if(busy) return; busy=true; worker.postMessage({cmd:'step',n}); }
+  else { const t=now; for(let i=0;i<n;i++) Strata.step(w); stat=Strata.stats(w); stepMs=0.8*stepMs+0.2*(performance.now()-t)/n; }
+},100);
+
+/* ---- the picture ---------------------------------------------------------- */
+const FOV=62*Math.PI/180;
+const SKY_TOP=[124,156,200], SKY_HOR=[214,216,214], HAZE=[220,206,184];
+const PLAIN=[192,164,124];
+function camera(now){
+  /* a slow orbit just outside the map, high enough to look down into the
+     canyons, pitched so the horizon sits near the top of the frame */
+  const a=((now-t0)/1000)/CONFIG.orbitSec*2*Math.PI+Math.PI/2;       // start looking in from the front
+  const cx=w.nx/2, cy=w.ny*0.5, rad=0.56*w.nx;
+  const x=cx+rad*Math.cos(a), y=cy+rad*Math.sin(a);
+  const z=w.plane+750, yaw=Math.atan2(cy-y,cx-x);
+  return {x,y,z,yaw,pitch:16*Math.PI/180};
+}
+/* the display copy: the surface, the fold field and the lighting on a grid
+   U times finer than the erosion grid, resampled with a cubic B-spline */
+const U=3;
+let zr=null, Fr=null, shade=null, smoothedStep=-1, fineFor=null, tmpU=null, nxf=0, nyf=0, zg=null, tmpG=null;
+function gauss(src,nx,ny,dst){
+  /* separable 5-tap Gaussian (1 4 6 4 1)/16, edges clamped */
+  for(let y=0;y<ny;y++){ const r=y*nx;
+    for(let x=0;x<nx;x++){ const a=r+Math.max(0,x-2), b=r+Math.max(0,x-1), c=r+x, d=r+Math.min(nx-1,x+1), e=r+Math.min(nx-1,x+2);
+      tmpG[c]=(src[a]+4*src[b]+6*src[c]+4*src[d]+src[e])/16; } }
+  for(let y=0;y<ny;y++){ const a=Math.max(0,y-2)*nx, b=Math.max(0,y-1)*nx, c=y*nx, d=Math.min(ny-1,y+1)*nx, e=Math.min(ny-1,y+2)*nx;
+    for(let x=0;x<nx;x++) dst[c+x]=(tmpG[a+x]+4*tmpG[b+x]+6*tmpG[c+x]+4*tmpG[d+x]+tmpG[e+x])/16; }
+}
+function upsample(src, nx, ny, dst){
+  /* separable cubic B-spline: x pass into tmpU (nxf x ny), then y pass into dst (nxf x nyf) */
+  const wts=(t)=>{ const t2=t*t, t3=t2*t; return [(1-3*t+3*t2-t3)/6,(4-6*t2+3*t3)/6,(1+3*t+3*t2-3*t3)/6,t3/6]; };
+  for(let xf=0;xf<nxf;xf++){
+    const u=xf/U, i=Math.floor(u), [w0,w1,w2,w3]=wts(u-i);
+    const i0=Math.max(0,i-1), i1=Math.min(nx-1,i), i2=Math.min(nx-1,i+1), i3=Math.min(nx-1,i+2);
+    for(let y=0;y<ny;y++){ const r=y*nx; tmpU[y*nxf+xf]=w0*src[r+i0]+w1*src[r+i1]+w2*src[r+i2]+w3*src[r+i3]; }
+  }
+  for(let yf=0;yf<nyf;yf++){
+    const v=yf/U, j=Math.floor(v), [w0,w1,w2,w3]=wts(v-j);
+    const j0=Math.max(0,j-1)*nxf, j1=Math.min(ny-1,j)*nxf, j2=Math.min(ny-1,j+1)*nxf, j3=Math.min(ny-1,j+2)*nxf, o=yf*nxf;
+    for(let xf=0;xf<nxf;xf++) dst[o+xf]=w0*tmpU[j0+xf]+w1*tmpU[j1+xf]+w2*tmpU[j2+xf]+w3*tmpU[j3+xf];
+  }
+}
+function refreshDisplaySurface(){
+  const {nx,ny,dx,z,F}=w;
+  if(fineFor!==w){ nxf=nx*U; nyf=ny*U; zr=new Float32Array(nxf*nyf); Fr=new Float32Array(nxf*nyf); shade=new Float32Array(nxf*nyf); tmpU=new Float32Array(nxf*ny);
+    zg=new Float32Array(nx*ny); tmpG=new Float32Array(nx*ny);
+    upsample(F,nx,ny,Fr); fineFor=w; }
+  gauss(z,nx,ny,zg); upsample(zg,nx,ny,zr);
+  const lx=-0.55, ly=0.45, lz=0.70, dxf=dx/U;
+  for(let y=0;y<nyf;y++) for(let x=0;x<nxf;x++){
+    const i=y*nxf+x;
+    const gx=((x<nxf-1?zr[i+1]:zr[i])-(x>0?zr[i-1]:zr[i]))/(2*dxf), gy=((y<nyf-1?zr[i+nxf]:zr[i])-(y>0?zr[i-nxf]:zr[i]))/(2*dxf);
+    const inv=1/Math.sqrt(gx*gx+gy*gy+1);
+    shade[i]=Math.max(0,(-gx*inv)*lx+(-gy*inv)*ly+inv*lz);
+  }
+  smoothedStep=w.step;
+}
+function render(now){
+  const {nx,ny,dx,layers,rain,zb}=w;
+  if(smoothedStep!==w.step || fineFor!==w) refreshDisplaySurface();
+  const z=zr, F=Fr;
+  const cam=camera(now);
+  const f=(RW/2)/Math.tan(FOV/2), horizon=RH*0.5-f*Math.tan(cam.pitch);
+  const VE=CONFIG.vexag, FOG=1.9*nx;
+  // sky, once per frame, per row
+  const skyRow=new Uint32Array(RH);
+  for(let r=0;r<RH;r++){ const u=Math.max(0,Math.min(1,r/Math.max(1,horizon))); const v=u*u;
+    const cr=SKY_TOP[0]+(SKY_HOR[0]-SKY_TOP[0])*v, cg=SKY_TOP[1]+(SKY_HOR[1]-SKY_TOP[1])*v, cb=SKY_TOP[2]+(SKY_HOR[2]-SKY_TOP[2])*v;
+    skyRow[r]=0xff000000|(cb<<16)|(cg<<8)|cr; }
+  const fr=SKY_HOR[0]*0.6+HAZE[0]*0.4, fg=SKY_HOR[1]*0.6+HAZE[1]*0.4, fb=SKY_HOR[2]*0.6+HAZE[2]*0.4;
+  for(let i=0;i<RW;i++){
+    const a=cam.yaw+Math.atan((i-RW/2)/f), dirx=Math.cos(a), diry=Math.sin(a), cosr=Math.cos(a-cam.yaw);
+    let ybuf=RH, zprev=null, tprev=1.0, t=1.0, prevDrawn=false, yPrevS=null;
+    while(t<2.2*nx){
+      const X=cam.x+dirx*t, Y=cam.y+diry*t;
+      let zs, fs=0, ss=0.8, st=0, inside=false;
+      if(X>=0&&X<nx-1&&Y>=0&&Y<ny-1){
+        inside=true;
+        const Xf=X*U, Yf=Y*U, xi=Xf|0, yi=Yf|0, fx=Xf-xi, fy=Yf-yi, c=yi*nxf+xi;   // on the fine grid
+        const w00=(1-fx)*(1-fy), w10=fx*(1-fy), w01=(1-fx)*fy, w11=fx*fy;
+        zs=z[c]*w00+z[c+1]*w10+z[c+nxf]*w01+z[c+nxf+1]*w11;
+        fs=F[c]*w00+F[c+1]*w10+F[c+nxf]*w01+F[c+nxf+1]*w11;
+        ss=shade[c]*w00+shade[c+1]*w10+shade[c+nxf]*w01+shade[c+nxf+1]*w11;
+        st=Math.max(0,Math.min(1,(rain[(Y|0)*nx+(X|0)]-1.7)/4));
+      } else zs=zb-20;
+      const dp=t*dx*cosr, y=horizon-f*((zs-cam.z)*VE)/dp;
+      if(y<ybuf){
+        const ytop=Math.max(0,Math.ceil(y)); if(zprev===null) zprev=zs;
+        const fog=1-Math.exp(-t/FOG);
+        /* steepness of the ground between the two samples, 0 = flat, 1 = a cliff */
+        const steep=inside?Math.min(1,Math.max(0,((zs-zprev)/((t-tprev)*dx)-0.5)/1.5)):0;
+        const sh=inside?(0.22+0.86*ss)*(1-steep)+(0.36+0.44*ss)*steep:0.80;
+        const nb=layers.length;
+        /* each row's elevation: interpolated between the two samples when the
+           previous one was drawn (the ground between them), by inverse
+           projection at this sample's distance when it was hidden (a far slope
+           emerging above a nearer ridge - interpolating from a hidden sample
+           at another distance put bed edges on the wrong rows) */
+        const ePerRow=dp/(f*VE), span=ybuf-y, interp=prevDrawn && span>0;
+        for(let r=ytop;r<ybuf;r++){
+          const e=interp ? zs-((r-y)/span)*(zs-zprev) : cam.z+(horizon-r)*ePerRow;
+          let cr,cg,cb;
+          if(!inside){ cr=PLAIN[0]; cg=PLAIN[1]; cb=PLAIN[2]; }
+          else { let k=nb-1; while(k>=0 && e<layers[k].base+fs) k--;
+                 if(k<0){ cr=92; cg=86; cb=88; }
+                 else { const col=layers[k].color; cr=col[0]; cg=col[1]; cb=col[2];
+                        const d1=e-(layers[k].base+fs);              // soften the bed's lower edge
+                        if(d1<1.5 && k>0){ const m=0.5*(1-d1/1.5), c2=layers[k-1].color; cr+=(c2[0]-cr)*m; cg+=(c2[1]-cg)*m; cb+=(c2[2]-cb)*m; } } }
+          cr*=sh; cg*=sh; cb*=sh;
+          if(st>0){ const d=1-0.30*st; cr*=d; cg*=d; cb=cb*d+22*st; }
+          cr+= (fr-cr)*fog; cg+=(fg-cg)*fog; cb+=(fb-cb)*fog;
+          px[r*RW+i]=0xff000000|((cb|0)<<16)|((cg|0)<<8)|(cr|0);
+        }
+        ybuf=ytop; prevDrawn=true;
+      } else prevDrawn=false;
+      /* ADAPTIVE STEP: advance so the projected row moves about one pixel,
+         (two rows: one halved the Pi's frame rate), never more than the
+         distance schedule allows and never less than a twentieth of a cell. Uniform world-space steps under-sampled the near
+         field - a bed edge crossing a span was placed by linear interpolation
+         across most of a cell, and the error beat against the columns as a
+         sawtooth along every edge. Screen-space steps put samples where rows are. */
+      const rowsPerCell=yPrevS===null?0:Math.abs(y-yPrevS)/(t-tprev);
+      let dt=0.35+t*0.007; if(rowsPerCell>0) dt=Math.min(dt,2.0/rowsPerCell); if(dt<0.05) dt=0.05;   // far field coarser: haze hides it
+      zprev=zs; tprev=t; yPrevS=y;
+      if(ybuf<=0) break;
+      t+=dt;
+    }
+    for(let r=0;r<ybuf;r++) px[r*RW+i]=skyRow[r];
+  }
+  ctx.putImageData(img,0,0);
+  drawUI();
+}
+
+/* ---- the gauge: a stratigraphic column, wider = harder (bottom-right) ----- */
+function drawUI(){
+  setTypeScale();
+  if(ui.width!==Math.round(innerWidth*DPR)||ui.height!==Math.round(innerHeight*DPR)){ ui.width=Math.round(innerWidth*DPR); ui.height=Math.round(innerHeight*DPR); }
+  const W=ui.width, H=ui.height; uctx.clearRect(0,0,W,H);
+  const SX=134*WU, floor=(200*TS+120)*WU, colH=H*0.28, colW=150*WU, x1=W-SX, y1=H-floor-T('t4')*1.8;
+  const cover=stat.cover||Strata.stats(w).cover;
+  const total=w.top; let y=y1;
+  uctx.textAlign='right'; uctx.textBaseline='alphabetic';
+  for(let k=0;k<w.L;k++){
+    const l=w.layers[k], h=colH*l.thick/total, wdt=colW*(0.35+0.65*Math.min(1,0.3/l.k));
+    const exposed=cover[k+1]>0.005, gone=!exposed && k>maxExposed(cover);
+    uctx.globalAlpha=gone?0.18:(exposed?1:0.55);
+    uctx.fillStyle='rgb('+l.color.join(',')+')'; uctx.fillRect(x1-wdt,y-h,wdt,h-Math.max(1,1.5*WU));
+    y-=h;
+  }
+  uctx.globalAlpha=1;
+  uctx.fillStyle=INK2; uctx.font='400 '+T('t4')+'px '+MONO;
+  uctx.shadowColor='rgba(0,0,0,.85)'; uctx.shadowBlur=T('t4')*0.35;
+  uctx.fillText('THE BEDS · WIDER IS HARDER',x1,H-floor);
+  uctx.shadowBlur=0;
+  // the instrument: elapsed time, rock removed, weather (Wall.instrument writes only on change)
+  const s=stat;
+  const yrs=s.years<1e6?Math.round(s.years/1e3)+' thousand years':(s.years/1e6).toFixed(2)+' million years';
+  Wall.instrument({place:'bl',cols:1,rows:[
+    {k:'elapsed',v:yrs},
+    {k:'rock removed',v:Math.round(100*s.removed)+' %'},
+    {k:'rainfall',v:s.storms?(s.storms===1?'one wet belt drifting across':s.storms+' wet belts drifting across'):'even across the plateau'}]});
+  if(document.body.classList.contains('showinfo')) updateInfo();
+}
+function maxExposed(cover){ let m=-1; for(let k=0;k<w.L;k++) if(cover[k+1]>0.005) m=k; return m; }
+
+/* ---- the i overlay ---------------------------------------------------------- */
+const infoEl=document.getElementById('info');
+function updateInfo(){
+  const s=stat;
+  infoEl.textContent=
+`seed      ${seed}   step ${s.step}/${w.P.maxSteps}   ${stepMs.toFixed(0)} ms/step   fps ${fps.toFixed(0)}   grid ${w.nx}x${w.ny} at ${w.dx} m, vertical x${CONFIG.vexag}
+removed   ${(100*s.removed).toFixed(1)}%   storms ${s.storms}   plane ${w.plane.toFixed(0)} m   base level ${w.zb.toFixed(0)} m
+beds      ${w.layers.map((l,k)=>l.type.slice(0,4)+Math.round(l.thick)+'m/k'+l.k.toFixed(2)+(s.cover[k+1]>0.005?'*':'')).join(' ')}
+folds     ${w.trains.map(t=>'A'+t.A.toFixed(0)+' λ'+t.lam.toFixed(0)+' θ'+(t.th*180/Math.PI).toFixed(0)).join('  ')}  dome ${w.dome.A.toFixed(0)}m  tilt ${w.tilt.gx.toFixed(3)},${w.tilt.gy.toFixed(3)}${w.tight?'  TIGHT A'+w.tight.A.toFixed(0)+' λ'+w.tight.lam.toFixed(0)+' dip '+w.tight.dipDeg.toFixed(0)+'°':''}
+model     stream power dz/dt = -K sqrt(Q) S (implicit) · K by exposed bed · orographic + storm rain · creep D=${w.P.diff} · uplift ${w.P.uplift} m/step · dt ${w.P.dt} yr
+keys: n new world · p pause · i info · arrows change page`;
+}
+addEventListener('keydown',(e)=>{
+  switch(e.key){
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': newWorld((Math.random()*1e9)|0); break;
+    case 'p': case 'P': paused=!paused; break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+  }
+});
+
+/* ---- go ---------------------------------------------------------------------- */
+newWorld(seed);
+if(Q.has('steps')){ const n=Q.get('steps')|0; for(let i=0;i<n;i++) Strata.step(w); stat=Strata.stats(w); }
+let lastFrame=0;
+function frame(now){
+  if(now-lastFrame>=1000/CONFIG.fpsCap){ lastFrame=now; render(now); frames++;
+    if(now-lastFpsAt>2000){ fps=frames*1000/(now-lastFpsAt); frames=0; lastFpsAt=now; } }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
