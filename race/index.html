@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Race</title>
+<!-- ==========================================================================
+  race.html - a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
+  The show, in four acts (his order):
+    1. THE LAND. A Strata world folds and erodes for three hundred thousand
+       years (strata_engine.js in a worker, strata_view.js drawing), then
+       freezes: the race course will be cut into this.
+    2. THE COURSE. The engine picks a scale (a 50 m erosion cell becomes 10 m,
+       so a 16 km block becomes 3.2 km - slopes are unchanged, so cliffs stay
+       cliffs), finds a straight gentle two-track for the start, and searches
+       for a 2-5 mile loop: grade capped at 12%, cliffs off limits, turns
+       priced - the switchbacks are found, not drawn (race_planner.js in a
+       worker). The search is shown on the geologic map as it happens.
+    3. THE RACERS. Eight riders on cards: climbing watts, sprint, how truly
+       they read the ground, how near the limit they can ride, how near it
+       they choose to, and how long they last (race_sim.js) - so you know
+       who to root for. (No favourite is named - Joe, 2026-09-08.)
+    4. THE RACE. Two laps at four times real time. One view of the whole
+       course with every rider on it (the cached geologic map, LEFT), one
+       view for the exciting moments (the ray-marcher, top of the RIGHT
+       column, pointed by a director at the closest battle, a pass, a crash,
+       the finish) - the two never overlap (Joe, 2026-09-08: the window had
+       covered half the course). Under the window, the board: every rider's
+       position, gap, and a live line - speed, watts, energy left, what they
+       are doing on which rock; across the bottom of the window, the physics
+       of the followed rider - grade, rock, grip, the true limit, what the
+       rider perceives, their speed. Ground speckle by rock roughness and a
+       trail ribbon coloured by bed, dashed where loose (his ask: see the
+       trail conditions and how the riders manage them). Physics-limited: a rider
+       who enters a bend faster than it allows slides - down for a few
+       seconds on open ground, OUT over an edge. Tired riders make mistakes.
+       Then the results, and a new land.
+  Preview with ?pin (pinned, it reloads itself with a new seed after each
+  race, which keeps the wall's watchdog quiet). ?act=2|3|4&seed=N (and
+  &race=SECONDS for act 4) runs synchronously to that point for a photograph.
+  Not in the ring.
+========================================================================== -->
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#04060c; overflow:hidden; }
+  * { cursor:none; }
+  #cv { position:fixed; inset:0; width:100vw; height:100vh; transition:opacity 1.6s ease-in-out; }
+  #ui { position:fixed; inset:0; width:100vw; height:100vh; pointer-events:none; }
+  /* the chase window: a PANEL top-right, the one picture-in-picture on the wall */
+  #chase { position:fixed; right:var(--safe-x); top:var(--safe-y); width:calc(1280*var(--wu)); height:calc(720*var(--wu));
+    border:1px solid var(--edge); border-radius:var(--r); box-shadow:var(--shadow); display:none; background:#04060c; }
+  #heli { position:fixed; display:none; opacity:0; transition:opacity 1.4s ease-in-out; border-radius:calc(8*var(--wu)); }
+  #chasecap { position:fixed; right:var(--safe-x); top:calc(var(--safe-y) + 720*var(--wu) + 16*var(--wu)); z-index:6;
+    font:400 var(--t4)/1.3 var(--font-num); letter-spacing:.14em; text-transform:uppercase; color:var(--ink-2);
+    text-shadow:0 1px 5px rgba(0,0,0,.85); display:none; max-width:calc(1280*var(--wu)); text-align:right; }
+  body .instr.bl { bottom: calc(var(--band) + 120*var(--wu)); }
+  #pname { position:fixed; left:var(--safe-x); top:var(--safe-y); z-index:6;
+    font:italic 400 var(--t1)/1.1 Georgia, "Times New Roman", serif; color:var(--ink);
+    text-shadow:0 1px 5px rgba(0,0,0,.85), 0 0 18px rgba(0,0,0,.6); }
+</style>
+<link rel="stylesheet" href="wall.css">
+<script src="wall.js"></script>
+<script src="nav.js"></script>
+<script>document.write(['strata_engine.js','strata_view.js','race_planner.js','race_sim.js'].map(f=>'<script src="'+f+'?v='+Date.now()+'"><\/script>').join(''));</script>
+</head>
+<body>
+<canvas id="cv" width="1280" height="720"></canvas>
+<canvas id="ui"></canvas>
+<canvas id="chase" width="960" height="540"></canvas>
+<canvas id="heli" width="960" height="540"></canvas>
+<div id="chasecap"></div>
+<div id="pname">The Race</div>
+<div id="info"></div>
+<script>
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){ const here=(location.pathname.split('/').pop()||'kiosk.html'); let i=ROTATION.indexOf(here); if(i<0) i=0; location.href=ROTATION[(i+step+ROTATION.length)%ROTATION.length]; }
+const CONFIG = {
+  freezeStep: 600,        // erosion steps before the land is frozen (300,000 model years)
+  raceCell: 10,           // metres per erosion cell at the race scale
+  loop:{minLen:3200, maxLen:8000, targetLen:5000},   // 2-5 miles
+  gradeCap:0.12, slopeMax:0.7,
+  riders: 8, laps: 2,
+  timeScale: 4,           // race seconds per real second
+  rosterSec: 30,          // how long the cards stand
+  resultsSec: 45,         // the ranked cards at the end
+  mapSec: 40, heliSec: 30,  // the overview alternates: flat map, then the helicopter orbit
+  orbitSec: 490, vexag:1.8, fpsCap:8,
+  nextPage: '' /* standalone: nowhere to hand on to; start again */, holdMin:20,
+};
+const Q=new URLSearchParams(location.search), PINNED=Q.has('pin');
+let seed=Q.has('seed')?(Q.get('seed')|0):((Math.random()*1e9)|0);
+const SYNC_ACT=Q.has('act')?(Q.get('act')|0):0, SYNC_RACE=Q.has('race')?(+Q.get('race')):0, FORCE_HELI=Q.has('heli');
+const SELF=location.pathname.split('/').pop()||'race.html';
+
+/* ---- the ladder ---- */
+const TIER={t0:160,t1:80,t2:58,t3:44,t4:32,t5:26}, FLOOR={t0:56,t1:30,t2:22,t3:17,t4:13,t5:11};
+const TS=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ts'))||1;
+let DPR=1, WU=1, T=k=>0;
+function setTypeScale(){ DPR=devicePixelRatio||1; WU=(innerWidth/3840)*DPR; T=k=>Math.max(FLOOR[k]*DPR, TIER[k]*TS*WU); }
+const INK='rgba(240,246,253,.95)', INK2='rgba(210,224,242,.80)', WARM='rgba(255,226,176,.96)', PLATE='rgba(8,11,18,.70)', EDGE='rgba(255,255,255,.16)';
+const MONO='ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", monospace', UI='ui-sans-serif, system-ui, sans-serif';
+
+/* ---- state ---- */
+const cv=document.getElementById('cv'), ui=document.getElementById('ui'), uctx=ui.getContext('2d');
+const chaseCv=document.getElementById('chase'), cctx=chaseCv.getContext('2d'), chaseCap=document.getElementById('chasecap');
+const heliCv=document.getElementById('heli'), hctx=heliCv.getContext('2d');
+const view=StrataView.create(cv), chaseView=StrataView.create(chaseCv); let heliView=null;   // the helicopter canvas is sized to the map frame at race start
+let day=null, painter=null, heliOn=false, heliAt=0, prevPos=null, lastHeli=0, mapFrame=null;
+/* flash text goes over the upper part of the map, where nothing else lives */
+function flash(text){ const at=mapFrame?{x:(mapFrame.x+mapFrame.W/2)/DPR, y:(mapFrame.y+mapFrame.H*0.2)/DPR}:null; Wall.moment(text, at?{at,exact:true}:{}); }
+let w=null, act=0, t0=performance.now(), actAt=performance.now(), frozen=false, plan=null;
+let mapAlpha=0, revealed=0, worker=null, busy=false, planner=null;
+let trail=null, riders=null, race=null, fav=null, cam=null, director={subject:null,until:0,text:'',kind:''}, lastEvent=0;
+
+/* the erosion worker (as in strata.html) */
+function makeWorker(){
+  const body=`(${StrataFactory.toString()})(self); let w=null;
+    self.onmessage=(e)=>{ const m=e.data;
+      if(m.cmd==='new'){ w=Strata.makeWorld(m.seed); self.postMessage({cmd:'ready'}); }
+      else if(m.cmd==='step'&&w){ for(let i=0;i<m.n;i++) Strata.step(w); self.postMessage({cmd:'state', z:w.z.slice(0), rain:w.rain.slice(0), step:w.step, removed:w.removed}); } };`;
+  const wk=new Worker(URL.createObjectURL(new Blob([body],{type:'text/javascript'})));
+  wk.onmessage=(e)=>{ const m=e.data; if(m.cmd==='ready') busy=false; else if(m.cmd==='state'){ w.z.set(m.z); w.rain.set(m.rain); w.step=m.step; w.removed=m.removed; busy=false; } };
+  return wk;
+}
+/* the planner worker */
+function makePlanner(){
+  const body=`(${RacePlannerFactory.toString()})(self);
+    self.onmessage=(e)=>{ const m=e.data; const L=RacePlanner.loop(m.z,m.nx,m.ny,m.cell,m.opts); if(L){ delete L.P; } self.postMessage({cmd:'plan', L}); };`;
+  const wk=new Worker(URL.createObjectURL(new Blob([body],{type:'text/javascript'})));
+  wk.onmessage=(e)=>{ onPlan(e.data.L); };
+  return wk;
+}
+function raceZ(){ const s=CONFIG.raceCell/w.dx, z=new Float64Array(w.N); for(let i=0;i<w.N;i++) z[i]=w.z[i]*s; return z; }
+function planOpts(){ return Object.assign({seed:seed*7+1,tries:12,gradeCap:CONFIG.gradeCap,slopeMax:CONFIG.slopeMax},CONFIG.loop); }   // attempts per start line; each is tens of ms
+function onPlan(L){
+  plan=L; revealed=0;
+  if(!L){ Wall.lane('No rideable loop on this land. A new one folds.'); Wall.after(8000,()=>nextWorld()); return; }
+  Wall.lane('A '+(L.length/1000).toFixed(1)+' km loop with '+L.switchbacks+' switchbacks and '+Math.round(L.climb)+' m of climbing: grade capped at 12 %, cliffs off limits, so the trail zigzags where the ground is steep.');
+}
+function nextWorld(){ const next=(seed*1664525+1013904223)>>>0; if(PINNED) location.replace(SELF+'?pin&seed='+next); else newWorld(next); }
+
+function newWorld(s){
+  seed=s; w=Strata.makeWorld(seed); view.setWorld(w); frozen=false; plan=null; trail=null; riders=null; race=null; mapAlpha=0; revealed=0;
+  act=1; t0=actAt=performance.now(); cv.style.opacity='1'; chaseCv.style.display='none'; chaseCap.style.display='none';
+  Wall.clearEpisode(); Wall.clearTimers();
+  if(SYNC_ACT){
+    for(let i=0;i<CONFIG.freezeStep;i++) Strata.step(w); frozen=true;
+    if(SYNC_ACT>=2){ act=2; mapAlpha=1; cv.style.opacity='0'; onPlan(RacePlanner.loop(raceZ(),w.nx,w.ny,CONFIG.raceCell,planOpts())); revealed=1e9; }
+    if(SYNC_ACT>=3 && plan){ startRoster(); }
+    if(SYNC_ACT>=4 && plan){ startRace(); for(let t=0;t<SYNC_RACE;t+=0.1) RaceSim.step(race,0.1); direct(true); while(painter&&!painter.done) painter.paintRows(200); }
+    if(SYNC_ACT>=5 && plan){ while(!race.done && race.t<7200) RaceSim.step(race,0.1); race.resultsAt=performance.now(); showResults(); }
+  } else {
+    if(!worker) worker=makeWorker(); busy=true; worker.postMessage({cmd:'new',seed});
+    Wall.episode('First the land: folded beds, rained on for three hundred thousand years, then frozen. The race will be cut into this.');
+  }
+  Wall.every(100,tick);
+}
+function startRoster(){
+  act=3; actAt=performance.now(); riders=RaceSim.makeRiders(seed^0x5bd1e995,CONFIG.riders); fav=RaceSim.favourite(riders);
+  trail=RaceSim.buildTrail(plan,w,CONFIG.raceCell,2); day=RaceSim.makeDay(seed);
+  /* the crisp zoomed map is painted now, in chunks, while the cards stand */
+  const r=courseRect(); setTypeScale(); const SX=134*WU, floor=(200*TS+120)*WU, boxW=ui.width-2*SX-(1280+60)*WU, boxH=ui.height-floor-76*WU-T('t1')*1.4;
+  const sc=Math.min(boxW/r.w, boxH/r.h); painter=StrataView.mapPainter(view,r,Math.round(r.w*sc),Math.round(r.h*sc));
+  heliOn=false; heliAt=performance.now(); prevPos=null;
+  Wall.lane('Race day: '+day.label+'. Eight riders, each drawn at random: climb, sprint, sight, skill, nerve, stamina and heat.',{hold:12000});
+}
+/* two laps, three when the planner had to settle for a short loop (under 2 miles) */
+function lapsFor(){ return plan && plan.length<3200 ? 3 : CONFIG.laps; }
+function startRace(){
+  act=4; actAt=performance.now(); race=RaceSim.makeRace(trail,riders,lapsFor(),seed,day);
+  chaseView.setWorld(w); chaseCv.style.display='block'; chaseCap.style.display='block'; heliCv.style.display='block'; cam=null; lastEvent=0;
+  /* the helicopter canvas takes the map frame's aspect, about half a megapixel */
+  { const r=courseRect(); setTypeScale(); const SX=134*WU, floor=(200*TS+120)*WU, boxW=ui.width-2*SX-(1280+60)*WU, boxH=ui.height-floor-76*WU-T('t1')*1.4;
+    const sc=Math.min(boxW/r.w, boxH/r.h), fw=r.w*sc, fh=r.h*sc, cw=Math.round(Math.sqrt(520000*fw/fh)), chh=Math.round(520000/cw);
+    heliCv.width=cw; heliCv.height=chh; heliView=StrataView.create(heliCv); heliView.setWorld(w); }
+  heliOn=!!FORCE_HELI; heliAt=performance.now(); prevPos=race.riders.map(r=>r.pos);
+  Wall.lane((lapsFor()===3?'Three laps':'Two laps')+'. The start is the two-track, wide enough to sprint; after that the trail is one bike wide and passing needs a straight.',{hold:9000});
+}
+function tick(){
+  if(!w) return; const now=performance.now();
+  if(act===1){
+    if(!frozen){ if(!busy && w.step<CONFIG.freezeStep){ busy=true; worker.postMessage({cmd:'step',n:6}); }
+      if(w.step>=CONFIG.freezeStep){ frozen=true; actAt=now; Wall.lane('Frozen. Now the scale: one cell is '+CONFIG.raceCell+' m, the block '+(w.nx*CONFIG.raceCell/1000).toFixed(1)+' by '+(w.ny*CONFIG.raceCell/1000).toFixed(1)+' km - the slopes are the same, so the cliffs are still cliffs.'); } }
+    else if(now-actAt>9000){ act=2; actAt=now; if(!planner) planner=makePlanner(); planner.postMessage({z:raceZ(),nx:w.nx,ny:w.ny,cell:CONFIG.raceCell,opts:planOpts()}); }
+  }
+  else if(act===2){ mapAlpha=Math.min(1,(now-actAt)/1600); cv.style.opacity=String(1-mapAlpha); if(plan){ revealed+=0.4; if(revealed*40>plan.segs.reduce((a,s)=>a+s.explored.length,0)+plan.path.length*2+320) startRoster(); } }
+  else if(act===3){ if(now-actAt>CONFIG.rosterSec*1000) startRace(); }
+  else if(act===4){
+    if(!race.done && !race.resultsAt){ for(let i=0;i<CONFIG.timeScale;i++){ RaceSim.step(race,0.1); if(race.done) break; }
+      passes();
+      if(race.done || (race.finished>0 && race.t-race.riders.filter(r=>r.finish).reduce((a,r)=>Math.min(a,r.finish),1e9)>150)) race.resultsAt=now; }
+    else if(race.resultsAt && !race.resultsSaid){ showResults(); }
+    /* the overview alternates between the flat map and the helicopter */
+    if(!FORCE_HELI && now-heliAt>(heliOn?CONFIG.heliSec:CONFIG.mapSec)*1000){ heliOn=!heliOn; heliAt=now; }
+    heliCv.style.opacity=heliOn?'1':'0';
+    direct(false);
+  }
+  if(!PINNED && now-t0>CONFIG.holdMin*60000) handOff();
+}
+/* a change of order between two riders on the trail: flash it, and cut to it */
+function passes(){
+  const now=performance.now(); const R=race.riders;
+  for(const r of R){ const was=prevPos[r.i]; if(r.pos<was && r.status==='riding' && race.t>30){
+      const passed=R.find(o=>o.pos===r.pos+1); if(passed && passed.status==='riding' && Math.abs(passed.gapAhead)<12){
+        flash('#'+r.num+' '+r.name+' passes #'+passed.num);
+        director={subject:r,until:now+6000,kind:'pass',text:'#'+r.num+' '+r.name+' passes #'+passed.num+' '+passed.name}; } } }
+  prevPos=R.map(r=>r.pos);
+}
+/* the results: the cards again, ranked, with the tallies; then a new land */
+function showResults(){
+  race.resultsSaid=true; act=5; actAt=performance.now();
+  chaseCv.style.display='none'; chaseCap.style.display='none'; heliCv.style.display='none';
+  const p=race.riders.filter(r=>r.finish).sort((a,b)=>a.finish-b.finish);
+  Wall.lane(p.length?('#'+p[0].num+' '+p[0].name+' wins in '+clockStr(p[0].finish)+(p[1]?', #'+p[1].num+' '+p[1].name+' at +'+clockStr(p[1].finish-p[0].finish):'')+'. '+(race.out?race.out+' out over the edge. ':'')+'Calories and litres are what the day cost each rider.'):'Nobody finished.',{hold:16000});
+  Wall.after(CONFIG.resultsSec*1000,nextWorld);
+}
+function handOff(){ Wall.clearEpisode(); Wall.clearTimers(); document.body.style.transition='opacity 1400ms ease-in-out'; document.body.style.opacity='0'; setTimeout(()=>{ location.href=CONFIG.nextPage; },1500); }
+
+/* ---- the director: what the chase window shows, and what the lane says ---- */
+function direct(sync){
+  const now=performance.now(); const R=race.riders;
+  /* new events since last look */
+  for(let i=lastEvent;i<race.events.length;i++){ const e=race.events[i];
+    if(e.kind==='crash'){ director={subject:e.rider,until:now+7000,kind:'crash',text:'#'+e.rider.num+' '+e.rider.name+' down on the '+e.seg.bed}; if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' goes down on the '+e.seg.bed); }
+    else if(e.kind==='out'){ director={subject:e.rider,until:now+8000,kind:'out',text:'#'+e.rider.num+' '+e.rider.name+' over the edge · out'}; if(!sync) Wall.lane('#'+e.rider.num+' '+e.rider.name+' carries too much speed into the '+e.seg.bed+' and goes over the edge. Out of the race.'); }
+    else if(e.kind==='finish'&&e.place===1){ director={subject:e.rider,until:now+8000,kind:'finish',text:'#'+e.rider.num+' '+e.rider.name+' takes the win'}; }
+    else if(e.kind==='lap'&&e.rider.pos===1&&e.lap<race.laps){ if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' leads into lap '+(e.lap+1)); }
+  }
+  lastEvent=race.events.length;
+  if(now>director.until || !director.subject || director.subject.status==='out'||director.subject.status==='finished'){
+    /* the closest battle on the trail, else the leader */
+    const on=R.filter(r=>r.status==='riding'||r.status==='down').sort((a,b)=>a.pos-b.pos);
+    let best=null, bg=1e9;
+    for(let i=1;i<on.length;i++){ const g=(on[i-1].lap*trail.L+on[i-1].s)-(on[i].lap*trail.L+on[i].s); if(g<bg){ bg=g; best=on[i]; } }
+    if(best && bg<25){ director={subject:best,until:now+12000,kind:'battle',text:'#'+best.num+' '+best.name+' on the wheel of #'+on[on.indexOf(best)-1].num+' · '+bg.toFixed(0)+' m'}; }
+    else if(on.length){ const ld=on[0]; director={subject:ld,until:now+12000,kind:'leader',text:'#'+ld.num+' '+ld.name+' leads · lap '+(ld.lap+1)+' of '+race.laps}; }
+    else director={subject:null,until:now+5000,kind:'none',text:'the race is over'};
+  }
+  chaseCap.textContent=director.text;
+}
+
+/* ---- drawing ---- */
+let lastFrame=0;
+function frame(now){ if(now-lastFrame>=1000/CONFIG.fpsCap){ lastFrame=now; draw(now); } requestAnimationFrame(frame); }
+function draw(now){
+  setTypeScale();
+  if(ui.width!==Math.round(innerWidth*DPR)||ui.height!==Math.round(innerHeight*DPR)){ ui.width=Math.round(innerWidth*DPR); ui.height=Math.round(innerHeight*DPR); }
+  const W=ui.width, H=ui.height; uctx.clearRect(0,0,W,H);
+  if(!w) return;
+  if(act===1 || (act===2 && mapAlpha<1)) view.render(StrataView.orbitCamera(w,(now-t0)/1000,CONFIG.orbitSec),{vexag:CONFIG.vexag, rain:!frozen});
+  if(painter && !painter.done) painter.paintRows(act===3?90:40);     // the crisp map, a few rows a frame
+  if(act===2 || act===4){
+    const SX=134*WU, SY=76*WU, floor=(200*TS+120)*WU;
+    const right=act===4?(1280+60)*WU:0;                              // the right column: chase window + board
+    const box={x:SX, y:SY+T('t1')*1.4, W:W-2*SX-right, H:H-floor-SY-T('t1')*1.4};
+    uctx.globalAlpha=mapAlpha; uctx.fillStyle='#04060c'; uctx.fillRect(0,0,W,H);
+    /* in the race the map is zoomed to the course (Joe, 2026-09-08), crisp once painted */
+    let M;
+    if(act===4 && painter && painter.done){ const r=painter.src, sc=Math.min(box.W/r.w, box.H/r.h), px0=box.x+(box.W-r.w*sc)/2, py0=box.y+(box.H-r.h*sc)/2;
+      uctx.drawImage(painter.canvas,px0,py0,r.w*sc,r.h*sc); M={x0:px0-r.x0*sc, y0:py0-r.y0*sc, s:sc, frame:{x:px0,y:py0,W:r.w*sc,H:r.h*sc}}; }
+    else M=StrataView.drawMap(uctx,view,box,act===4?courseRect():null);
+    if(M && plan) drawCourse(M, act===4);
+    if(M && act===4) drawRiders(M);
+    if(M && act===4) placeHeli(M);
+    uctx.globalAlpha=1;
+  }
+  if(act===3) drawRoster(W,H,false);
+  if(act===5) drawRoster(W,H,true);
+  if(act===4){ drawChase(); if(heliOn||FORCE_HELI) drawHeli(now); drawBoard(W,H); }
+  drawInstrument();
+}
+const cellToMap=(M)=>{ const U=StrataView.U; return (x,y)=>[M.x0+x*U*M.s, M.y0+y*U*M.s]; };
+/* the course's bounding box in fine cells, with a margin, for the zoomed map */
+function courseRect(){
+  if(courseRect.c && courseRect.c.trail===trail) return courseRect.c.r;
+  const U=StrataView.U; let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const s of trail.S){ if(s.x<x0) x0=s.x; if(s.x>x1) x1=s.x; if(s.y<y0) y0=s.y; if(s.y>y1) y1=s.y; }
+  const mx=Math.max(6,(x1-x0)*0.12), my=Math.max(6,(y1-y0)*0.12);
+  const r={x0:(x0-mx)*U, y0:(y0-my)*U, w:(x1-x0+2*mx)*U, h:(y1-y0+2*my)*U};
+  courseRect.c={trail,r}; return r;
+}
+/* the course on the map: explored cells first, then the trail, then the start */
+function drawCourse(M, quiet){
+  const nx=w.nx, P=cellToMap(M), Pc=(c)=>{ const x=c%nx, y=(c-x)/nx; return P(x+0.5,y+0.5); };
+  const L=plan; let budget=quiet?0:revealed*40;
+  uctx.fillStyle='rgba(255,226,176,.35)';
+  for(const seg of L.segs){ for(let i=0;i<seg.explored.length && budget>0;i++,budget--){ const [x,y]=Pc(seg.explored[i]); uctx.fillRect(x-1.5*WU,y-1.5*WU,3*WU,3*WU); } }
+  const n=quiet?L.path.length:Math.min(L.path.length, Math.max(0,Math.floor((revealed*40-L.segs.reduce((a,s)=>a+s.explored.length,0))/2)));
+  if(n>1){
+    uctx.lineWidth=7*WU; uctx.lineJoin='round'; uctx.lineCap='round'; uctx.strokeStyle='rgba(0,0,0,.55)';
+    uctx.beginPath();
+    if(trail){ for(let i=0;i<trail.n;i+=2){ const [x,y]=P(trail.S[i].x,trail.S[i].y); if(i) uctx.lineTo(x,y); else uctx.moveTo(x,y); } uctx.closePath(); }
+    else for(let i=0;i<n;i++){ const [x,y]=Pc(L.path[i]); if(i) uctx.lineTo(x,y); else uctx.moveTo(x,y); }
+    uctx.stroke(); uctx.lineWidth=4*WU; uctx.strokeStyle=quiet?'rgba(255,226,176,.75)':WARM; uctx.stroke();
+  }
+  const [ax,ay]=Pc(L.start.cells[0]), [bx,by]=Pc(L.start.cells[1]);
+  uctx.lineWidth=16*WU; uctx.strokeStyle='rgba(240,246,253,.55)'; uctx.beginPath(); uctx.moveTo(ax,ay); uctx.lineTo(bx,by); uctx.stroke();
+  const U=StrataView.U, bar=500/CONFIG.raceCell*U*M.s, bx1=M.frame.x+M.frame.W-M.s*8, by0=M.frame.y+M.frame.H-T('t4')*1.2;
+  uctx.fillStyle=INK; uctx.fillRect(bx1-bar,by0,bar,3*WU);
+  uctx.font='400 '+T('t4')+'px '+MONO; uctx.textAlign='right'; uctx.textBaseline='bottom'; uctx.fillStyle=INK2;
+  uctx.shadowColor='rgba(0,0,0,.85)'; uctx.shadowBlur=T('t4')*0.35; uctx.fillText('500 M · ONE CELL IS '+CONFIG.raceCell+' M',bx1,by0-6*WU); uctx.shadowBlur=0;
+}
+function drawRiders(M){
+  const P=cellToMap(M);
+  for(const rd of race.riders.slice().sort((a,b)=>b.pos-a.pos)){
+    if(rd.status==='out') continue;
+    const p=RaceSim.place(trail,rd), [x,y]=P(p.x,p.y), r=(rd===director.subject?13:10)*WU;
+    uctx.beginPath(); uctx.arc(x,y,r,0,2*Math.PI); uctx.fillStyle=rd.color; uctx.fill();
+    uctx.lineWidth=2.5*WU; uctx.strokeStyle=rd.status==='down'?'rgba(255,60,60,.95)':'rgba(0,0,0,.8)'; uctx.stroke();
+    if(rd===director.subject){ uctx.beginPath(); uctx.arc(x,y,r+7*WU,0,2*Math.PI); uctx.lineWidth=2*WU; uctx.strokeStyle=WARM; uctx.stroke(); }
+  }
+}
+/* act 3: the cards; act 5: the same cards ranked by finish, with the tallies */
+function drawRoster(W,H,results){
+  const SX=134*WU, SY=76*WU, floor=(200*TS+260)*WU, top=SY+T('t1')*1.5, gap=28*WU;   // the lane needs the bottom band
+  const cols=4, rows=2, cw=(W-2*SX-(cols-1)*gap)/cols, ch=(H-floor-top-(rows-1)*gap)/rows;
+  const bars=[['climb',r=>(r.wkg-2.8)/2.0,r=>r.wkg.toFixed(1)+' W/kg'],['sprint',r=>(r.sprint-650)/600,r=>Math.round(r.sprint)+' W'],
+              ['reads the ground',r=>r.perception,null],['rides the limit',r=>r.execution,null],['dares',r=>r.nerve,null],['lasts',r=>(r.stamina-45)/65,null],['takes the heat',r=>r.heat,null]];
+  const list=results?race.riders.slice().sort((a,b)=>{ if(a.finish&&b.finish) return a.finish-b.finish; if(a.finish) return -1; if(b.finish) return 1; return a.pos-b.pos; }):riders;
+  list.forEach((rd,i)=>{
+    const x=SX+(i%cols)*(cw+gap), y=top+Math.floor(i/cols)*(ch+gap);
+    uctx.fillStyle=PLATE; roundRect(uctx,x,y,cw,ch,16*WU); uctx.fill(); uctx.strokeStyle=EDGE; uctx.lineWidth=WU; uctx.stroke();
+    const px=x+34*WU; let py=y+34*WU+T('t3');
+    uctx.fillStyle=rd.color; uctx.fillRect(px,py-T('t3')*0.8,T('t3')*0.8,T('t3')*0.8);
+    uctx.fillStyle=INK; uctx.font='300 '+T('t3')+'px '+UI; uctx.textAlign='left'; uctx.textBaseline='alphabetic';
+    uctx.fillText((results?(i+1)+'  ':'')+'#'+rd.num+'  '+rd.name,px+T('t3')*1.1,py);
+    uctx.font='400 '+T('t4')+'px '+MONO; uctx.fillStyle=INK2; uctx.textAlign='right';
+    uctx.fillText(results?(rd.finish?clockStr(rd.finish):rd.status==='out'?'OUT':'DNF'):Math.round(rd.kg)+' KG',x+cw-34*WU,py);
+    if(results){ const t=RaceSim.tally(rd); py+=T('t4')*1.5; uctx.textAlign='left'; uctx.fillStyle=WARM;
+      uctx.fillText(Math.round(t.kcal)+' KCAL · '+t.litres.toFixed(1)+' L SWEAT · '+Math.round(t.climbedFt)+' FT CLIMBED',px,py); py+=T('t4')*1.4;
+      uctx.fillText('PEAK CORE '+t.peakCore.toFixed(1)+' °C · '+rd.crashes+(rd.crashes===1?' CRASH':' CRASHES')+(rd.heatStops?' · '+rd.heatStops+' HEAT STOP'+(rd.heatStops>1?'S':''):''),px,py); }
+    py+=T('t4')*1.6;
+    const rowH=(ch-(py-y)-24*WU)/bars.length, bw=cw-68*WU;
+    for(const [k,fn,txt] of bars){
+      uctx.fillStyle=INK2; uctx.font='400 '+T('t4')+'px '+MONO; uctx.textAlign='left'; uctx.fillText(k.toUpperCase(),px,py+T('t4'));
+      if(txt){ uctx.textAlign='right'; uctx.fillText(txt(rd),px+bw,py+T('t4')); }
+      const v=Math.max(0.03,Math.min(1,fn(rd)));
+      uctx.fillStyle='rgba(255,255,255,.10)'; uctx.fillRect(px,py+T('t4')*1.35,bw,10*WU);
+      uctx.fillStyle=WARM; uctx.fillRect(px,py+T('t4')*1.35,bw*v,10*WU);
+      py+=rowH;
+    }
+  });
+}
+function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+
+/* act 4: the board under the chase window - position, gap, and a live line per rider */
+const clockStr=(t)=>Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');
+function drawBoard(W,H){
+  const SX=134*WU, SY=76*WU, floor=(200*TS+120)*WU;
+  const x=W-SX-1280*WU, y=SY+720*WU+16*WU+T('t4')*1.9, bw=1280*WU, bh=H-floor-y;
+  const L=trail.L, ld=race.riders.find(r=>r.pos===1), rows=race.riders.slice().sort((a,b)=>a.pos-b.pos);
+  uctx.fillStyle=PLATE; roundRect(uctx,x,y,bw,bh,16*WU); uctx.fill(); uctx.strokeStyle=EDGE; uctx.lineWidth=WU; uctx.stroke();
+  const px=x+30*WU, rowH=(bh-52*WU-T('t4')*1.6)/rows.length; let py=y+26*WU;
+  uctx.font='400 '+T('t4')+'px '+MONO; uctx.fillStyle=INK2; uctx.textAlign='left'; uctx.textBaseline='top';
+  uctx.fillText(clockStr(race.t)+' · LAP '+Math.min(race.laps,(ld?ld.lap:0)+1)+' OF '+race.laps+' · '+Math.round(day.tempC)+' °C · '+Math.round(day.rh*100)+' % RH · SUN '+Math.round(day.sun)+' W/M²',px,py);
+  py+=T('t4')*1.6;
+  for(const r of rows){
+    const sub=r===director.subject;
+    if(sub){ uctx.fillStyle='rgba(255,226,176,.10)'; uctx.fillRect(x+10*WU,py-4*WU,bw-20*WU,rowH-2*WU); }
+    uctx.fillStyle=r.color; uctx.fillRect(px,py+T('t3')*0.12,T('t3')*0.62,T('t3')*0.62);
+    uctx.fillStyle=r.status==='out'?INK2:INK; uctx.font='300 '+T('t3')+'px '+UI; uctx.textAlign='left'; uctx.textBaseline='top';
+    uctx.fillText(r.pos+'  #'+r.num+' '+r.name,px+T('t3')*0.95,py);
+    let gap; if(r.status==='out') gap='out'; else if(r.finish) gap=clockStr(r.finish); else if(r.pos===1) gap='leads'; else gap='−'+Math.round((ld.lap*L+ld.s)-(r.lap*L+r.s))+' m';
+    uctx.font='300 '+T('t3')+'px '+MONO; uctx.textAlign='right'; uctx.fillText(gap,x+bw-30*WU,py);
+    /* the live line */
+    let live;
+    if(r.status==='out') live='over the edge on the '+(r.seg?r.seg.bed:'trail');
+    else if(r.finish) live='finished · '+r.crashes+(r.crashes===1?' crash':' crashes');
+    else if(r.status==='down') live='down on the '+(r.seg?r.seg.bed:'trail')+' · up in '+Math.ceil(r.down)+' s';
+    else live=(r.v*3.6).toFixed(0)+' km/h · '+Math.round(r.P||0)+' W · '+Math.round(100*r.E/r.E0)+' % · '+r.core.toFixed(1)+'° · '+(r.mode||'')+(r.seg?' · '+r.seg.bed:'');
+    uctx.font='400 '+T('t4')+'px '+MONO; uctx.fillStyle=INK2; uctx.textAlign='left';
+    uctx.fillText(live,px+T('t3')*0.95,py+T('t3')*1.15);
+    py+=rowH;
+  }
+}
+/* act 4: the chase window - the ray-marcher behind the director's subject */
+function groundZ(x,y){ const nx=w.nx, xi=Math.max(0,Math.min(nx-2,x|0)), yi=Math.max(0,Math.min(w.ny-2,y|0)), fx=x-xi, fy=y-yi, c=yi*nx+xi;
+  return (w.z[c]*(1-fx)+w.z[c+1]*fx)*(1-fy)+(w.z[c+nx]*(1-fx)+w.z[c+nx+1]*fx)*fy; }
+function drawChase(){
+  const sub=director.subject; if(!sub){ return; }
+  const p=RaceSim.place(trail,sub);
+  /* behind the rider along the trail, above the ground, looking down at them */
+  const back=4.5, hx=Math.cos(p.heading), hy=Math.sin(p.heading);
+  const want={x:p.x-back*hx, y:p.y-back*hy};
+  want.z=Math.max(groundZ(want.x,want.y)+30, p.zE+55);
+  want.yaw=Math.atan2(p.y-want.y,p.x-want.x); want.pitch=Math.atan((want.z-p.zE)/(back*w.dx))*0.75;
+  if(!cam) cam=Object.assign({},want);
+  else { const k=0.18; cam.x+=(want.x-cam.x)*k; cam.y+=(want.y-cam.y)*k; cam.z+=(want.z-cam.z)*k; let dy=want.yaw-cam.yaw; dy=Math.atan2(Math.sin(dy),Math.cos(dy)); cam.yaw+=dy*k; cam.pitch+=(want.pitch-cam.pitch)*k; }
+  if(!drawChase.tex) drawChase.tex=w.layers.map(l=>RaceSim.BED[l.type].rough);
+  chaseView.render(cam,{vexag:1.0,rain:false,tex:drawChase.tex});
+  const RW=chaseCv.width, RH=chaseCv.height, f=(Math.max(RW,RH)/2)/Math.tan(StrataView.FOV/2), horizon=RH/2-f*Math.tan(cam.pitch);
+  const proj=(X,Y,Z)=>{ const dx=X-cam.x, dy=Y-cam.y; let rel=Math.atan2(dy,dx)-cam.yaw; rel=Math.atan2(Math.sin(rel),Math.cos(rel)); if(Math.abs(rel)>1.1) return null;
+    const dp=Math.hypot(dx,dy)*Math.cos(rel)*w.dx; if(dp<w.dx*0.6) return null; return {x:RW/2+f*Math.tan(rel), y:horizon-f*(Z-cam.z)/dp, dp}; };
+  /* the trail ahead as a ribbon: coloured by the bed under it (lightened), solid
+     on slickrock, dashed where the rock is loose, wider as it comes closer */
+  const i0=((Math.floor(sub.s/trail.ds)%trail.n)+trail.n)%trail.n;
+  cctx.lineJoin='round'; cctx.lineCap='round';
+  let prev=null;
+  for(let k=-12;k<140;k+=2){ const s=trail.S[((i0+k)%trail.n+trail.n)%trail.n]; const q=proj(s.x,s.y,s.zE+1.5);
+    if(!q||!prev){ prev=q; continue; }
+    const c=s.color, lw=Math.max(1.5,Math.min(14,1400/q.dp));
+    cctx.strokeStyle='rgba('+Math.min(255,c[0]+70)+','+Math.min(255,c[1]+70)+','+Math.min(255,c[2]+60)+',.85)'; cctx.lineWidth=lw;
+    cctx.setLineDash(s.rough>0.4?[lw*1.2,lw*1.0]:[]);
+    cctx.beginPath(); cctx.moveTo(prev.x,prev.y); cctx.lineTo(q.x,q.y); cctx.stroke(); prev=q; }
+  cctx.setLineDash([]);
+  /* riders, far first */
+  const list=race.riders.filter(r=>r.status!=='out').map(r=>{ const pp=RaceSim.place(trail,r); return {r,q:proj(pp.x,pp.y,pp.zE+4)}; }).filter(o=>o.q).sort((a,b)=>b.q.dp-a.q.dp);
+  for(const {r,q} of list){ const rad=Math.max(3,Math.min(34,7000/q.dp));
+    if(r.mode==='braking' && r.status==='riding'){ cctx.beginPath(); cctx.arc(q.x,q.y,rad*1.35,0,2*Math.PI); cctx.fillStyle='rgba(255,70,50,.45)'; cctx.fill(); }   // brake light
+    cctx.beginPath(); cctx.arc(q.x,q.y,rad,0,2*Math.PI); cctx.fillStyle=r.color; cctx.fill(); cctx.lineWidth=2; cctx.strokeStyle=r.status==='down'?'rgba(255,60,60,.95)':'rgba(0,0,0,.8)'; cctx.stroke();
+    if(rad>8){ cctx.fillStyle='#000'; cctx.font='700 '+Math.round(rad*1.1)+'px '+UI; cctx.textAlign='center'; cctx.textBaseline='middle'; cctx.fillText(String(r.num),q.x,q.y); }
+    if(r.status==='down'){ cctx.strokeStyle='rgba(255,60,60,.95)'; cctx.lineWidth=3; cctx.beginPath(); cctx.moveTo(q.x-rad*1.5,q.y-rad*1.5); cctx.lineTo(q.x+rad*1.5,q.y+rad*1.5); cctx.moveTo(q.x+rad*1.5,q.y-rad*1.5); cctx.lineTo(q.x-rad*1.5,q.y+rad*1.5); cctx.stroke(); } }
+  /* the physics strip: the followed rider's moment, across the bottom of the window.
+     The chase canvas is 960 wide for 1280 wall px, so type is the ladder x 0.75 */
+  const sg=sub.seg||trail.S[i0], k4=Math.round(T('t4')*0.75/DPR), sh=k4*4.6;
+  cctx.fillStyle='rgba(8,11,18,.72)'; cctx.fillRect(0,RH-sh,RW,sh);
+  cctx.font='400 '+k4+'px '+MONO; cctx.textBaseline='middle'; cctx.textAlign='left';
+  const pct=(v)=>(v*3.6).toFixed(0);
+  const line1='#'+sub.num+' '+sub.name.toUpperCase()+' · '+(sub.mode||'').toUpperCase()+' · '+(sg.grade>0?'+':'')+Math.round(sg.grade*100)+' % · '+sg.bed.toUpperCase()+(sg.rough>0.4?' LOOSE':' GRIPPY')+' μ'+sg.mu.toFixed(2)+(sg.exposed?' · EDGE':'');
+  const line2=(sub.status==='riding'?('LIMIT '+pct(sub.vlim||sg.vlim)+' · SEES '+pct(sub.perceived||sg.vlim)+' · AT '+pct(sub.v)+' KM/H · '+Math.round(sub.P||0)+'/'+Math.round(sub.wkg*sub.kg)+' W · '+Math.round(100*sub.E/sub.E0)+' % LEFT'):
+               sub.status==='down'?('DOWN · UP IN '+Math.ceil(sub.down)+' S · ENERGY '+Math.round(100*sub.E/sub.E0)+' %'):sub.status.toUpperCase());
+  const line3='CLIMB '+Math.round(sub.climbed*3.281)+' FT · CORE '+sub.core.toFixed(1)+'° · SWEAT '+sub.sweat.toFixed(1)+' L/H · LOST '+sub.water.toFixed(1)+' L';
+  cctx.fillStyle='rgba(240,246,253,.95)'; cctx.fillText(line1,16,RH-sh*0.78);
+  cctx.fillStyle='rgba(210,224,242,.80)'; cctx.fillText(line2,16,RH-sh*0.50); cctx.fillText(line3,16,RH-sh*0.22);
+}
+/* the helicopter: the ray-marcher orbiting the course, laid over the map box */
+function placeHeli(M){ const f=M.frame; mapFrame=f; heliCv.style.left=(f.x/DPR)+'px'; heliCv.style.top=(f.y/DPR)+'px'; heliCv.style.width=(f.W/DPR)+'px'; heliCv.style.height=(f.H/DPR)+'px'; }
+function drawHeli(now){
+  if(now-lastHeli<200) return; lastHeli=now;                           // 5 fps is plenty for a slow orbit
+  const r=courseRect(), U=StrataView.U, cx=(r.x0+r.w/2)/U, cy=(r.y0+r.h/2)/U, ext=Math.max(r.w,r.h)/U;
+  const a=((now-actAt)/1000)/150*2*Math.PI, rad=0.75*ext+12;
+  let zmax=-1e9, zmean=0, n=0; for(let i=0;i<trail.n;i+=8){ const e=trail.S[i].zE; if(e>zmax) zmax=e; zmean+=e; n++; } zmean/=n;
+  const hc={x:cx+rad*Math.cos(a), y:cy+rad*Math.sin(a)}; hc.z=zmax+rad*w.dx*0.55; hc.yaw=Math.atan2(cy-hc.y,cx-hc.x); hc.pitch=Math.atan((hc.z-zmean)/(rad*w.dx))*(heliCv.height>heliCv.width?0.98:0.85);   // a tall frame looks down more
+  heliView.render(hc,{vexag:1.0,rain:false,tex:drawChase.tex});
+  const RW=heliCv.width, RH=heliCv.height, f=(Math.max(RW,RH)/2)/Math.tan(StrataView.FOV/2), horizon=RH/2-f*Math.tan(hc.pitch);
+  const proj=(X,Y,Z)=>{ const dx=X-hc.x, dy=Y-hc.y; let rel=Math.atan2(dy,dx)-hc.yaw; rel=Math.atan2(Math.sin(rel),Math.cos(rel)); if(Math.abs(rel)>1.1) return null;
+    const dp=Math.hypot(dx,dy)*Math.cos(rel)*w.dx; if(dp<w.dx*0.6) return null; return {x:RW/2+f*Math.tan(rel), y:horizon-f*(Z-hc.z)/dp, dp}; };
+  hctx.lineWidth=2.5; hctx.strokeStyle='rgba(255,226,176,.8)'; hctx.lineJoin='round'; hctx.beginPath(); let started=false;
+  for(let i=0;i<=trail.n;i+=3){ const s=trail.S[i%trail.n]; const q=proj(s.x,s.y,s.zE+1); if(!q){ started=false; continue; } if(started) hctx.lineTo(q.x,q.y); else { hctx.moveTo(q.x,q.y); started=true; } }
+  hctx.stroke();
+  for(const rd of race.riders){ if(rd.status==='out') continue; const p=RaceSim.place(trail,rd), q=proj(p.x,p.y,p.zE+3); if(!q) continue;
+    hctx.beginPath(); hctx.arc(q.x,q.y,rd===director.subject?9:7,0,2*Math.PI); hctx.fillStyle=rd.color; hctx.fill(); hctx.lineWidth=1.5; hctx.strokeStyle='rgba(0,0,0,.8)'; hctx.stroke(); }
+}
+/* the instrument: bottom-left, one plate */
+function drawInstrument(){
+  const clock=(t)=>Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');
+  let spec;
+  if(act===1) spec={place:'bl',cols:1,rows:[{k:'elapsed',v:Math.round(w.step*w.P.dt/1000)+' thousand years'},{k:'rock removed',v:Math.round(100*w.removed)+' %'},{k:'land',v:frozen?'frozen':'eroding'}]};
+  else if(act===2) spec=plan?{place:'bl',cols:1,rows:[{k:'course',v:(plan.length/1000).toFixed(1)+' km · '+lapsFor()+' laps'},{k:'climbing',v:Math.round(plan.climb)+' m · '+plan.switchbacks+' switchbacks'},{k:'scale',v:'one cell is '+CONFIG.raceCell+' m'}]}
+                             :{place:'bl',cols:1,rows:[{k:'course',v:'searching…'},{k:'rules',v:'grade ≤ 12 % · no cliffs'}]};
+  else if(act===3 || act===5) spec=null;                             // the cards are the instrument
+  else spec=null;                                                    // act 4: the board on the right does this job
+  Wall.instrument(spec);
+  if(document.body.classList.contains('showinfo')) updateInfo();
+}
+const infoEl=document.getElementById('info');
+function updateInfo(){
+  infoEl.textContent=`seed ${seed}  act ${act}  step ${w.step}  frozen ${frozen}  scale ${CONFIG.raceCell} m/cell  x${CONFIG.timeScale} time\n`+
+    (plan?`loop ${plan.length.toFixed(0)} m, ${plan.path.length} cells, ${plan.switchbacks} hairpins, climb ${plan.climb.toFixed(0)} m, reachable ${plan.reachable}\n`:'no plan\n')+
+    (race?`race t ${race.t.toFixed(0)} s  finished ${race.finished}  out ${race.out}  events ${race.events.length}  director ${director.kind}\n`+race.riders.map(r=>`#${r.num} ${r.name.padEnd(10)} ${r.status.padEnd(8)} pos ${r.pos} lap ${r.lap} s ${r.s.toFixed(0)} v ${(r.v*3.6).toFixed(0)} km/h E ${(100*r.E/r.E0).toFixed(0)}% crashes ${r.crashes}`).join('\n')+'\n':'')+
+    `keys: n new land · i info · arrows change page`;
+}
+addEventListener('keydown',(e)=>{ switch(e.key){ case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+  case 'n': case 'N': newWorld((Math.random()*1e9)|0); break; case 'ArrowRight': rotateTo(1); break; case 'ArrowLeft': rotateTo(-1); break; } });
+newWorld(seed); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
