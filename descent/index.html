@@ -2290,7 +2290,22 @@ function drawCountdown(){
 /* =========================== main loop ================================== */
 let paused=false, last=performance.now();
 const TS = Q.get('ts')? +Q.get('ts') : 1;
+/* THE LOOP IS KEPT ALIVE THROUGH A THROW. The comment on runDeadline says it:
+   anything that throws inside the frame body takes the requestAnimationFrame
+   chain down with it, and the wall parks on a frozen still until the eleven
+   minute backstop fires. That is not a hypothetical - it happened, on the
+   television, for the whole of a finish card (see the ticker note below). So
+   the body is wrapped: a throw is reported once and the next frame is asked
+   for anyway, which keeps the hand-off reachable. The backstop stays as the
+   last resort for a loop that cannot draw at all. */
 function frame(now){
+  try { frameBody(now); }
+  catch(err){
+    if(!frame.warned){ frame.warned=true; console.error('[descent] frame() threw; keeping the loop alive so the run can still hand on', err); }
+    requestAnimationFrame(frame);
+  }
+}
+function frameBody(now){
   const dtReal=Math.min(.1,(now-last)/1000); last=now;
   const dt=paused?0:dtReal*TS;
   RUN.frame++; RUN.dtFrame=dtReal;
@@ -2312,8 +2327,13 @@ function frame(now){
     updateCamera(dtReal);
     updateTicker(dtReal);
     if (SIM.done){ RUN.state='finish'; RUN.finishAt=RUN.clock; showFinishCard();
-      document.querySelector('#ticker .act').textContent='';
-      document.querySelector('#ticker .why').textContent='';
+      /* THE TICKER IS GONE (it became the Moments above), and these two lines
+         used to clear it. querySelector returned NULL, the assignment threw,
+         and because the throw happened in the frame that starts the finish
+         card, requestAnimationFrame was never scheduled again: the wall FROZE
+         on the finish still for the eleven minutes until runDeadline rescued
+         it. Measured on the television 2026-09-10 (frame counter stuck at
+         5667, RUN.state 'finish'); Joe saw it live. Nothing to clear now. */
       console.log(`[descent] finished ${fmtTime(SIM.time)}  avg ${(SIM.distance/SIM.time*3.6).toFixed(1)} km/h  slides ${SIM.slides}`);
     }
   } else if (RUN.state==='finish'){
@@ -2326,7 +2346,13 @@ function frame(now){
         if (CONFIG.nextPage) location.href=CONFIG.nextPage; else location.reload();
         return;
       }
-      setTimeout(()=>newRun(), 60);
+      /* ONCE. This branch runs on EVERY frame while the finish card stands,
+         so an unguarded schedule queued a fresh newRun() sixty times a second
+         and the pinned preview restarted itself dozens of times instead of
+         riding (measured 2026-09-10: one completed run in seven minutes).
+         The wall never saw it - it navigates away above - but the preview is
+         how the page gets watched. */
+      if (!RUN.reseeding){ RUN.reseeding=true; setTimeout(()=>newRun(), 60); }
     }
   }
 
