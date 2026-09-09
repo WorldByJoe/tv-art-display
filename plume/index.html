@@ -1216,7 +1216,9 @@ function newAct(){
   }
   /* the nearest OTHER leak, and its size: Joe's hypothesis is that a plume
      overlapping a neighbour's can hide a leak, so the table keeps both */
-  sources.forEach((a,i)=>{ let bd=Infinity, bs=0; sources.forEach((b,j)=>{ if(i===j) return; const d=Math.hypot(a.x-b.x,a.y-b.y)*mPerPx; if(d<bd){ bd=d; bs=b.slpm; } }); a.nearM=bd; a.nearSlpm=bs; });
+  sources.forEach((a,i)=>{ let bd=Infinity, bs=0; sources.forEach((b,j)=>{ if(i===j) return; const d=Math.hypot(a.x-b.x,a.y-b.y)*mPerPx; if(d<bd){ bd=d; bs=b.slpm; } }); a.nearM=bd; a.nearSlpm=bs;
+    a.upwindSec=0; a.peakPpm=0; a.road=nearestRoad(a.x,a.y); });
+  sources.slice().sort((a,b)=>b.slpm-a.slpm).forEach((a,r)=>a.rank=r+1);   // 1 = the biggest leak of this survey
   act._nLeaks=nLeaks;
   act._slpmTotal=sources.reduce((a,b)=>a+b.slpm,0);
   act._slpmMin=Math.min(...sources.map(s=>s.slpm));
@@ -1265,6 +1267,9 @@ function newAct(){
   for(let i=1;i<car.route.length;i++){
     if(car.route.jumpTo && car.route.jumpTo[i]) continue;
     routeLenM+=Math.hypot(car.route[i].x-car.route[i-1].x, car.route[i].y-car.route[i-1].y)*mPerPx;
+  /* the drive's closest approach to each leak - a set-back leak whose street
+     is not on the route is a different case from one the car passes */
+  for(const src of sources){ let bd=Infinity; for(const q of car.route){ const d=Math.hypot(q.x-src.x,q.y-src.y); if(d<bd) bd=d; } src.approachM=bd*mPerPx; }
   }
   const simSecs=routeLenM/CONFIG.carSpeedMs;
   /* Guard the degenerate case: a route that measures near zero would divide
@@ -1657,6 +1662,7 @@ function stepCar(dt){
     const det=ppm>CONFIG.detectPpm;
     if(det){ detections++; inPlumeSamples++; }
     trackEncounter(ppm,det,car.x,car.y);
+    for(const src of sources) if(ppm>src.peakPpm && Math.hypot(car.x-src.x,car.y-src.y)*mPerPx<=60) src.peakPpm=ppm;   // the strongest reading near each leak
     deposit(car.x,car.y,ppm,det);
   }
 }
@@ -2221,8 +2227,12 @@ function draw(){
 let leakDb=[], latestRecs=[], leakDbFrom='';
 function recordSurvey(){
   const sc=survey(), runId=Date.now().toString(36);
-  latestRecs=sources.map((src,i)=>({ run:runId, place:hood?hood.name:'', city:hood?hood.city:'', act:act.key,
-    wind:+act.windMean.toFixed(1), stability:act.stability, passes:act.passes, nLeaks:sources.length,
+  const client=new URLSearchParams(location.search).get('client')||'wall';
+  const totalSlpm=sources.reduce((a,b)=>a+b.slpm,0);
+  latestRecs=sources.map((src,i)=>({ run:runId, client, place:hood?hood.name:'', city:hood?hood.city:'', act:act.key,
+    windNominal:+act.windMean.toFixed(1), wind:+windMeanSpeed.toFixed(2), meander:act.meanderSd, stability:act.stability, passes:act.passes,
+    nLeaks:sources.length, totalSlpm:+totalSlpm.toFixed(2), rank:src.rank, routeM:Math.round(routeLenM),
+    approachM:+src.approachM.toFixed(1), upwindFrac:simClock>0?+(src.upwindSec/simClock).toFixed(3):null, peakPpm:+src.peakPpm.toFixed(3),
     slpm:+src.slpm.toFixed(3), roadM:+src.roadM.toFixed(1), far:!!src.far,
     found:!!sc.per[i].found, via:sc.per[i].via||(sc.per[i].found?'direct':'missed'),
     errM:isFinite(sc.per[i].dist)?+sc.per[i].dist.toFixed(1):null,
@@ -2257,7 +2267,7 @@ function drawDetectionCurve(){
   const MONO='ui-monospace, Menlo, monospace', UI='ui-sans-serif, system-ui, sans-serif';
   const pw=W*0.60, ph=H*0.68, px0=(W-pw)/2-W*0.06, py0=H*0.12;
   ctx.save();
-  ctx.fillStyle='rgba(8,11,18,.88)'; ctx.strokeStyle='rgba(255,255,255,.16)'; ctx.lineWidth=WU;
+  ctx.fillStyle='rgba(44,47,52,.96)'; ctx.strokeStyle='rgba(255,255,255,.22)'; ctx.lineWidth=WU;   // dark grey, not the map's near-black (Joe)
   ctx.beginPath(); ctx.roundRect(px0,py0,pw,ph,16*WU); ctx.fill(); ctx.stroke();
   const db=leakDb.length?leakDb:latestRecs, runs=new Set(db.map(r=>r.run)).size;
   const pts=db.filter(r=>r.slpm>0).map(r=>({x:Math.log10(r.slpm),y:r.found?1:0,c:Math.log10(Math.max(1,r.roadM||1)),latest:latestRecs.some(l=>l.run===r.run&&l.slpm===r.slpm&&l.roadM===r.roadM)}));
@@ -2352,6 +2362,11 @@ function frame(now){
   }
   simClock+=dt;
   stepWind(dt);
+  /* how much of the survey each leak spent UPWIND of its own bit of road,
+     i.e. blowing toward the street the car drives (the wind blows toward
+     (cos, sin) of windDir, as the puffs do) */
+  if(!finishedAt){ const cw=Math.cos(windDir), sw=Math.sin(windDir);
+    for(const src of sources){ if(src.road && (src.road[0]-src.x)*cw+(src.road[1]-src.y)*sw>0) src.upwindSec+=dt; } }
   releaseAndAdvect(dt);
   /* The car waits a beat at the kerb so the viewer sees the plumes
      establish - what the survey is up against - before mapping starts. */
