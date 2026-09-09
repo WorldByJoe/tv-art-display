@@ -74,8 +74,9 @@ function rotateTo(step){
   location.href=ROTATION[(i+step+ROTATION.length)%ROTATION.length];
 }
 const CONFIG = {
-  holdMin: 9,             // minutes on the wall before handing off
-  nextPage: '' /* standalone: nowhere to hand on to; start again */, // back to the mosaic; strata is the ring's last stop (2026-09-05)
+  holdMin: 12,            // NOT the pacing - one landscape is runMin (7) plus a
+                          // closing sentence. This is the deadline for a stalled run.
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,  // on to the race, which is cut into a landscape like this one (2026-09-10)
   runMin: 7,              // every landscape runs this long (Joe: 5-10 min is right) - erosion is
                           // PACED against the clock so a soft world does not finish in a minute
   target: 0.66,           // fraction of the rock the pacing aims to have removed by the end
@@ -147,8 +148,11 @@ function tick(){
     /* Pinned as the sole page, the page RELOADS itself with the next seed
        rather than reseeding in place: the wall's watchdog restarts any page
        whose URL has not changed in 25 min, and a fresh URL every 7 keeps it
-       quiet (and the tab memory-fresh). In the ring it reseeds in place. */
-    Wall.after(12000,()=>{ if(PINNED) location.replace(SELF+'?pin&seed='+next); else newWorld(next); });
+       quiet (and the tab memory-fresh). In the ring it HANDS ON instead:
+       one landscape is the show, and the wall advances when it is over. */
+    Wall.after(12000,()=>{ if(PINNED) location.replace(SELF+'?pin&seed='+next);
+                           else if(CONFIG.nextPage) handOff();      // in the ring: the landscape is done, so hand on
+                           else newWorld(next); });
   }
   if(!PINNED && CONFIG.nextPage && performance.now()-startedAt>CONFIG.holdMin*60000) handOff();
 }

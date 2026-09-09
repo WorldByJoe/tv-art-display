@@ -83,7 +83,9 @@ const CONFIG = {
   resultsSec: 45,         // the ranked cards at the end
   mapSec: 40, heliSec: 30,  // the overview alternates: flat map, then the helicopter orbit
   orbitSec: 490, vexag:1.8, fpsCap:8,
-  nextPage: '' /* standalone: nowhere to hand on to; start again */, holdMin:20,
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,  // back to the mosaic when the race is over
+  holdMin:20,             // NOT the pacing - a full show runs ~11 min. This is the
+                          // deadline for a show that has somehow stalled.
 };
 const Q=new URLSearchParams(location.search), PINNED=Q.has('pin');
 let seed=Q.has('seed')?(Q.get('seed')|0):((Math.random()*1e9)|0);
@@ -193,7 +195,7 @@ function tick(){
     heliCv.style.opacity=heliOn?'1':'0';
     direct(false);
   }
-  if(!PINNED && now-t0>CONFIG.holdMin*60000) handOff();
+  if(!PINNED && now-t0>CONFIG.holdMin*60000) handOff();     // the stalled-show deadline; the normal exit is showResults()
 }
 /* a change of order between two riders on the trail: flash it, and cut to it */
 function passes(){
@@ -210,7 +212,10 @@ function showResults(){
   chaseCv.style.display='none'; chaseCap.style.display='none'; heliCv.style.display='none';
   const p=race.riders.filter(r=>r.finish).sort((a,b)=>a.finish-b.finish);
   Wall.lane(p.length?('#'+p[0].num+' '+p[0].name+' wins in '+clockStr(p[0].finish)+(p[1]?', #'+p[1].num+' '+p[1].name+' at +'+clockStr(p[1].finish-p[0].finish):'')+'. '+(race.out?race.out+' out over the edge. ':'')+'Calories and litres are what the day cost each rider.'):'Nobody finished.',{hold:16000});
-  Wall.after(CONFIG.resultsSec*1000,nextWorld);
+  /* THE SHOW IS OVER, SO LEAVE (Joe, 2026-09-10: the wall should advance on
+     COMPLETION, not on a clock). In the ring the page hands on as soon as the
+     results cards have had their time; pinned, it folds a new land instead. */
+  Wall.after(CONFIG.resultsSec*1000,()=>{ if(!PINNED && CONFIG.nextPage) handOff(); else nextWorld(); });
 }
 function handOff(){ Wall.clearEpisode(); Wall.clearTimers(); document.body.style.transition='opacity 1400ms ease-in-out'; document.body.style.opacity='0'; setTimeout(()=>{ location.href=CONFIG.nextPage; },1500); }
 
