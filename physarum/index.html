@@ -352,7 +352,7 @@ function handOff() {
   /* An EMPTY nextPage means there is nowhere to hand on to - which is what
      build_github.py leaves behind when it cuts this page out of the wall's
      rotation for publishing. Start again instead. */
-  setTimeout(() => { if (CONFIG.nextPage) location.href = CONFIG.nextPage;
+  setTimeout(() => { if (CONFIG.nextPage) location.href = Wall.nextPage(CONFIG.nextPage);
                      else location.reload(); }, CONFIG.fadeMs);
 }
 
@@ -363,7 +363,7 @@ function frame(now) {
   if (paused || handingOff) return;
 
   if (now - startedAt > CONFIG.holdMs) {
-    if (!PINNED && speciesIndex + 1 >= CONFIG.speciesPerTurn) { handOff(); return; }
+    if (!PINNED && speciesIndex + 1 >= Wall.repeats(CONFIG.speciesPerTurn)) { handOff(); return; }
     newSpecies();
   }
   stepAgents();

@@ -1005,7 +1005,7 @@ function handOff(){
   /* An EMPTY nextPage means there is nowhere to hand on to - which is what
      build_github.py leaves behind when it cuts this page out of the wall's
      rotation for publishing. Start again instead. */
-  setTimeout(()=>{ if(CONFIG.nextPage) location.href=CONFIG.nextPage;
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=Wall.nextPage(CONFIG.nextPage);
                    else location.reload(); },CONFIG.fadeMs);
 }
 

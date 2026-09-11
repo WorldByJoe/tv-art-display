@@ -233,7 +233,7 @@ function showResults(){
      results cards have had their time; pinned, it folds a new land instead. */
   Wall.after(CONFIG.resultsSec*1000,()=>{ if(!PINNED && CONFIG.nextPage) handOff(); else nextWorld(); });
 }
-function handOff(){ Wall.clearEpisode(); Wall.clearTimers(); document.body.style.transition='opacity 1400ms ease-in-out'; document.body.style.opacity='0'; setTimeout(()=>{ location.href=CONFIG.nextPage; },1500); }
+function handOff(){ Wall.clearEpisode(); Wall.clearTimers(); document.body.style.transition='opacity 1400ms ease-in-out'; document.body.style.opacity='0'; setTimeout(()=>{ location.href=Wall.nextPage(CONFIG.nextPage); },1500); }
 
 /* ---- the director: what the chase window shows, and what the lane says ---- */
 function direct(sync){

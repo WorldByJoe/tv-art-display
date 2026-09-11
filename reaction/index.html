@@ -366,7 +366,7 @@ function handOff(){
   /* An EMPTY nextPage means there is nowhere to hand on to - which is what
      build_github.py leaves behind when it cuts this page out of the wall's
      rotation for publishing. Start again instead. */
-  setTimeout(()=>{ if(CONFIG.nextPage) location.href=CONFIG.nextPage;
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=Wall.nextPage(CONFIG.nextPage);
                    else location.reload(); },CONFIG.fadeMs);
 }
 
@@ -376,7 +376,7 @@ function frame(now){
   fps=fps?fps*0.9+(1000/dt)*0.1:1000/dt;
   if(paused||handingOff) return;
   if(now-startedAt>CONFIG.holdMs){
-    if(!PINNED && patternIndex+1>=CONFIG.patternsPerTurn){ handOff(); return; }
+    if(!PINNED && patternIndex+1>=Wall.repeats(CONFIG.patternsPerTurn)){ handOff(); return; }
     newPattern();
   }
   for(let s=0;s<CONFIG.iters;s++) step();

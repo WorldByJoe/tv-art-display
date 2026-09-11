@@ -2268,7 +2268,7 @@ function handOff(){
      instead. On the wall it is always set and this never fires; it is what
      lets the standalone build be a pure config change rather than a code
      fork that would drift out of step with this file. */
-  setTimeout(()=>{ if(CONFIG.nextPage) location.href=CONFIG.nextPage;
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=Wall.nextPage(CONFIG.nextPage);
                    else location.reload(); },CONFIG.fadeMs);
 }
 
@@ -2286,7 +2286,7 @@ function frame(now){
   /* The verdict screen - every leak tinted green or red - holds about
      fifteen seconds (Joe's number), and then the next survey begins. */
   if(finishedAt && now-finishedAt>CONFIG.finalMs){
-    if(!PINNED && actIndex+1>=CONFIG.actsPerTurn){ handOff(); return; }
+    if(!PINNED && actIndex+1>=Wall.repeats(CONFIG.actsPerTurn)){ handOff(); return; }
     newAct(); return;
   }
   simClock+=dt;

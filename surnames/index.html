@@ -1317,12 +1317,12 @@ function nextAct() {
       /* An EMPTY nextPage means there is nowhere to hand on to - which is what
          build_github.py leaves behind when it cuts this page out of the wall's
          rotation for publishing. Start again instead. */
-      if (!PINNED && cycleIndex >= CONFIG.cyclesPerTurn) {
+      if (!PINNED && cycleIndex >= Wall.repeats(CONFIG.cyclesPerTurn)) {
         /* Hand-off: silence the language and cancel every timer it owns.
            clearEpisode first, clearTimers second - see startAct. */
         Wall.clearEpisode();
         Wall.clearTimers();
-        if (CONFIG.nextPage) location.href = CONFIG.nextPage; else location.reload();
+        if (CONFIG.nextPage) location.href = Wall.nextPage(CONFIG.nextPage); else location.reload();
         return;
       }
     }

@@ -205,6 +205,14 @@ const CONFIG = {
      reason to keep running. */
   simYears:        22,
   runMs:       205000,     // wall-clock target for the growth phase
+  /* WOOD RENDERING (2026-09-11, Joe).  'line' is the original constant hairline, where
+     thickness reads only as pen SCATTER.  'taper' (A) puts thickness into stroke WIDTH
+     while keeping the wandering pen line.  'ribbon' (B) draws solid tapered wood with
+     rounded junctions -- the 2D twin of the MATLAB per-axis sweep.
+     pinLook holds ONE look while Joe watches version A for a few days; set it to null to
+     restore the random draw over all six presets. */
+  woodMode:    'taper',
+  pinLook:     'summer maple',
   holdMs:       11000,     // finished tree held on screen before the fade
   fadeMs:        1400,
   /* titleMs is gone with the title card. The opening sentence now holds for as
@@ -1457,12 +1465,19 @@ function pickLook(seed) {
   const total = LOOKS.reduce((a, L) => a + L.w, 0);
   let acc = rng() * total, chosen = LOOKS[0];
   for (const L of LOOKS) { acc -= L.w; if (acc <= 0) { chosen = L; break; } }
+  /* TEMPORARY PIN: while version A is being judged, every run uses the same preset so the
+     only thing changing between trees is the tree.  CONFIG.pinLook = null restores the draw. */
+  if (CONFIG.pinLook) {
+    const want = LOOKS.find(L => L.name === CONFIG.pinLook);
+    if (want) chosen = want;
+  }
 
   /* Base values are the ones tuned by hand earlier; a preset scales or replaces
      them, and then everything gets a final wobble so the preset is a FAMILY of
      looks rather than a single fixed one. */
   const L = {
     name:      chosen.name,
+    woodMode:  CONFIG.woodMode || 'line',
     leaves:    chosen.leaves !== false,
     jitGain:   jit(rng, CONFIG.jitterGain * (chosen.jitMul || 1), 0.16),
     ink:       Math.min(0.78, jit(rng, CONFIG.inkAlpha * (chosen.inkMul || 1), 0.13)),
@@ -1916,8 +1931,9 @@ function draw(T, V, autumn) {
   }
 
   // ---- wood and foliage, INTERLEAVED band by band, back to front
-  ctx.lineWidth = LOOK.lw;                              // constant hairline, always
+  ctx.lineWidth = LOOK.lw;                              // per-band default; 'taper' overrides
   ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
   let drawn = 0;
   const stride = Math.max(1, Math.ceil(T.nLeafy / CONFIG.leafCap));
   const lrBase = Math.sqrt(P.leaf_area / Math.PI) * V.s * 0.62;
@@ -1930,7 +1946,68 @@ function draw(T, V, autumn) {
     if (!band.length) continue;
     const t = (bi + 0.5) / NB;
 
+    /* WOOD.  See CONFIG.woodMode.  'taper' and 'ribbon' were added 2026-09-11; 'line'
+       is the original.  Both new modes keep the band batching -- a band still costs a
+       handful of draw calls, not one per segment. */
     ctx.globalAlpha = LOOK.ink;
+    const wmode = LOOK.woodMode || 'line';
+    if (wmode === 'ribbon') {
+      /* (B) SOLID TAPERED WOOD.  Each segment is a quad whose half-width is the model's
+         own radius at each end, plus a disc at the far node.  The disc is the collar: two
+         quads meeting at an angle leave a notch on the outside of the bend, and a round
+         cap fills it -- the 2D equivalent of the ball joints in axes_tube_surface.m. */
+      ctx.fillStyle = woodColor(t);
+      ctx.beginPath();
+      for (const sg of band) {
+        const [x0, y0, x1, y1, r] = sg;
+        const dx = x1 - x0, dy = y1 - y0;
+        const L = Math.hypot(dx, dy) || 1;
+        const ux = -dy / L, uy = dx / L;
+        const w = Math.max(LOOK.lw * 0.5, r * V.s);          // screen RADIUS, px
+        ctx.moveTo(x0 + ux*w, y0 + uy*w);
+        ctx.lineTo(x1 + ux*w, y1 + uy*w);
+        ctx.lineTo(x1 - ux*w, y1 - uy*w);
+        ctx.lineTo(x0 - ux*w, y0 - uy*w);
+        ctx.closePath();
+        if (w > 0.9) { ctx.moveTo(x1 + w, y1); ctx.arc(x1, y1, w, 0, 6.2832); }
+      }
+      ctx.fill();
+    } else if (wmode === 'taper') {
+      /* (A) TAPERED PEN.  The radius was always computed here and then thrown away at
+         'constant hairline, always'; now it sets the stroke WIDTH.  Segments are bucketed
+         into NW width levels so the band still batches (NW strokes, not one per segment).
+         The wobble is kept but cut to 0.35: with width ALSO carrying thickness, the full
+         scatter double-counts it and the bole swells. */
+      ctx.strokeStyle = woodColor(t);
+      const NW = 5;
+      let wMax = 0;
+      for (const sg of band) { const w = sg[4] * V.s * 2; if (w > wMax) wMax = w; }
+      wMax = Math.max(wMax, LOOK.lw);
+      for (let wb = 0; wb < NW; wb++) {
+        const lo = wMax * wb / NW, hi = wMax * (wb + 1) / NW;
+        let opened = false;
+        for (const sg of band) {
+          const wpx = sg[4] * V.s * 2;
+          if (wpx <= lo || wpx > hi) continue;
+          if (!opened) {
+            ctx.beginPath();
+            ctx.lineWidth = Math.max(LOOK.lw, (lo + hi) * 0.5);
+            opened = true;
+          }
+          const [x0, y0, x1, y1, r, , id] = sg;
+          const sd = LOOK.jitGain * 2 * r * V.s * 0.35;
+          const perp = Math.hypot(x1-x0, y1-y0) > 1e-6 ? [-(y1-y0), (x1-x0)] : [1, 0];
+          const pn = Math.hypot(perp[0], perp[1]) || 1;
+          const ux = perp[0]/pn, uy = perp[1]/pn;
+          const a = hashN(id, 0) * sd, b = hashN(id, 64) * sd;
+          ctx.moveTo(x0 + ux*a, y0 + uy*a);
+          ctx.quadraticCurveTo((x0+x1)*0.5 + ux*(a+b)*0.55,
+                               (y0+y1)*0.5 + uy*(a+b)*0.55, x1 + ux*b, y1 + uy*b);
+        }
+        if (opened) ctx.stroke();
+      }
+      ctx.lineWidth = LOOK.lw;
+    } else {
     ctx.strokeStyle = woodColor(t);
     ctx.beginPath();
     for (const sg of band) {
@@ -1962,6 +2039,7 @@ function draw(T, V, autumn) {
       }
     }
     ctx.stroke();
+    }
 
     /* Foliage is BATCHED. One beginPath/fill per leaf meant ~5,000 fill calls a
        frame, which measured 23-27 ms on a fast laptop -- about 7 fps once scaled
@@ -2233,8 +2311,8 @@ function handOff() {
     /* An EMPTY nextPage means there is nowhere to hand on to - which is what
        build_github.py leaves behind when it cuts this page out of the wall's
        rotation for publishing. Start again instead. */
-    if (!PINNED && runIndex >= CONFIG.runsPerTurn) {
-      if (CONFIG.nextPage) location.href = CONFIG.nextPage; else location.reload();
+    if (!PINNED && runIndex >= Wall.repeats(CONFIG.runsPerTurn)) {
+      if (CONFIG.nextPage) location.href = Wall.nextPage(CONFIG.nextPage); else location.reload();
       return;
     }
     newRun();

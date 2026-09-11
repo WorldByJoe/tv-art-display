@@ -490,7 +490,7 @@ function handOff(){
   Wall.clearEpisode(); Wall.clearTimers();
   document.body.style.transition='opacity 1400ms ease-in-out';
   document.body.style.opacity='0';
-  setTimeout(()=>{ if(CONFIG.nextPage) location.href=CONFIG.nextPage;
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=Wall.nextPage(CONFIG.nextPage);
                    else location.reload(); }, 1400);
 }
 

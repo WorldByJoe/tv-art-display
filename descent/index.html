@@ -2222,7 +2222,7 @@ function newRun(opts={}){
        nextPage for the published copy, and a standalone page that has hung
        still wants rescuing - it just starts again instead of moving on. */
     if (PINNED) return;
-    if (CONFIG.nextPage) location.href=CONFIG.nextPage; else location.reload();
+    if (CONFIG.nextPage) location.href=Wall.nextPage(CONFIG.nextPage); else location.reload();
   }, CONFIG.runDeadline);
   /* Every Moment's edge state belongs to the run, not to the page. */
   MO = { sliding:false, braking:false, climbing:false, rearLight:false, armed:false };
@@ -2343,7 +2343,7 @@ function frameBody(now){
         /* An EMPTY nextPage means there is nowhere to hand on to, which is
            what build_github.py leaves behind when it cuts a page out of the
            rotation for publishing. Start again instead. */
-        if (CONFIG.nextPage) location.href=CONFIG.nextPage; else location.reload();
+        if (CONFIG.nextPage) location.href=Wall.nextPage(CONFIG.nextPage); else location.reload();
         return;
       }
       /* ONCE. This branch runs on EVERY frame while the finish card stands,

@@ -57,6 +57,12 @@
          past a television knows there is a key to press. Same control set,
          one more button. */
       .navArrow.info { right: 2.2vw; top: calc(50% + 6.4vw); font-style: italic; }
+      /* THE SETUP SCREEN NEEDS A DOOR THAT SURVIVES MOUSE MODE. wall.js opens
+         it on the remote's MENU button, but in air-mouse mode no key of any
+         kind arrives - which is the whole reason this file exists - so the one
+         screen that decides what the wall shows would be the one screen you
+         could not reach. Same control set, one more button. */
+      .navArrow.setup { right: 2.2vw; top: calc(50% - 6.4vw); font-size: 2.0vw; }
       body.pointer-live .navArrow { opacity: 1; pointer-events: auto; }
       /* The cursor is hidden everywhere by the host page; give it back only
          while a pointer is actually in use. */
@@ -90,6 +96,21 @@
     });
     document.body.appendChild(info);
     ui.info = info;
+
+    /* Only where there is a wall to configure: the published copies load this
+       file too, and openSetup() knows to do nothing there, so the button would
+       be a dead control on somebody else's browser. */
+    if (global.Wall && typeof Wall.openSetup === 'function' &&
+        typeof Wall.RING !== 'undefined' &&
+        Wall.RING.some(r => r.file === (location.pathname.split('/').pop() || ''))) {
+      const gear = document.createElement('div');
+      gear.className = 'navArrow setup';
+      gear.textContent = '\u2699';                 // a gear, the one icon nobody has to learn
+      gear.title = 'What the wall shows';
+      gear.addEventListener('click', (e) => { e.stopPropagation(); Wall.openSetup(); });
+      document.body.appendChild(gear);
+      ui.setup = gear;
+    }
     return ui;
   }
 

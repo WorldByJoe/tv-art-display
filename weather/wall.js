@@ -453,10 +453,230 @@
   /* Cancel only the language schedule, leaving a page's own timers alone. */
   function clearEpisode() { hideLane(); hideMoment(); }
 
+  /* =====================================================================
+     THE RING, AND WHAT THE VIEWER HAS ASKED OF IT     (Joe, 2026-09-10)
+
+     Until now the rotation was a fact about the code: seventeen pages, each
+     naming the next in its own CONFIG, each deciding for itself how many runs
+     or how many minutes it was worth. Turning one off meant editing a file.
+
+     Now it is a fact about the SETTINGS, and setup.html lets a viewer change
+     them from the sofa. Three questions, which is exactly what Joe asked for:
+       - is this piece on at all?
+       - for a piece that ENDS - a hike arrives, a race finishes, a survey is
+         scored - how many times round before the wall moves on?
+       - for a piece that never ends - the ecology, the clocks - how long to
+         let it run, with "leave it on" as a real answer.
+
+     WHERE THE SETTINGS LIVE. localStorage, which every page on this wall
+     already shares: verified on the Pi that kiosk.html can read the keys
+     hike.html, plume.html, weather.html and reading.html wrote, because
+     Chromium treats file:// pages as one origin for storage. No server, no
+     file the browser cannot write, nothing to keep in step.
+
+     WHAT A PAGE HAS TO DO. Two small things, and they are the same two on
+     every page: ask repeats() instead of its own per-turn constant, and hand
+     on to nextPage() instead of its own nextPage string. A page that does
+     neither still works exactly as it did.
+     ===================================================================== */
+  const SETTINGS_KEY = 'wall:settings';
+
+  /* kind 'runs' = the piece has a discrete end and repeats a whole number of
+     times. kind 'time' = it never ends, so it is given minutes. `unit` is the
+     word the setup screen puts next to the number, and it has to be the RIGHT
+     word - "3 surveys" and "3 runs" are different promises. */
+  /* `loop` says HOW a piece repeats, and the two ways are genuinely different.
+
+     'inside' - the page already runs several episodes per visit and counts
+       them itself. It just needs to be told the number, so it reads
+       Wall.repeats() where it used to read its own constant. Nothing reloads,
+       so there is no flash between episodes.
+
+     'reload' - the page does exactly one thing per visit and then leaves. The
+       only way to have it twice is to send the viewer back to it, so the count
+       is kept here, across the navigation, and nextPage() returns the page
+       itself until it has been seen enough times. The page needs no code at
+       all for this, which is why five pieces got the feature for free. */
+  const RING = [
+    { file:'kiosk.html',         name:'Mosaic Wall',      kind:'runs', unit:'works',      def:3,  loop:'inside' },
+    { file:'gravity.html',       name:'Accretion',        kind:'runs', unit:'runs',       def:1,  loop:'inside' },
+    { file:'surnames.html',      name:'Patriline',        kind:'runs', unit:'cycles',     def:1,  loop:'inside' },
+    { file:'physarum.html',      name:'Slime Network',    kind:'runs', unit:'species',    def:2,  loop:'inside' },
+    { file:'reaction.html',      name:'Turing Patterns',  kind:'runs', unit:'patterns',   def:2,  loop:'inside' },
+    { file:'weather.html',       name:'Sun and Wind',     kind:'runs', unit:'tours',      def:1,  loop:'reload' },
+    { file:'plume.html',         name:'Finding the Leak', kind:'runs', unit:'surveys',    def:2,  loop:'inside' },
+    { file:'hike.html',          name:'The Long Walk',    kind:'runs', unit:'walks',      def:1,  loop:'reload' },
+    { file:'tree.html',          name:'Heartwood',        kind:'runs', unit:'trees',      def:1,  loop:'inside' },
+    { file:'descent.html',       name:'The Fastest Line', kind:'runs', unit:'descents',   def:1,  loop:'reload' },
+    { file:'reading.html',       name:'Reading',          kind:'runs', unit:'passages',   def:1,  loop:'reload' },
+    { file:'artworks.html',      name:'Open Gallery',     kind:'runs', unit:'works',      def:5,  loop:'inside' },
+    { file:'voyage.html',        name:'The Voyage',       kind:'runs', unit:'tours',      def:1,  loop:'reload' },
+    { file:'ecology.html',       name:'Selection',        kind:'time', unit:'minutes',    def:15, loop:'time'   },
+    { file:'weatherclocks.html', name:'House Electricity',kind:'time', unit:'minutes',    def:4,  loop:'time'   },
+    { file:'strata.html',        name:'Strata',           kind:'runs', unit:'landscapes', def:1,  loop:'reload' },
+    { file:'race.html',          name:'The Race',         kind:'runs', unit:'races',      def:1,  loop:'reload' },
+  ];
+  /* Pages that are not stops but doorways: they decide whether today is worth
+     a word and then pass the viewer along to whatever ?next= says. The ring
+     must route THROUGH them, not around them, or a birthday goes unsaid. */
+  const PASSTHROUGH = ['occasion.html', 'precip.html'];
+
+  const FOREVER = 1e9;            // "leave it on" - minutes, not a sentinel to test for
+
+  function here() {
+    return (location.pathname.split('/').pop() || 'kiosk.html');
+  }
+  function ringIndex(file) {
+    file = (file || '').split('?')[0];
+    for (let i = 0; i < RING.length; i++) if (RING[i].file === file) return i;
+    return -1;
+  }
+
+  let cache = null;
+  function settings() {
+    if (cache) return cache;
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}; }
+    catch (e) { saved = {}; }                       /* a corrupt blob is not worth a dead wall */
+    const out = {};
+    for (const r of RING) {
+      const s = (saved.pages && saved.pages[r.file]) || {};
+      out[r.file] = {
+        on:    s.on === undefined ? true : !!s.on,
+        value: (typeof s.value === 'number' && s.value > 0) ? s.value : r.def,
+      };
+    }
+    cache = out;
+    return out;
+  }
+  function saveSettings(next) {
+    cache = null;
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ v: 1, pages: next })); }
+    catch (e) { /* private mode, full disk: the wall still runs on the defaults */ }
+  }
+  function resetSettings() {
+    cache = null;
+    try { localStorage.removeItem(SETTINGS_KEY); } catch (e) {}
+  }
+
+  /* How many times THIS page should go round before handing on. `fallback` is
+     whatever the page used to use, so a page whose entry is missing - or whose
+     stored value is nonsense - behaves exactly as it always did. */
+  function repeats(fallback) {
+    const r = settings()[here().split('?')[0]];
+    return (r && r.value) ? r.value : fallback;
+  }
+  /* Milliseconds a never-ending page should run. Infinity is deliberately NOT
+     used: it would poison any arithmetic a page does with the result. */
+  function holdMs(fallbackMinutes) {
+    const r = settings()[here().split('?')[0]];
+    const mins = (r && r.value) ? r.value : fallbackMinutes;
+    return mins >= FOREVER ? Number.MAX_SAFE_INTEGER : mins * 60000;
+  }
+  function forever(fallbackMinutes) {
+    const r = settings()[here().split('?')[0]];
+    return ((r && r.value) ? r.value : fallbackMinutes) >= FOREVER;
+  }
+
+  /* The next page that is actually switched on.
+
+     Walks the ring forward from wherever we are. If every piece has been
+     turned off - which a viewer is perfectly entitled to do - the wall does
+     NOT stop: it reloads the current page, because a black screen with no way
+     back is not a setting anyone meant to choose.
+
+     A pass-through keeps its place in the chain and has its ?next= rewritten,
+     so turning a piece off cannot silently cost you the birthday greeting. */
+  const RUN_KEY = 'wall:runs';
+  function runCount(file) {
+    try { return (JSON.parse(localStorage.getItem(RUN_KEY) || '{}') || {})[file] || 0; }
+    catch (e) { return 0; }
+  }
+  function setRunCount(file, n) {
+    try {
+      const all = JSON.parse(localStorage.getItem(RUN_KEY) || '{}') || {};
+      if (n) all[file] = n; else delete all[file];
+      localStorage.setItem(RUN_KEY, JSON.stringify(all));
+    } catch (e) {}
+  }
+
+  function nextPage(fallback) {
+    /* AN EMPTY nextPage IS NOT A MISSING ONE. The published copies are built
+       by rewriting nextPage to '' to mean "standalone: there is nowhere else",
+       and the pages test it before navigating. Returning a real ring page here
+       would send a visitor on GitHub to a file that repository does not have. */
+    if (fallback === '') return '';
+
+    const me = here().split('?')[0];
+    const s = settings();
+    const from = ringIndex(me);
+    const spec = from >= 0 ? RING[from] : null;
+
+    /* A piece that does one thing per visit repeats by being visited again. */
+    if (spec && spec.loop === 'reload' && s[me] && s[me].on) {
+      const done = runCount(me) + 1;
+      if (done < s[me].value) { setRunCount(me, done); return me; }
+      setRunCount(me, 0);
+    }
+
+    let target = null;
+    if (from >= 0) {
+      for (let k = 1; k <= RING.length; k++) {
+        const cand = RING[(from + k) % RING.length];
+        if (s[cand.file] && s[cand.file].on) { target = cand.file; break; }
+      }
+    }
+    if (!target) {
+      /* A page that is not a ring stop at all - a pass-through, or something
+         opened by hand - keeps whatever it was going to do. */
+      if (from < 0) return fallback || me;
+      /* Otherwise every single piece is switched off, which a viewer is
+         entitled to do. The wall does not go black: it stays on what it is
+         showing, which is exactly what the setup screen warns will happen. */
+      return me;
+    }
+    const base = (fallback || '').split('?')[0];
+    if (PASSTHROUGH.indexOf(base) >= 0) return base + '?next=' + target;
+    return target;
+  }
+
+  /* Is the piece the viewer is looking at switched off? A page reached by the
+     remote, or left open when its switch was thrown, should not be trapped -
+     it finishes what it is showing and the ring carries on without it. */
+  function enabled(file) {
+    const r = settings()[(file || here()).split('?')[0]];
+    return r ? r.on : true;
+  }
+
+  /* --- the way in --------------------------------------------------------
+     Installed here so all seventeen pages get it without knowing about it.
+     The Fm4 remote's MENU button arrives as ContextMenu; `s` is for anyone at
+     a keyboard. The remote also flips itself into air-mouse mode from time to
+     time (see nav.js), and in that mode no key of any kind arrives - which is
+     why nav.js grows a third on-screen button rather than this being the only
+     door. */
+  function openSetup() {
+    /* ONLY ON THE WALL. The published copies are one page called index.html
+       with no setup screen beside it, so a stray keypress on GitHub must not
+       navigate a visitor into a 404. A page that is not a ring stop is either
+       a published copy or the setup screen itself; neither has anywhere to go. */
+    if (ringIndex(here()) < 0) return;
+    location.href = 'setup.html?back=' + encodeURIComponent(here());
+  }
+  global.addEventListener('keydown', (e) => {
+    if (e.key === 'ContextMenu' || e.key === 's' || e.key === 'S') openSetup();
+  });
+  /* The remote's menu button can also arrive as a contextmenu EVENT rather
+     than a key, depending on which of its two modes it is in. */
+  global.addEventListener('contextmenu', (e) => { e.preventDefault(); openSetup(); });
+
   global.Wall = {
     lane, moment, signature, instrument, episode, clearEpisode,
     after, every, clearTimers, holdFor, place,
     hideLane, hideMoment,
+    RING, PASSTHROUGH, FOREVER, settings, saveSettings, resetSettings,
+    repeats, holdMs, forever, nextPage, enabled, here, openSetup,
+    runCount, setRunCount,
     ARRIVE_MS, FADE_IN, FADE_OUT, MOMENT_HOLD,
   };
 })(window);

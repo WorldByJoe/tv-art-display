@@ -319,7 +319,7 @@ async function nextWork(){
        queue forever. */
     if(failStreak>=12 && !PINNED){ handOff(); return; }
   }
-  if(!queue.length && shown>=CONFIG.worksPerTurn && !PINNED){ handOff(); return; }
+  if(!queue.length && shown>=Wall.repeats(CONFIG.worksPerTurn) && !PINNED){ handOff(); return; }
   if(!queue.length){          // refill for a pinned wall that keeps watching
     try{ queue=await buildQueue(); }catch(e){ if(!PINNED){ handOff(); return; } }
   }
@@ -333,7 +333,7 @@ function handOff(){
   Wall.clearEpisode(); Wall.clearTimers(); clearTimeout(timer);
   document.body.style.transition='opacity 1400ms ease-in-out';
   document.body.style.opacity='0';
-  setTimeout(()=>{ if(CONFIG.nextPage) location.href=CONFIG.nextPage;
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=Wall.nextPage(CONFIG.nextPage);
                    else location.reload(); }, 1400);
 }
 
