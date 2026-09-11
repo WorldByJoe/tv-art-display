@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Selection</title>
+<!-- ==========================================================================
+  ecology.html - the community-ecology + evolution simulation, on the wall.
+  The MODEL lives in ecology_engine.js (pure, seeded, jsc-testable); this
+  page only steps it and draws it. Joe's spec, 2026-08-28: grass grows on a
+  160x90 grid, eight founding populations - a grazer and a hunter in each of
+  the four corners, counts drawn at random - start the world, mating
+  requires trait-identity, 5% of births mutate - and everything after that
+  (lineages meeting, booms, busts, the first carnivore) is emergent.
+
+  WHAT THE COLOURS MEAN. Ground green = standing grass. Each animal is
+  coloured by its SPECIES - its exact trait combination - with the same
+  colour in the map, the species table, and the community strip, so a
+  species can be followed across all three. Herbivore species walk a
+  golden-angle hue wheel that skips the red band; every carnivore species
+  is a shade of red: predation should be visible the moment it exists.
+  (Founder-lineage colouring is gone - Joe, 2026-08-28: colour follows what
+  the world becomes, not where it started. Founder traits are RANDOM per
+  world now, drawn 1..6 from the seed.)
+
+  Not in the ring yet - preview with ?pin (or n for a fresh world) until Joe
+  has watched it; then it takes a rotation slot like any other page.
+========================================================================== -->
+<style>
+  body{ margin:0; background:#04070a; overflow:hidden; }
+  #cv{ position:fixed; inset:0; width:100vw; height:100vh; }
+  /* THE RESERVE LAYOUT (plume's idiom, Joe's call 2026-08-28): the map keeps
+     the top-left 84% x 84% - EQUAL fractions, so the 16:9 grid keeps square
+     cells - the right rail holds every text panel, and the bottom band
+     belongs to the community strip. One constant (INSET, in the script)
+     drives these CSS variables AND the map geometry, so they cannot drift. */
+  #rail, #band { box-sizing:border-box; }
+  /* The rail runs a smaller type scale than the wall's default: every panel
+     (stats, species table, foot) must fit the 16% column with room to
+     spare, keeping the whole composition inside one 16:9 frame. Scoped
+     token overrides - descendants pick them up automatically. */
+  #rail{
+    --t0:max(24px, calc(118 * var(--ts) * var(--wu)));
+    --t1:max(17px, calc( 64 * var(--ts) * var(--wu)));
+    --t2:max(13px, calc( 47 * var(--ts) * var(--wu)));
+    --t3:max(12px, calc( 36 * var(--ts) * var(--wu)));
+    --t4:max(10px, calc( 27 * var(--ts) * var(--wu)));
+    --t5:max( 9px, calc( 22 * var(--ts) * var(--wu)));
+  }
+  #rail{ position:fixed; top:0; right:0; bottom:0; width:var(--railW);
+    z-index:5; background:#0A0E15; border-left:1px solid rgba(255,255,255,.14);
+    display:flex; flex-direction:column; overflow:hidden;
+    padding:calc(60*var(--wu)) calc(40*var(--wu)) calc(48*var(--wu));
+    gap:calc(26*var(--wu)); }
+  #rail .foot{ order:99; margin-top:auto; min-height:0; }
+  /* THE RULES CARD. Smallest type on the wall - this is reference material for
+     someone who has walked up to the screen, not a headline. It wraps (unlike
+     .fine, which is nowrap) and is allowed to scroll away rather than push the
+     live numbers off the panel: the readouts above always win the space. */
+  #rail .rules{ font:400 max(8px, calc(17 * var(--ts) * var(--wu)))/1.35 var(--font-num);
+    letter-spacing:.02em; color:var(--ink-2); opacity:.5;
+    margin-top:calc(10*var(--wu)); text-transform:none;
+    overflow:hidden; min-height:0; }
+  #rail .rules b{ font-weight:400; letter-spacing:.1em; opacity:.85;
+    display:inline-block; margin-top:calc(6*var(--wu)); }
+  #band{ position:fixed; left:0; right:var(--railW); bottom:0;
+    height:var(--bandH); z-index:5; background:#0A0E15;
+    border-top:1px solid rgba(255,255,255,.14); }
+  #strip{ position:absolute; inset:0; width:100%; height:100%; }
+  #stripcap{ position:absolute; top:calc(12*var(--wu)); left:calc(20*var(--wu));
+    font:400 var(--t4)/1.2 var(--font-num); letter-spacing:.1em;
+    text-transform:uppercase; color:var(--ink-2);
+    text-shadow:0 0 6px rgba(4,7,10,.9); }
+  /* The genome key's four labels are wider than their swatches, so this
+     page opens the strip's gap - scoped here, since plume's strips want
+     the tight default. */
+  #rail .strip .sws{ gap:calc(20*var(--wu)); }
+  /* the sentence re-centres over the MAP, riding above the band */
+  body .lane{ right:var(--railW); bottom:calc(var(--bandH) + 50*var(--wu)); }
+  /* the armed-start overlay (standalone builds only): the founders stand
+     visible in their corners until the button is pressed */
+  #startGate{ position:fixed; left:0; top:0; right:var(--railW);
+    bottom:var(--bandH); display:flex; align-items:center;
+    justify-content:center; z-index:6; }
+  /* An ID rule beats the UA stylesheet's [hidden]{display:none}, so the
+     overlay MUST opt out explicitly - without this the dead button hangs
+     over a running wall, and stays put after start in the standalone.
+     (Seen on the wall, not in any probe: photograph the running thing.) */
+  #startGate[hidden]{ display:none; }
+  #startGate button{ font:400 var(--t2)/1 var(--font-ui); letter-spacing:.08em;
+    color:#eef4fc; background:rgba(10,14,21,.88); cursor:pointer;
+    border:1px solid rgba(255,255,255,.35); border-radius:calc(14*var(--wu));
+    padding:calc(26*var(--wu)) calc(60*var(--wu)); }
+  #startGate button:hover{ background:rgba(27,36,50,.92); }
+</style>
+<link rel="stylesheet" href="wall.css">
+<script src="wall.js"></script>
+<script>
+/* CACHE BUSTER. These pages are opened straight off OneDrive as file:// URLs,
+   where Chrome will happily serve a cached copy of the engine after it has
+   changed on disk - silently running yesterday's model with today's page.
+   Writing the tags with a timestamp forces a fresh fetch every load.
+   document.write is deliberate: it keeps these scripts synchronous and ordered
+   ahead of the inline script below, which appended elements would not be. */
+(function(){ var v='?v='+Date.now();
+  document.write('<script src="ecology_engine.js'+v+'"><\/script>');
+  document.write('<script src="ecology_ui.js'+v+'"><\/script>');
+})();
+</script>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="rail"><div class="foot">
+  <div class="instr mounted">
+    <div class="rules" id="rules"></div>
+  </div>
+</div></div>
+<div id="band"><canvas id="strip"></canvas><div id="stripcap">community composition</div></div>
+<div id="startGate" hidden><button id="startBtn">start the run</button></div>
+<div id="info"></div>
+<script src="nav.js"></script>
+<script>
+/* SOLE WALL PAGE (Joe, 2026-08-29). The Selection run is now the only thing
+   the TV shows, so the ring is a ring of one: the arrow keys stay here and
+   nothing hands off. The old thirteen-page ring is preserved in kiosk.html
+   if we ever want to put it back. */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here=(location.pathname.split('/').pop()||'kiosk.html');
+  let i=ROTATION.indexOf(here); if(i<0) i=0;
+  location.href=ROTATION[(i+step+ROTATION.length)%ROTATION.length];
+}
+
+const CONFIG = {
+  stepMs: 130,            // one simulation step every ~8th of a second; a
+                          // heavy step (tens of thousands of animals) simply
+                          // takes longer and the world slows honestly
+  holdMin: 15,            // minutes on the wall before handing off. Joe asked for
+                          // up to fifteen (TV change requests, 2026-09-09): the
+                          // community needs time to go somewhere before it hands on.
+  maxAnimals: 25000,      // page copy of the engine safety valve
+  startGate: false,       // false on the WALL (a kiosk has no mouse): the
+                          // run begins on load. The standalone build flips
+                          // this true, so a visitor - Joe arranging data
+                          // capture above all - can set things up and THEN
+                          // press start; the founders wait visibly.
+  nextPage: '' /* standalone: nowhere to hand on to; start again */, // on to the electricity-by-weather rings, the ring's last stop since 2026-09-04
+  restartEvery: 50000,    // steps before this world is retired for a new one
+};
+const PINNED = /(?:\?|&)pin\b/.test(location.search);
+/* ?steps=N freezes the run at step N for inspection - the standalone and
+   experiment use; 0 (absent) runs forever */
+const STOP_AT = parseInt((location.search.match(/[?&]steps=(\d+)/)||[])[1]||'0',10);
+
+
+
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const stripCv=document.getElementById('strip'), stx=stripCv.getContext('2d');
+const infoEl=document.getElementById('info');
+/* ONE fraction reserves the rail's width and the band's height; because the
+   two are equal and the viewport is 16:9, the remaining map rectangle keeps
+   the grid's own 16:9 and the cells stay square */
+/* 0.16 -> 0.21 (Joe, 2026-08-29): a wider rail stops the birth rate wrapping
+   onto its own line, and because the same constant sets the band height the
+   community-composition graph gets taller at the same time. The map gives up
+   the difference. */
+const INSET=0.21;
+let W=0,H=0,MAPW=0,MAPH=0;
+function resize(){
+  W=cv.width=Math.min(1920,innerWidth); H=cv.height=Math.round(W*9/16);
+  cv.style.height=(innerWidth*9/16)+'px';
+  MAPW=Math.round(W*(1-INSET)); MAPH=Math.round(H*(1-INSET));
+  document.documentElement.style.setProperty('--railW', Math.round(innerWidth*INSET)+'px');
+  document.documentElement.style.setProperty('--bandH', Math.round(innerWidth*9/16*INSET)+'px');
+  const r=stripCv.getBoundingClientRect();
+  stripCv.width=Math.max(2,Math.round(r.width)); stripCv.height=Math.max(2,Math.round(r.height));
+}
+addEventListener('resize',resize); resize();
+
+/* the grass field renders through a 160x90 backing image scaled up with
+   smoothing off - 14,400 crisp cells for the price of one drawImage */
+let world=null, gcv=document.createElement('canvas'), gtx=gcv.getContext('2d'), gimg=null;
+
+/* ---- the community record: who exists, in what numbers, over time -------
+   Every species ever seen gets a stable colour and a stable stacking slot
+   the moment it first appears. The graph stacks RELATIVE abundance
+   (composition), so the strip stays full-height through booms and busts -
+   the population number lives in the panel. FULL HISTORY, always: when the
+   backing image fills, it is squeezed to half width and the sampling
+   interval doubles - a run left up for a week still shows its whole story,
+   left edge = founding, right edge = now. */
+const AREA_W=900, AREA_H=170;
+let SAMPLE_EVERY=2;
+let areaCv=document.createElement('canvas'), atx=areaCv.getContext('2d');
+areaCv.width=AREA_W; areaCv.height=AREA_H;
+let speciesReg=new Map(), areaCol=0, sinceSample=0;
+/* CMYK TRAIT MIXING (Joe's design, 2026-08-28): the colour IS the genome.
+   legs load the cyan channel, body magenta, mouth yellow, eyes black -
+   each trait/10 an ink load, K compressed to 0.55 so an eyes-10 species
+   stays visible on the dark ground. Similar traits therefore mix to
+   similar colours: the strip's colour gradients are trait gradients, and
+   a one-unit mutation is a one-shade shift. A carnivore wears its species
+   colour pulled 55% toward red (plus a red ring on the map) - diet must
+   read at a glance even on a colour-matched trait twin. */
+function cmyk(l,b,m,e,carn,bigF){
+  /* K CHANNEL IS SHARED (Joe, 2026-08-29): half its load comes from eyes and
+     half from the provisioning strategy, so the two are additive and an F
+     species reads darker than its f twin at the same eye count. Ceiling stays
+     0.55 so a maxed-out species is still visible on the dark ground. */
+  const C=l/10, M=b/10, Y=m/10, K=0.0275*e + (bigF?0.275:0);
+  let r=255*(1-C)*(1-K), g=255*(1-M)*(1-K), bl=255*(1-Y)*(1-K);
+  if(carn){ r=r*0.45+242*0.55; g=g*0.45+56*0.55; bl=bl*0.45+46*0.55; }
+  return 'rgb('+Math.round(r)+' '+Math.round(g)+' '+Math.round(bl)+')';
+}
+function regSpecies(key){
+  let r=speciesReg.get(key);
+  if(!r){
+    const t=Eco.parseKey(key);
+    r={ order:speciesReg.size,
+        color:cmyk(t.legs,t.body,t.mouth,t.eyes,t.carn,t.bigF) };
+    speciesReg.set(key,r);
+  }
+  return r;
+}
+function sampleArea(s){
+  const total=s.animals; if(!total) return;
+  if(areaCol>=AREA_W){
+    /* history compression: squeeze what exists into the left half, sample
+       half as often from here on - the whole run always fits */
+    atx.drawImage(areaCv, 0,0,AREA_W,AREA_H, 0,0,AREA_W/2,AREA_H);
+    atx.clearRect(AREA_W/2,0,AREA_W/2,AREA_H);
+    areaCol=AREA_W/2; SAMPLE_EVERY*=2;
+  }
+  const rows=s.list.map(e=>({r:regSpecies(e.key), c:e.count}))
+                   .sort((a,b)=>a.r.order-b.r.order);
+  const x=areaCol++;
+  let y=AREA_H;
+  atx.clearRect(x,0,1,AREA_H);
+  for(const e of rows){
+    const hgt=AREA_H*e.c/total;
+    atx.fillStyle=e.r.color;
+    atx.fillRect(x, y-hgt, 1, hgt);
+    y-=hgt;
+  }
+}
+let started=false, paused=false, handingOff=false, lastStep=0, stepTook=0, fps=0, lastFrame=performance.now();
+let seed=0, startedAt=0;
+let peakPop=0, told={}, lastLane=0, capFrames=0, lastDisturbSeen=0;
+/* predation sparks: {cell index, birth time}. Pruned in draw(). */
+/* A predator wears yellow for FLASH_STEPS turns after a kill. Turns, not
+   milliseconds, so it lasts the same number of events at any pace - and it
+   rides the animal itself rather than marking the ground. */
+/* A FLASH, not a state (Joe, 2026-08-30). Held for 8 steps it read as a
+   second kind of marker moving around the map rather than an event; a couple
+   of turns keeps it an event. On a wall with few predators it will often be
+   missed, which is the accepted trade - when predation is busy it will read
+   clearly. Note a kill is stamped DURING a step and w.step increments at the
+   end of it, so this window is visible for FLASH_STEPS-1 steps. */
+const FLASH_STEPS=3;
+function justAte(a){ return a.ateAt!==undefined && world.step-a.ateAt<FLASH_STEPS; }
+
+function newRun(){
+  seed=Math.floor(Math.random()*1e9);
+  /* regrowEvery 5: the one deliberate departure from the spec's rates. At
+     the spec's 1 the grass income supports 30-50k animals - unwatchable on
+     the wall. 1/5 sprouting lands the equilibrium near 10k with the same
+     boom, bust and recovery (measured in the jsc sweeps). Joe's call to
+     revisit. */
+  /* Every run now gets its OWN landscape as well as its own founders, so the
+     wall shows genuinely different worlds rather than the same ground with
+     different animals on it. regrowEvery comes from the draw too, so
+     productivity varies; the wall's old fixed 5 sits in the middle of the
+     3-7 range the draw uses. */
+  const land = EcoUI.randomLandscape();
+  lastDisturbSeen=0;
+  world=Eco.newWorld(seed, Object.assign({maxAnimals:CONFIG.maxAnimals}, land));
+  gcv.width=world.P.W; gcv.height=world.P.H;
+  gimg=gtx.createImageData(world.P.W, world.P.H);
+  peakPop=0; told={}; startedAt=performance.now(); lastLane=0; capFrames=0;
+  speciesReg=new Map(); areaCol=0; sinceSample=0; SAMPLE_EVERY=2;
+  atx.clearRect(0,0,AREA_W,AREA_H);
+  Wall.clearEpisode(); Wall.clearTimers();
+  Wall.episode('Grass grows on every square. Eight populations wake in the four '
+    +'corners - a grazer and a hunter in each - and mating needs an exact trait '
+    +'match, so every mutation is a small step toward becoming something new.');
+  console.log('[ecology] seed', seed);
+  rulesDrawn=false; drawRules();
+}
+
+/* ---- the episode: narrate what the model actually does ------------------ */
+function narrate(s){
+  const now=performance.now();
+  if(now-lastLane<9000) return;                       // one thought at a time
+  function say(id,text,hold){ if(told[id]) return false;
+    told[id]=true; Wall.lane(text,{hold:hold||8000}); lastLane=now; return true; }
+
+  if(s.mutants>0 && say('mutant',
+    'The first mutant is born - one trait nudged one unit, or an appetite '
+    +'flipped. Its children will need partners exactly like itself.')) return;
+  if(s.carn>0 && say('carn',
+    'A mutation has flipped an appetite: the first CARNIVORE. It cannot eat '
+    +'grass any more - from here it hunts, or it starves.')) return;
+  if(s.carn>=25 && say('carnHold',
+    'The predators are no accident now: a standing carnivore population, '
+    +'red on the map, culling the herds that made them.')) return;
+  if(s.grass < 43200*0.1 && s.animals>3000 && say('crash',
+    'The commons is nearly bare. Grass regrows one unit at a time, and the '
+    +'herds have outrun it - the bust is arriving.')) return;
+  if(peakPop>4000 && s.animals < peakPop*0.55 && say('bust',
+    'Starvation has halved the population from its peak. What survives is '
+    +'whatever spent its fat most carefully.', 9000)) return;
+  if(s.species>=40 && say('radiate',
+    s.species+' distinct trait-species now share the grid, every one an '
+    +'accumulation of one-unit mutations - reproductive isolation by drift.')) return;
+  if(s.step>600 && Math.abs(s.animals-peakPop)<peakPop*0.1 && s.animals>2000 &&
+     say('steady','The boom and the bust have settled into a working '
+    +'ecosystem: grass, grazers, and their predators, none winning outright.')) return;
+}
+
+/* ---- drawing ------------------------------------------------------------ */
+function draw(s){
+  const P=world.P, cw=MAPW/P.W, chh=MAPH/P.H;
+  ctx.fillStyle='#04070a'; ctx.fillRect(0,0,W,H);
+  /* grass through the backing image */
+  const d=gimg.data, blk=world.blocked;
+  for(let i=0;i<world.grass.length;i++){
+    /* ROCK reads as warm grey, so a ridge is obviously not just overgrazed
+       ground - bare dirt and impassable stone would otherwise look alike */
+    if(blk && blk[i]){
+      d[i*4]=104; d[i*4+1]=98; d[i*4+2]=88; d[i*4+3]=255; continue;
+    }
+    const t=Math.sqrt(Math.min(1, world.grass[i]/P.grassMax));  // low grass stays visible
+    d[i*4  ]=7  + 28*t;
+    d[i*4+1]=13 + 105*t;
+    d[i*4+2]=8  + 34*t;
+    d[i*4+3]=255;
+  }
+  gtx.putImageData(gimg,0,0);
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(gcv,0,0,MAPW,MAPH);
+
+  /* animals wear their species colour; body size sets the mark. The colour
+     is cached on the animal - traits never change after birth. */
+  for(const a of world.animals){
+    if(!a._col) a._col=regSpecies(Eco.key(a)).color;
+    ctx.fillStyle=justAte(a) ? '#ffe85a' : a._col;   // just killed something
+
+    const r = Math.max(2, (0.22+0.05*a.body)*cw);
+    ctx.fillRect(a.x*cw+(cw-r)/2, a.y*chh+(chh-r)/2, r, r);
+  }
+  /* THE SCAR of a recent disturbance: a ring that fades over 90 steps, so a
+     viewer sees WHERE the world was just hit and can watch it refill. */
+  const dz=world.lastDisturb;
+  if(dz){
+    const age=world.step-dz.step;
+    if(age>=0 && age<90){
+      const a=0.85*(1-age/90);
+      ctx.strokeStyle='rgba(255,196,92,'+a.toFixed(3)+')';
+      ctx.lineWidth=Math.max(1.5, cw*0.5);
+      ctx.beginPath();
+      ctx.arc((dz.x+0.5)*cw, (dz.y+0.5)*chh, dz.r*cw, 0, Math.PI*2);
+      ctx.stroke();
+      /* A SMALL TAG beside the scar, fading with it: what the event took.
+         Replaces the lane text that used to announce every disturbance (Joe,
+         2026-09-02: over-the-top, especially when the ground barely changes).
+         Canvas type at 28 px - above the 26 px floor, below the sofa-reading
+         tier, i.e. glanceable, not a sentence. */
+      const pct=Math.round(100*(P.disturbCoupled?P.disturbKill:P.disturbGrass));
+      const tag='\u2212'+dz.killed+(dz.killed===1?' animal':' animals')
+               +'  \u00b7  \u2212'+pct+'% grass';
+      ctx.font='400 28px ui-monospace, Menlo, "DejaVu Sans Mono", monospace';
+      if('letterSpacing' in ctx) ctx.letterSpacing='1.5px';
+      ctx.textBaseline='middle';
+      const tw=ctx.measureText(tag).width, pad=14, th=40;
+      let tx=(dz.x+0.5)*cw + dz.r*cw + 0.8*cw, ty=(dz.y+0.5)*chh;
+      if(tx+tw+2*pad > MAPW) tx=(dz.x+0.5)*cw - dz.r*cw - 0.8*cw - tw - 2*pad;   // flip to the left
+      tx=Math.max(pad, tx); ty=Math.min(MAPH-th, Math.max(th, ty));
+      ctx.fillStyle='rgba(4,7,10,'+(0.62*a/0.85).toFixed(3)+')';
+      ctx.fillRect(tx, ty-th/2, tw+2*pad, th);
+      ctx.fillStyle='rgba(255,196,92,'+(0.92*a/0.85).toFixed(3)+')';
+      ctx.fillText(tag, tx+pad, ty+1);
+      if('letterSpacing' in ctx) ctx.letterSpacing='0px';
+    }
+  }
+  /* predators over everything, ringed in red - rare enough to stroke */
+  /* the ring stays red and stays one size: a predator should always look like
+     a predator, and only its centre marks the moment of a kill */
+  ctx.strokeStyle='rgba(255,64,44,0.95)'; ctx.lineWidth=Math.max(1,cw*0.14);
+  for(const a of world.animals){ if(!a.carn) continue;
+    const r = Math.max(3, (0.34+0.05*a.body)*cw);
+    ctx.strokeRect(a.x*cw+(cw-r)/2, a.y*chh+(chh-r)/2, r, r);
+  }
+}
+
+function drawStrip(){
+  const sw=stripCv.width, sh=stripCv.height;
+  stx.fillStyle='#0A0E15'; stx.fillRect(0,0,sw,sh);
+  if(areaCol<2) return;
+  /* the filled portion IS the whole run - stretch it across the band */
+  stx.imageSmoothingEnabled=false;
+  stx.drawImage(areaCv, 0,0,areaCol,AREA_H, 0,0,sw,sh);
+}
+
+/* ---- the permanent instruments ------------------------------------------ */
+/* the species NAME, everywhere one appears - table, prey lines, and the
+   lab's CSV columns share this exact form (Joe: L3_B1_M4_E1 style) */
+/* The species name IS the key: L6.B6.M4.E1.f.H - dots keep it compact enough
+   for the rail and CSV-safe, and it reads like an address. */
+function traitSig(e){ return 'L'+e.legs+'.B'+e.body+'.M'+e.mouth+'.E'+e.eyes
+  +'.'+(e.bigF?'F':'f'); }
+function sigOfKey(k){ return String(k).split('.').slice(0,5).join('.'); }
+function instrument(s){
+  Wall.instrument({
+    mount:'#rail', cols:1,
+    hero:{ v: s.animals.toLocaleString(), u:'animals' },
+    rows:[
+      /* the raw count, then the Hill number of order 1 (exp Shannon): how many
+         EQUALLY common species would carry the same entropy. One dominant plus
+         mutant noise reads ~1 however long the list is. (Joe, 2026-09-02) */
+      { k:'species',   v: s.species + ' \u00b7 ' + s.hill.toFixed(1) + ' effective' },
+      { k:'carnivores',v: String(s.carn) },
+      { k:'grass per cell', v: s.grassPerCell+' · '+s.vegetatedPct+'% veg.' },
+      { k:'step',      v: String(s.step) },
+    ],
+    /* The key to the genome colours: each trait loads one printing ink, so
+       a species' colour IS its trait vector. Eyes get the black channel,
+       shown as the light-to-dark ramp it actually applies. */
+    strips:[{ k:'genome = CMYK ink · K = eyes + provisioning', items:[
+      { c:'#00b7eb', label:'legs' },
+      { c:'#ec008c', label:'body' },
+      { c:'#fff200', label:'mouth' },
+      { c:'linear-gradient(90deg,#e9edf3,#0d1117)', label:'eyes' },
+    ]}],
+  });
+  /* The species table IS the legend now: each row wears the same swatch its
+     species wears on the map and in the strip. Trait signature on top,
+     count and role beneath it - one visual unit, no ambiguity about which
+     numbers belong to which traits. A carnivore row names its top prey. */
+  /* Top six species overall - plus the top two CARNIVORE species even when
+     they are too rare to crack the top six, because a predator's row is
+     where its diet shows and rare is the predators' natural state. */
+  const shown=s.list.slice(0,4);
+  for(const e of s.list.filter(e=>e.carn && !shown.includes(e)).slice(0,2)) shown.push(e);
+  /* VITAL RATES (Joe, 2026-08-29). R is this species' birth rate - births per
+     step as a percentage of its own headcount - so 1.2% means it replaces an
+     eighth of itself every ten steps. S/B/P split the same species' recent
+     deaths between starvation, background mortality and predation, and always
+     sum to 100. Both are measured over the engine's rolling vitalWindow, not
+     since the beginning of time, so they track what is happening NOW. */
+  Wall.instrument({
+    id:'species', mount:'#rail',
+    keys: shown.map(e=>({
+      c: regSpecies(e.key).color,
+      /* The diet letter belongs to the NAME (L5_B4_M6_E6_C), matching the
+         label used in every CSV and phylogeny, with the birth rate hung off
+         it after a dot. */
+      v: traitSig(e)+'.'+(e.carn?'C':'H')
+         +(e.R!==undefined ? ' · '+EcoUI.vitalR(e) : ''),
+      /* The rail is only ~590px wide at 4K. The swatch colour and the trailing
+         "· C" already say which guild a row is, so the words herbivore /
+         carnivore are dropped here to keep this to ONE line. */
+      n: e.count.toLocaleString()
+         +(e.medianAge!==undefined ? ' · '+EcoUI.vitalAge(e) : '')
+         +(e.S!==undefined ? ' · '+EcoUI.vitalDeaths(e) : '')
+         +(e.carn && e.preyTop && e.preyTop.length
+            ? ' · eats '+sigOfKey(e.preyTop[0][0]) : ''),
+    })),
+    cap:'MOST COMMON SPECIES', capTop:true,
+  });
+}
+
+function handOff(){
+  if(handingOff) return; handingOff=true;
+  Wall.clearEpisode(); Wall.clearTimers();
+  document.body.style.transition='opacity 1400ms ease-in-out';
+  document.body.style.opacity='0';
+  setTimeout(()=>{ if(CONFIG.nextPage) location.href=Wall.nextPage(CONFIG.nextPage);
+                   else location.reload(); },1500);
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  const dtms=Math.max(0,now-lastFrame); lastFrame=now;
+  fps=fps?fps*0.9+(1000/Math.max(dtms,1))*0.1:60;
+  if(paused||handingOff) return;
+
+  let stepped=false;
+  if(!started){ /* armed: draw the waiting founders, step nothing */ }
+  else if(STOP_AT && world.step>=STOP_AT){
+    if(!told.runDone){ told.runDone=true;
+      Wall.lane('Run complete: frozen at step '+STOP_AT+' for inspection. '
+        +'Press n for a fresh world.',{hold:12000}); }
+  }
+  else if(now-lastStep>=CONFIG.stepMs){
+    const t0=performance.now();
+    Eco.step(world);
+    stepTook=performance.now()-t0;
+    lastStep=now; stepped=true;
+  }
+  const s=Eco.stats(world);
+  if(stepped && ++sinceSample>=SAMPLE_EVERY){ sinceSample=0; sampleArea(s); }
+  drawStrip();
+  peakPop=Math.max(peakPop,s.animals);
+  draw(s); instrument(s); narrate(s);
+
+  if(s.animals===0){
+    if(!told.extinct){ told.extinct=true;
+      Wall.lane('Every animal has starved or been eaten. The grass will have '
+        +'the world to itself - until the next seeding.',{hold:9000});
+      Wall.after(11000, newRun);
+    }
+  }
+  /* A HARD RESET every restartEvery steps (Joe, 2026-08-29). A world left to
+     run indefinitely eventually settles into whichever attractor it found and
+     stops surprising anyone; starting over keeps the wall showing founding,
+     radiation and collapse rather than one long equilibrium. */
+  /* HITTING THE POPULATION CAP ENDS THE RUN (Joe, 2026-08-29). maxAnimals is
+     an engine safety valve, not an ecological limit, and a world pinned
+     against it has stopped doing anything worth watching: births are
+     throttled to exactly match deaths, and at that point almost every death
+     is trait-blind background mortality rather than starvation or predation.
+     Measured: trait movement falls about twelve-fold and selective sweeps
+     stop entirely. A few consecutive frames are required so a brief spike
+     does not retire a healthy world. */
+  /* Disturbances are no longer announced in the lane (Joe, 2026-09-02: it
+     was over-the-top, especially when the ground barely changes). The scar
+     ring in draw() now carries a small fading tag with the toll instead. */
+
+  if(!PINNED && s.animals >= CONFIG.maxAnimals*0.99){
+    capFrames++;
+    if(capFrames>=8 && !told.capped){
+      told.capped=true;
+      Wall.lane('This world has filled to its ceiling - so full that nothing '
+        +'starves any more, and selection has stopped. Starting again.',{hold:9000});
+      Wall.after(10000, newRun);
+    }
+  } else capFrames=0;
+
+  if(!PINNED && CONFIG.restartEvery && world.step>=CONFIG.restartEvery && !told.aged){
+    told.aged=true;
+    Wall.lane('This world has run its '+CONFIG.restartEvery.toLocaleString()
+      +' steps. A new landscape is forming, with new founders.',{hold:9000});
+    Wall.after(10000, newRun);
+  }
+  if(!PINNED && CONFIG.nextPage && now-startedAt>Wall.holdMs(CONFIG.holdMin)) handOff();
+  if(document.body.classList.contains('showinfo')) updateInfo();
+}
+
+/* THE RULES CARD (Joe, 2026-08-29). Everything here is DERIVED from the live
+   parameter block of the running world, never hand-written, so when we change
+   a rule or a landscape setting the wall's description of itself changes with
+   it. If you add a mechanism to the engine, add its line here and it will
+   stay honest by construction. */
+function describeRules(){
+  /* one shared implementation, in ecology_ui.js, so the wall and the lab can
+     never disagree about what the model is doing */
+  return EcoUI.settingsCard(world, seed);
+}
+let rulesDrawn=false;
+function drawRules(){
+  if(rulesDrawn) return; rulesDrawn=true;
+  const el=document.getElementById('rules');
+  if(el) el.innerHTML=describeRules();
+}
+
+function updateInfo(){
+  const s=Eco.stats(world);
+  infoEl.textContent=
+`seed      ${seed}   step ${s.step}   ${stepTook.toFixed(0)} ms/step   fps ${fps.toFixed(0)}
+pop       ${s.animals} (H${s.herb}/C${s.carn})  species ${s.species}  peak ${peakPop}
+grass     ${s.grass}   fat~${s.fatMean}
+top       ${s.topSpecies.map(e=>e[0]+'x'+e[1]).join('  ')}
+params    reserve ${world.P.reproReserveSteps} steps · danger ${world.P.dangerWeight} · bravery floor ${world.P.braveryFloor} · mate ${world.P.mateWeight}
+keys: n new world · p pause · i info`;
+}
+
+addEventListener('keydown',(e)=>{
+  switch(e.key){
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': newRun(); break;
+    case 'p': case 'P': case ' ': paused=!paused; break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+  }
+});
+
+newRun();
+if(CONFIG.startGate){
+  document.getElementById('startGate').hidden=false;
+  document.getElementById('startBtn').onclick=()=>{
+    started=true; startedAt=performance.now();
+    document.getElementById('startGate').hidden=true;
+  };
+} else started=true;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

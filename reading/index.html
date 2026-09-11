@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading</title>
+<style>
+  /* Self-contained apart from the wall's three shared files - wall.css,
+     wall.js and nav.js - like the rest of the rotation. */
+  html, body { margin:0; padding:0; height:100%; overflow:hidden;
+    background:#0d0b09; }
+  * { cursor:none; }
+
+  /* A page of a book, not a slide. Warm near-black rather than pure black,
+     because ink on paper is never pure contrast and the eye reads a slightly
+     warm field more comfortably from across a room. */
+  /* THE VERTICAL PADDING IS THE SAFE RECTANGLE, not decoration. A television
+     overscans, and LG's Just Scan resets itself on an HDMI source change, so
+     the top and bottom 76 wall px can simply be off the glass. Putting
+     var(--safe-y) here does two jobs at once: the centred stack can never sit
+     in the overscan, and fitToScreen() below can read the room it is allowed
+     to fill straight off this element instead of guessing at innerHeight. */
+  #stage { position:fixed; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    padding:var(--safe-y) 12vw; box-sizing:border-box; }
+
+  /* WHO IS SPEAKING - a Mark on the passage, drawn above it and moving with
+     it. The type now comes from wall.css's .r-key (--t4, the sofa floor); the
+     old bespoke clamp() ceiling of 17 px won at 3840, so on a Hamlet night the
+     one word telling you who is talking was 17 wall px high and unreadable
+     from the sofa. Only the INK is overridden here: this page's ground is warm
+     paper rather than the cool house dark, and the house --ink-2 reads blue on
+     it. Same reasoning as the passage's cream. */
+  #speaker { color:rgba(198,166,116,.80);
+    margin-bottom:calc(70 * var(--wu)); opacity:0; transition:opacity 1.2s ease; }
+  #speaker.show { opacity:1; }
+
+  /* The passage. Serif, generous leading, ragged right - a poem sets itself.
+
+     THE TYPE IS ON THIS ELEMENT, NOT ON THE LINES, and that is load-bearing:
+     `ch` resolves against the font of the element it is written on, so a
+     max-width of 62ch set here while the type lived on the child was being
+     measured in the inherited 16px sans - a completely different character
+     width from the 40px serif actually being drawn. The measure came out far
+     too narrow and Shakespeare's pentameter wrapped. */
+  #passage { max-width:62ch;
+    font:300 clamp(15px,1.8vw,70px)/1.66 Iowan Old Style,Palatino,Georgia,"Times New Roman",serif;
+    color:rgba(240,232,218,.94); letter-spacing:.006em; }
+  #passage .line {
+    opacity:0; transform:translateY(.42em);
+    transition:opacity 1.5s ease, transform 1.5s cubic-bezier(.2,.7,.3,1); }
+  #passage .line.show { opacity:1; transform:none; }
+  /* A TURNED LINE, when one will not fit. Verse lineation is the poet's, so a
+     line that has to wrap must not look like two lines - the convention is a
+     hanging indent, and this is the same one compositors have used for four
+     hundred years. Whitman needs it; Shakespeare almost never does. */
+  #passage .line.verse { padding-left:1.8em; text-indent:-1.8em; }
+
+  /* Author, work and date. Held back until half way through - see CONFIG.
+
+     THIS IS THE PAYOFF OF THE WHOLE PAGE and it used to arrive, at 82 seconds,
+     at 27 and 19 wall px: the two lines you have waited the entire slide for,
+     drawn smaller than the credit. The work now takes .r-lead and the byline
+     .r-key, so both sit on the house ladder. What is NOT taken from those
+     classes is the face and the ink - a title is set in the book's own italic
+     serif, not in the interface sans, and the ink stays warm because this
+     ground is paper. Sizes conform; the voice does not have to.
+
+     The rule and the gaps are written in WALL PIXELS. They were in em against
+     an element with no font-size of its own, so they were being measured in
+     the inherited 16 px and came out as a 51 px hairline nobody could see. */
+  #attrib { margin-top:calc(96 * var(--wu)); text-align:center;
+    opacity:0; transform:translateY(.5em);
+    transition:opacity 2.4s ease, transform 2.4s cubic-bezier(.2,.7,.3,1); }
+  #attrib.show { opacity:1; transform:none; }
+  #attrib .rule { width:calc(150 * var(--wu)); height:calc(2 * var(--wu));
+    margin:0 auto calc(56 * var(--wu)); background:rgba(198,166,116,.42); }
+  #attrib .work { font-family:Iowan Old Style,Palatino,Georgia,serif;
+    font-style:italic; font-weight:400; color:rgba(233,222,205,.92); }
+  #attrib .who { margin-top:calc(26 * var(--wu)); color:rgba(198,166,116,.82); }
+
+  /* THE CAPTION BAND IS GONE, and so is this page's private copy of #info.
+
+     The caption was a centred credit at 14 wall px with .4 alpha - the
+     faintest string anywhere on the wall - sitting 39 wall px off the bottom
+     edge where the safe rectangle asks for 76. It is now the Signature:
+     wall.js draws it bottom-left of the safe rectangle at --t5, unplated,
+     because the ground under that corner here is plain warm near-black and a
+     halo is enough. See start() below.
+
+     #info is wall.css's now. Thirteen private copies of the same box, each at
+     its own offset, is how the wall went piecemeal the first time; this one
+     also carried a bottom:9vh whose only purpose was to clear the caption
+     band that no longer exists.
+
+     The diagnostics box and the Signature share the bottom-left corner, so
+     hide the credit while the box is open: one is for the sofa and the other
+     is for somebody at a keyboard, and they are never both wanted. */
+  body.showinfo .signature { display:none; }
+</style>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: every page here runs its setup at the
+     end of an INLINE script, which executes before any deferred bottom
+     tag. Loaded at the bottom, Wall was undefined exactly when the first
+     episode tried to speak. It touches the DOM only inside its calls, so
+     the head is safe. nav.js stays at the bottom and still sees it. -->
+<script src="wall.js"></script>
+</head>
+<body>
+<div id="stage">
+  <div id="speaker" class="r-key"></div>
+  <div id="passage"></div>
+  <div id="attrib"><div class="rule"></div><div class="work r-lead"></div><div class="who r-key"></div></div>
+</div>
+<div id="info"></div>
+
+<script>
+'use strict';
+/* ===========================================================================
+   READING - a passage of literature, revealed a line at a time.
+
+   THERE IS NO LITERATURE IN THIS FILE. That is the point of it. What is here
+   is a list of SLUGS - fifty-odd works, title, author and year - and the text
+   itself is drawn live from Standard Ebooks, whose editions are public domain
+   and carefully typeset. Every showing is a fresh draw from tens of thousands
+   of lines, so the wall is not cycling a handful of quotations somebody once
+   pasted in.
+
+   WHY STANDARD EBOOKS AND NOT PROJECT GUTENBERG. Gutenberg is the bigger
+   corpus and it was the obvious first choice, but it does not send the CORS
+   header, and the wall's pages are loaded from file:// - so the browser
+   refuses the response before we ever see it. Measured, from the Pi itself:
+
+       gutenberg.org      blocked (no Access-Control-Allow-Origin)
+       gutendex.com       allowed, but it serves METADATA whose download
+                          links point back at gutenberg.org
+       en.wikisource.org  allowed, but the obvious titles land on
+                          disambiguation pages rather than on text
+       standardebooks.org allowed - and one URL per book returns the whole
+                          work as clean semantic XHTML
+
+   THE MARKUP IS WHY THIS WORKS AT ALL. Standard Ebooks marks verse as one
+   <span> per LINE separated by <br/>, inside a <p>. So "show it a line at a
+   time" is not a guess about where to break - the line breaks are the ones
+   the poet wrote. Prose has no such structure, so prose is wrapped to a
+   measure and revealed a wrapped line at a time instead.
+
+   THE ATTRIBUTION IS HELD BACK. Joe's ask: the author, the work and the date
+   appear only once the passage has been up for half the slide. So you read it
+   cold first, and then find out what it was - which is a different and better
+   experience of a famous passage than seeing the label first.
+
+   IF THE NETWORK IS DOWN this page hands straight on to the next one, the way
+   precip.html does on a dry day, rather than showing an empty frame. It also
+   keeps the last passage pool it successfully fetched, so a brief outage
+   shows something rather than nothing.
+
+   Keys: n new passage · i info · arrows rotate wall pages.
+   URL params: ?pin (keep drawing instead of handing on) · ?work=<slug>
+   =========================================================================== */
+
+/* ---- rotation navigation (remote D-pad) -------------------------------- */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+const Q = new URLSearchParams(location.search);
+const PINNED = /[?&]pin\b/.test(location.search);
+
+const CONFIG = {
+  slideSec:      165,   // the whole turn, start to hand-off
+  /* WHEN THE LABEL ARRIVES, as a fraction of the slide. Joe asked for the
+     attribution to appear once the text has been up for half the slide, so
+     the reveal has to be comfortably finished before this. */
+  attributionAt: 0.50,
+  /* The passage must therefore be fully on screen well before that. Lines are
+     revealed on a stagger; this is where the LAST one lands. */
+  revealDoneAt:  0.34,
+  lineMinMs:     900,   // never faster than this between lines, however short
+  minLines:        8,
+  /* FOURTEEN IS A HEIGHT BUDGET, not a taste, and it is now a CEILING rather
+     than an estimate. At the wall's 70 px the leading is 116 px, so fourteen
+     lines is about 1630 rows; the speaker label and the attribution have both
+     grown to the house ladder since this number was chosen, and the rows
+     available are 2008 rather than 2160 because the safe rectangle is no
+     longer being spent on overscan. Whether fourteen actually fit is therefore
+     decided by measurement - fitToScreen() below - and on a night when it does
+     not, the trailing lines are dropped before layout rather than pushed off
+     the bottom edge where nobody would ever see them. */
+  maxLines:       14,
+  proseMeasure:   58,   // characters, for wrapping prose into display lines
+  netMs:       25000,   // a whole book is a few hundred KB; be patient
+  tries:           3,   // books to try before giving up and handing on
+  nextPage: '' /* standalone: nowhere to hand on to; start again */
+};
+
+/* ===========================================================================
+   THE WORKS - metadata only. slug, title, author, year.
+
+   The slug is the path under standardebooks.org/ebooks/. Translated works
+   carry the translator as a third segment, which is why some of these have
+   three parts and most have two. Every one of these was checked to return 200
+   before it went in; the two that looked right and were not (Shakespeare's
+   sonnets, Blake's songs) are simply absent rather than silently failing at
+   two in the morning.
+   =========================================================================== */
+const WORKS = [
+  ['william-shakespeare/hamlet',                          'Hamlet', 'William Shakespeare', 1601],
+  ['william-shakespeare/macbeth',                         'Macbeth', 'William Shakespeare', 1606],
+  ['william-shakespeare/romeo-and-juliet',                'Romeo and Juliet', 'William Shakespeare', 1597],
+  ['william-shakespeare/king-lear',                       'King Lear', 'William Shakespeare', 1606],
+  ['william-shakespeare/othello',                         'Othello', 'William Shakespeare', 1604],
+  ['william-shakespeare/a-midsummer-nights-dream',        'A Midsummer Night’s Dream', 'William Shakespeare', 1596],
+  ['william-shakespeare/the-tempest',                     'The Tempest', 'William Shakespeare', 1611],
+  ['william-shakespeare/julius-caesar',                   'Julius Caesar', 'William Shakespeare', 1599],
+  ['william-shakespeare/twelfth-night',                   'Twelfth Night', 'William Shakespeare', 1602],
+  ['william-shakespeare/much-ado-about-nothing',          'Much Ado About Nothing', 'William Shakespeare', 1599],
+  ['john-milton/paradise-lost',                           'Paradise Lost', 'John Milton', 1667],
+  ['homer/the-iliad/william-cullen-bryant',               'The Iliad', 'Homer', -750],
+  ['homer/the-odyssey/william-cullen-bryant',             'The Odyssey', 'Homer', -725],
+  ['dante-alighieri/the-divine-comedy/henry-wadsworth-longfellow', 'The Divine Comedy', 'Dante Alighieri', 1320],
+  ['john-donne/poetry',                                   'Poetry', 'John Donne', 1633],
+  ['john-keats/poetry',                                   'Poetry', 'John Keats', 1820],
+  ['walt-whitman/leaves-of-grass',                        'Leaves of Grass', 'Walt Whitman', 1855],
+  ['w-b-yeats/poetry',                                    'Poetry', 'W. B. Yeats', 1919],
+  ['oscar-wilde/poetry',                                  'Poetry', 'Oscar Wilde', 1881],
+  ['robert-frost/north-of-boston',                        'North of Boston', 'Robert Frost', 1914],
+  ['edgar-lee-masters/spoon-river-anthology',             'Spoon River Anthology', 'Edgar Lee Masters', 1915],
+  ['jane-austen/pride-and-prejudice',                     'Pride and Prejudice', 'Jane Austen', 1813],
+  ['jane-austen/persuasion',                              'Persuasion', 'Jane Austen', 1817],
+  ['herman-melville/moby-dick',                           'Moby-Dick', 'Herman Melville', 1851],
+  ['mary-shelley/frankenstein',                           'Frankenstein', 'Mary Shelley', 1818],
+  ['charles-dickens/a-tale-of-two-cities',                'A Tale of Two Cities', 'Charles Dickens', 1859],
+  ['charles-dickens/great-expectations',                  'Great Expectations', 'Charles Dickens', 1861],
+  ['emily-bronte/wuthering-heights',                      'Wuthering Heights', 'Emily Brontë', 1847],
+  ['charlotte-bronte/jane-eyre',                          'Jane Eyre', 'Charlotte Brontë', 1847],
+  ['george-eliot/middlemarch',                            'Middlemarch', 'George Eliot', 1872],
+  ['thomas-hardy/tess-of-the-durbervilles',               'Tess of the d’Urbervilles', 'Thomas Hardy', 1891],
+  ['bram-stoker/dracula',                                 'Dracula', 'Bram Stoker', 1897],
+  ['oscar-wilde/the-picture-of-dorian-gray',              'The Picture of Dorian Gray', 'Oscar Wilde', 1890],
+  ['robert-louis-stevenson/the-strange-case-of-dr-jekyll-and-mr-hyde', 'Dr Jekyll and Mr Hyde', 'Robert Louis Stevenson', 1886],
+  ['f-scott-fitzgerald/the-great-gatsby',                 'The Great Gatsby', 'F. Scott Fitzgerald', 1925],
+  ['joseph-conrad/heart-of-darkness',                     'Heart of Darkness', 'Joseph Conrad', 1899],
+  ['virginia-woolf/mrs-dalloway',                         'Mrs Dalloway', 'Virginia Woolf', 1925],
+  ['james-joyce/ulysses',                                 'Ulysses', 'James Joyce', 1922],
+  ['kate-chopin/the-awakening',                           'The Awakening', 'Kate Chopin', 1899],
+  ['mark-twain/the-adventures-of-huckleberry-finn',       'Huckleberry Finn', 'Mark Twain', 1884],
+  ['lewis-carroll/alices-adventures-in-wonderland/john-tenniel', 'Alice’s Adventures in Wonderland', 'Lewis Carroll', 1865],
+  ['lewis-carroll/through-the-looking-glass/john-tenniel', 'Through the Looking-Glass', 'Lewis Carroll', 1871],
+  ['henry-david-thoreau/walden',                          'Walden', 'Henry David Thoreau', 1854],
+  ['h-g-wells/the-time-machine',                          'The Time Machine', 'H. G. Wells', 1895],
+  ['edgar-allan-poe/short-fiction',                       'Short Fiction', 'Edgar Allan Poe', 1845],
+  ['leo-tolstoy/anna-karenina/constance-garnett',         'Anna Karenina', 'Leo Tolstoy', 1878],
+  ['fyodor-dostoevsky/crime-and-punishment/constance-garnett', 'Crime and Punishment', 'Fyodor Dostoevsky', 1866],
+  ['fyodor-dostoevsky/the-brothers-karamazov/constance-garnett', 'The Brothers Karamazov', 'Fyodor Dostoevsky', 1880],
+  ['anton-chekhov/short-fiction/constance-garnett',       'Short Fiction', 'Anton Chekhov', 1900],
+  ['henrik-ibsen/a-dolls-house/r-farquharson-sharp',      'A Doll’s House', 'Henrik Ibsen', 1879],
+  ['miguel-de-cervantes-saavedra/don-quixote/john-ormsby','Don Quixote', 'Miguel de Cervantes', 1605],
+  ['marcus-aurelius/meditations/george-long',             'Meditations', 'Marcus Aurelius', 180],
+];
+
+const SRC = s => 'https://standardebooks.org/ebooks/' + s + '/text/single-page';
+
+/* ---- elements ---- */
+const stageEl   = document.getElementById('stage');
+const speakerEl = document.getElementById('speaker');
+const passEl    = document.getElementById('passage');
+const attribEl  = document.getElementById('attrib');
+const infoEl    = document.getElementById('info');
+
+/* THE PERMANENT CREDIT. Standard Ebooks' editions are public domain and the
+   line saying so is the one string on this page allowed to be permanent - it
+   is legal attribution, which is the only thing the Signature surface is for.
+   It is set once, here, and never rewritten: the page used to swap it for
+   "from the last passage fetched · network unavailable" whenever the wifi
+   dropped, which is wrong twice over. The text still came out of Standard
+   Ebooks whether it arrived over the wire or out of the cache, so the credit
+   must keep saying so; and where the bytes came from is a diagnostic, which
+   now lives in #info where somebody at a keyboard can read it.
+
+   Unplated: the ground under the bottom-left corner of this page is plain warm
+   near-black, so the halo .signature already carries is enough, and a pill
+   there would be the only hard-edged object on a page of type. .r-credit is
+   added for its .72 opacity - .signature itself sets none. */
+Wall.signature('text drawn live from Standard Ebooks · public domain')
+    .classList.add('r-credit');
+
+let RUN = null;              // { work, lines, speaker, t0, timers }
+let handingOff = false;
+/* The reveal stagger, the held-back attribution and the hand-off are all
+   timers, and they must all die together when the passage is replaced - a
+   stale one lands the previous poem's last line in the middle of the next.
+   That registry used to be four private lines here. It is wall.js's now, so
+   the wall keeps ONE schedule implementation rather than thirteen dialects
+   that drift apart. later() survives as a name because it reads better in the
+   stagger loop below; it is Wall.after with the arguments the other way up. */
+function later(fn, ms){ Wall.after(ms, fn); }
+
+/* =======================================================================
+   FETCHING AND EXTRACTING
+   ======================================================================= */
+async function getBook(slug){
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), CONFIG.netMs);
+  try {
+    const r = await fetch(SRC(slug), { signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.text();
+  } finally { clearTimeout(t); }
+}
+
+const squash = s => s.replace(/\s+/g, ' ').trim();
+
+/* Who is speaking, for a play. Standard Ebooks sets a play as a table: one
+   row per speech, the speaker in a <td epub:type="z3998:persona"> beside the
+   verse. Nothing else on the wall needs this, but a passage of Shakespeare
+   with no idea who is talking reads as a fragment rather than a speech. */
+function speakerOf(node){
+  let el = node;
+  while (el && el.tagName && el.tagName.toLowerCase() !== 'tr') el = el.parentElement;
+  if (!el) return null;
+  for (const td of el.children){
+    const ty = td.getAttribute && td.getAttribute('epub:type');
+    if (ty && ty.indexOf('persona') >= 0){
+      const s = squash(td.textContent);
+      if (s && s.length < 30) return s;
+    }
+  }
+  return null;
+}
+
+function isStageDirection(el){
+  let n = el;
+  while (n && n.getAttribute){
+    const ty = n.getAttribute('epub:type') || '';
+    if (ty.indexOf('stage-direction') >= 0) return true;
+    n = n.parentElement;
+  }
+  return false;
+}
+
+/* Pull the book apart into candidate LINES.
+
+   Verse: one <span> per line, which is the poet's own lineation.
+   Prose: one <p> becomes several display lines, wrapped to a measure.
+
+   Both come back as blocks - a block is a stretch that belongs together (one
+   speech, one stanza, one paragraph) - because a passage that starts halfway
+   through a sentence reads like a transcription error. */
+function extractBlocks(html){
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('h1,h2,h3,h4,h5,h6,figcaption,table.endnotes').forEach(n => n.remove());
+
+  const blocks = [];
+  for (const p of doc.querySelectorAll('p')){
+    if (isStageDirection(p)) continue;
+    const hasBr = !!p.querySelector('br');
+
+    if (hasBr){
+      const lines = [];
+      for (const el of p.children){
+        if (el.tagName.toLowerCase() !== 'span') continue;
+        if (isStageDirection(el)) continue;
+        const t = squash(el.textContent);
+        if (t) lines.push(t);
+      }
+      if (lines.length >= 3) blocks.push({ verse:true, lines, speaker: speakerOf(p) });
+    } else {
+      const t = squash(p.textContent);
+      if (t.length < 90) continue;                 // too short to be a real paragraph
+      blocks.push({ verse:false, lines:[t], speaker:null });
+    }
+  }
+  return blocks;
+}
+
+/* Wrap a prose paragraph to a measure, breaking on spaces only. */
+function wrap(text, measure){
+  const words = text.split(' '), out = [];
+  let cur = '';
+  for (const w of words){
+    if (!cur.length) { cur = w; continue; }
+    if ((cur + ' ' + w).length > measure){ out.push(cur); cur = w; }
+    else cur += ' ' + w;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/* HOW GOOD IS THIS PASSAGE, on a wall, with no context?
+
+   A random slice of a novel is usually poor: it starts mid-sentence, or it is
+   four words of dialogue, or it is a run of "said he" attributions. Rather
+   than trust one draw, take a few dozen and keep the best - which costs
+   nothing, because the whole book is already in memory. */
+function scoreBlock(b){
+  const lines = b.verse ? b.lines : wrap(b.lines[0], CONFIG.proseMeasure);
+  if (lines.length < CONFIG.minLines) return null;
+  const use = lines.slice(0, CONFIG.maxLines);
+  const text = use.join(' ');
+  let s = 0;
+
+  // a passage should begin like a beginning and end like an ending
+  if (/^[“"'(A-Z]/.test(use[0])) s += 3;
+  if (/[.!?”"']$/.test(use[use.length-1])) s += 2;
+  /* AND IT SHOULD NOT OPEN ON A FRAGMENT. Sampling the live wall turned up
+     "So they are;" as the first line of a Tempest passage - grammatical, and
+     capitalised, so both tests above passed it, but it is Ferdinand finishing
+     somebody else's sentence and it reads as though the screen missed the
+     start. A short opening line is the tell. */
+  if (use[0].length < 20) s -= 5;
+  else if (use[0].length > 30) s += 2;
+
+  // verse reads better cold than prose does, and it is why the line-by-line
+  // reveal exists at all
+  if (b.verse) s += 4;
+  if (b.speaker) s += 1;
+
+  // lines of a decent length: very short ones are stichomythia or list items
+  const avg = use.reduce((a,l) => a + l.length, 0)/use.length;
+  if (avg > 24 && avg < 66) s += 3; else s -= 2;
+
+  // penalise the mechanics of prose fiction, which read as noise out of context
+  const said = (text.match(/\b(said|replied|answered|cried|asked)\b/gi) || []).length;
+  s -= Math.min(4, said);
+  if (/^(chapter|book|act|scene|part|canto|volume)\b/i.test(use[0])) s -= 8;
+  if (/^[IVXLC]+\.?$/.test(use[0])) s -= 8;
+  // a wall of capitals is a heading that escaped the filter
+  if (/^[^a-z]{12,}/.test(use[0])) s -= 6;
+
+  return { lines: use, verse: b.verse, speaker: b.speaker, score: s };
+}
+
+function bestPassage(blocks, rand){
+  let best = null;
+  const tries = Math.min(140, Math.max(40, blocks.length));
+  for (let i = 0; i < tries; i++){
+    const b = blocks[Math.floor(rand()*blocks.length)];
+    if (!b) continue;
+    const c = scoreBlock(b);
+    if (c && (!best || c.score > best.score)) best = c;
+  }
+  return best;
+}
+
+/* =======================================================================
+   THE TURN
+   ======================================================================= */
+function paint(p, work){
+  passEl.innerHTML = '';
+  speakerEl.textContent = p.speaker || '';
+  for (const line of p.lines){
+    const d = document.createElement('div');
+    d.className = 'line' + (p.verse ? ' verse' : '');
+    d.textContent = line;
+    passEl.appendChild(d);
+  }
+
+  /* THE HELD-BACK LABEL GOES IN NOW, BEFORE ANYTHING IS MEASURED. You read it
+     cold and find out afterwards what it was, so only the opacity is animated
+     later - see CONFIG.attributionAt.
+
+     Two reasons the words must be in the DOM from the start, and the second
+     was being got wrong. Writing the text at reveal time would grow an empty
+     element to two lines of type at the exact moment it fades in, and the
+     passage above it would jump upward while the reader is halfway through a
+     poem. AND an empty div is zero pixels tall, so an attribution written
+     after fitToScreen() is an attribution fitToScreen() cannot see: it fitted
+     the passage to the screen, then a quarter of a screen of type appeared
+     underneath and pushed the whole centred stack out through both ends of the
+     safe rectangle. Measured at 3840x2160 on fourteen lines of Hamlet, the
+     speaker label came out 65 wall px from the top edge where the safe
+     rectangle asks for 76. Reserve the space first, fit second. */
+  attribEl.querySelector('.work').textContent = work.title;
+  attribEl.querySelector('.who').textContent  = work.author + '  ·  ' + work.dateLabel;
+
+  /* fitToScreen() may DROP trailing lines, so the list of elements and the
+     stagger that reveals them must both be taken after it has run - not
+     before, and not on either side of each other. */
+  fitToScreen();
+  const els = [...passEl.children];
+
+  const slideMs = CONFIG.slideSec*1000;
+  const revealWindow = slideMs*CONFIG.revealDoneAt;
+  const step = Math.max(CONFIG.lineMinMs, revealWindow/Math.max(1, els.length));
+
+  if (p.speaker) later(() => speakerEl.classList.add('show'), 500);
+  els.forEach((d, i) => later(() => d.classList.add('show'), 900 + i*step));
+
+  /* The words went in above, before the fit. Only the fade is scheduled. */
+  later(() => attribEl.classList.add('show'), slideMs*CONFIG.attributionAt);
+
+  later(handOff, slideMs);
+}
+
+/* NOTHING MAY FALL OFF THE BOTTOM. The passage length is chosen before any of
+   it is measured - a long line that turns, an unusually tall attribution, a
+   screen that is not the one this was tuned on - and the failure mode is
+   silent, because a line pushed past the bottom edge simply is not there. So
+   after the type is laid out, drop trailing lines until it fits. Verse loses
+   its last line before the reader loses it off the screen.
+
+   IT WAS MEASURING THE WRONG RECTANGLE. innerHeight - 24 is the glass, and the
+   glass is not what the viewer sees: a television that has reset Just Scan
+   eats the top and bottom of the raster, so the last line of a fourteen-line
+   passage went missing on the wall while fitting perfectly here. The budget is
+   now the stage's CONTENT box - the glass less the safe rectangle top and
+   bottom - and no number is written down twice, because #stage already carries
+   var(--safe-y) as its padding.
+
+   Margins are counted on BOTH sides. Only margin-top used to be added up, so
+   the speaker's margin-bottom - 70 wall px now the label has grown to the sofa
+   floor - was invisible to the sum. Under-counting the stack is the one
+   arithmetic error this function exists to prevent. */
+function fitToScreen(){
+  const sty  = getComputedStyle(stageEl);
+  const room = stageEl.clientHeight
+             - parseFloat(sty.paddingTop || 0) - parseFloat(sty.paddingBottom || 0);
+  const used = () => {
+    let t = 0;
+    for (const el of stageEl.children){
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      if (r.height) t += r.height + parseFloat(cs.marginTop || 0)
+                                  + parseFloat(cs.marginBottom || 0);
+    }
+    return t;
+  };
+  let guard = 0;
+  while (used() > room && passEl.children.length > CONFIG.minLines && guard++ < 40){
+    passEl.lastElementChild.remove();
+  }
+  return passEl.children.length;
+}
+
+function handOff(){
+  if (handingOff) return;
+  /* Take the schedule down before anything else. On ?pin the page draws again
+     in place rather than navigating, so nothing else would clear it and the
+     next passage would inherit the last one's timers. */
+  Wall.clearEpisode();
+  Wall.clearTimers();
+  if (PINNED){ start(); return; }          // ?pin: draw again instead of leaving
+  handingOff = true;
+  /* An EMPTY nextPage is what build_github.py leaves behind when it cuts a
+     page out of the rotation for publishing - start again rather than
+     navigating nowhere. */
+  if (CONFIG.nextPage) location.href = Wall.nextPage(CONFIG.nextPage); else location.reload();
+}
+
+function dateLabel(year){
+  if (year < 0) return 'c. ' + Math.abs(year) + ' BC';
+  if (year < 1000) return 'c. ' + year;
+  return String(year);
+}
+
+/* Remember the last pool that worked. Not to avoid fetching - a fresh draw is
+   the whole idea - but so that a network blip shows a poem instead of nothing.
+   Only the extracted lines are kept, not the book. */
+function cache(work, blocks){
+  try {
+    const small = blocks.filter(b => b.verse).slice(0, 400);
+    localStorage.setItem('reading:last', JSON.stringify({ work, blocks: small.length ? small : blocks.slice(0,200) }));
+  } catch (e) { /* quota or private mode: the cache is a nicety, not a feature */ }
+}
+function cached(){
+  try { return JSON.parse(localStorage.getItem('reading:last') || 'null'); }
+  catch (e) { return null; }
+}
+
+async function start(){
+  Wall.clearTimers();
+  handingOff = false;
+  attribEl.classList.remove('show');
+  speakerEl.classList.remove('show');
+  passEl.innerHTML = '';
+
+  const rand = Math.random;
+  const pinned = Q.get('work');
+  const order = pinned
+    ? WORKS.filter(w => w[0] === pinned)
+    : WORKS.slice().sort(() => rand() - 0.5);
+
+  for (let i = 0; i < Math.min(CONFIG.tries, order.length); i++){
+    const [slug, title, author, year] = order[i];
+    const work = { slug, title, author, year, dateLabel: dateLabel(year) };
+    try {
+      const t0 = performance.now();
+      const html = await getBook(slug);
+      const blocks = extractBlocks(html);
+      const p = bestPassage(blocks, rand);
+      if (!p) throw new Error('no passage scored');
+      RUN = { work, p, ms: Math.round(performance.now()-t0), bytes: html.length, blocks: blocks.length };
+      cache(work, blocks);
+      paint(p, work);
+      updateInfo();
+      return;
+    } catch (e) {
+      console.log('[reading] ' + slug + ': ' + e.message);
+    }
+  }
+
+  /* Nothing came back. Try the last pool that did, and if there is none,
+     hand the wall on rather than sitting on an empty page. */
+  const c = cached();
+  if (c){
+    const p = bestPassage(c.blocks, rand);
+    if (p){
+      RUN = { work: c.work, p, ms: 0, bytes: 0, blocks: c.blocks.length, offline: true };
+      paint(p, c.work);
+      updateInfo();
+      return;
+    }
+  }
+  console.log('[reading] nothing to show');
+  /* Same trap as artworks: a published copy has an empty nextPage, handOff()
+     falls through to location.reload(), and a first-time visitor with no
+     network gets a page that reloads itself forever. */
+  if (!CONFIG.nextPage){
+    passEl.textContent='No network. This page fetches a whole book from '
+      + 'standardebooks.org each time it runs, and nothing is cached yet.';
+    return;
+  }
+  handOff();
+}
+
+function updateInfo(){
+  if (!RUN) return;
+  infoEl.textContent =
+    'work      ' + RUN.work.title + '  (' + RUN.work.dateLabel + ')\n' +
+    'author    ' + RUN.work.author + '\n' +
+    'slug      ' + RUN.work.slug + '\n' +
+    /* WHERE THE BYTES CAME FROM used to be said on the wall, in place of the
+       credit, whenever the network was down. It is a diagnostic, so it is here
+       now, and it says the same thing in more detail. */
+    'fetch     ' + (RUN.offline ? 'from cache · network unavailable'
+                                : (RUN.bytes/1024).toFixed(0) + ' KB in ' + RUN.ms + ' ms') + '\n' +
+    'blocks    ' + RUN.blocks + '   passage ' + RUN.p.lines.length + ' lines, score ' + RUN.p.score + '\n' +
+    'kind      ' + (RUN.p.verse ? 'verse' : 'prose') + (RUN.p.speaker ? '  speaker ' + RUN.p.speaker : '') + '\n' +
+    'corpus    ' + WORKS.length + ' works\n' +
+    'source    standardebooks.org · public domain\n' +
+    'slide     ' + CONFIG.slideSec + ' s   attribution at ' +
+                   Math.round(CONFIG.slideSec*CONFIG.attributionAt) + ' s\n' +
+    'keys      n new passage · i info';
+}
+
+addEventListener('keydown', (e) => {
+  switch (e.key){
+    case 'i': case 'I': document.body.classList.toggle('showinfo'); updateInfo(); break;
+    case 'n': case 'N': start(); break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    default:
+      if (/^[0-9]$/.test(e.key)){
+        const score = e.key === '0' ? 10 : parseInt(e.key, 10);
+        console.log('[reading] RATING STUB - score', score, RUN && RUN.work.slug);
+      }
+  }
+});
+
+start();
+</script>
+<script src="nav.js"></script>
+</body>
+</html>

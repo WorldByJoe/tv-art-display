@@ -437,6 +437,22 @@ function newRun(){
     +planets.length+' planets');
 }
 
+/* How much the crossing opens the corridor across the track.
+
+   THE CORRIDOR IS A SLIVER AND NO CAMERA CAN CHANGE THAT. A thousand light
+   years long and a dozen wide is eighty to one; framed whole it is a hairline
+   across the middle of the screen with the rest of the frame empty, which is
+   what Joe was looking at. The fly-round already answers this with a six-times
+   across-track stretch and says so on screen. The crossing used 1 - no stretch
+   at all - which is the honest scale and the unreadable one.
+
+   Three is the settlement: enough that the ladder has body and the near rungs
+   sit off the line rather than on it, little enough that nobody could mistake
+   the picture for a cylinder eighty light years wide. Measured at 5 and 8 the
+   rungs start reading as a cloud around the ship rather than as a line it is
+   travelling along, which trades one confusion for another. */
+const CRUISE_XPAND=3.0;
+let cruiseSpin=0, cruiseTilt=.30;      // the crossing's frozen orientation
 const PHASES=['galaxy','thin','fly','sol','depart','cruise','tour'];
 function enterPhase(p){
   phase=p;
@@ -467,6 +483,11 @@ function enterPhase(p){
       +'sliver of its orbital speed. Every probe that has ever left the Solar '
       +'System left this way.', {hold:5000});   // the SLINGSHOT moment hides the lane at 5.7 s
   } else if (p==='cruise'){
+    /* Freeze the chart's orientation for the whole crossing. Taken from where
+       the camera already is, so there is no jump at the moment the torch
+       lights, and then never touched again - see the note in the cruise branch
+       of the frame loop for why holding still is what makes the path legible. */
+    cruiseSpin=CAM.spin; cruiseTilt=.46; closeOff=-1;   // -1 = snap the zoom next frame
     Wall.lane('From here the engine is fiction - a torch drive holding one '
       +'gravity of thrust for years. The clocks are not fiction: at these '
       +'speeds the ship genuinely ages more slowly than the Earth it left.',
@@ -557,11 +578,40 @@ function buildPools(){
   STAR=EXO.stars.filter(function(s){ return s[3]>0; });
   SN=STAR.length;
   SPC=new Float64Array(SN*3); DSUN=new Float64Array(SN);
+  SRMUL=new Float32Array(SN); SAMUL=new Float32Array(SN);
   cullMax=1;
   for (let i=0;i<SN;i++){
     const s=STAR[i], u=unitDir(s[1],s[2]), d=s[3]*LY;   // the archive's parsecs, converted once
     SPC[i*3]=u[0]*d; SPC[i*3+1]=u[1]*d; SPC[i*3+2]=u[2]*d;
     DSUN[i]=d; if (d>cullMax) cullMax=d;
+
+    /* WHAT THE STAR IS, not only where it is (Joe, 2026-09-11: "color and size
+       the stars according to their actual size and brightness").
+
+       The snapshot carries effective temperature and stellar MASS but neither
+       radius nor luminosity, so both are derived - which for main-sequence
+       planet hosts is the standard relation and not a guess:
+
+         L/Lsun = (M/Msun)^3.5      the mass-luminosity relation, with the
+                                    shallower ^2.3 low-mass branch below
+                                    0.43 Msun where it genuinely changes slope
+         R/Rsun = sqrt(L) * (5772/Teff)^2      Stefan-Boltzmann, rearranged
+
+       So a 0.2-mass red dwarf comes out near a fifth of the Sun's radius and a
+       two-hundredth of its light, and a 1.4-mass F star near 1.4 radii and
+       three times the light. Both are then COMPRESSED before they reach the
+       screen: luminosity across this catalogue spans four orders of magnitude
+       and radius nearly two, and drawn linearly the picture would be one white
+       disc and four thousand invisible ones. The exponents below keep the
+       ORDER honest - a bigger star is always drawn bigger, a brighter one
+       always brighter - while the range stays inside what a screen can show.
+       This is the same cartographer's compression the radius axis already
+       uses, told the same way. */
+    const M=(s[6]>0? s[6] : 1), T=(s[5]>0? s[5] : 5772);
+    const L=(M<0.43)? 0.23*Math.pow(M,2.3) : Math.pow(M,3.5);
+    const R=Math.sqrt(L)*Math.pow(5772/T,2);
+    SRMUL[i]=clamp(Math.pow(R,0.55), 0.45, 2.6);
+    SAMUL[i]=clamp(Math.pow(L,0.13), 0.45, 1.85);
   }
 }
 function starIndex(name){
@@ -590,6 +640,7 @@ const CORRIDOR_N=9;
    nearest rungs off frame. */
 const XPAND=6;
 let AXL=null, RADL=null, CULL=null, DIM=null, corrR=12, corrIdx=[];
+let SRMUL=null, SAMUL=null;   // per-star size and brightness, from mass and temperature
 function buildCorridor(){
   if (!AXL){ AXL=new Float64Array(SN); RADL=new Float64Array(SN);
              CULL=new Float64Array(SN); DIM=new Float64Array(SN); }
@@ -713,8 +764,15 @@ const LUT_R=new Float32Array(LUT_N), LUT_A=new Float32Array(LUT_N);
 (function(){
   for (let i=0;i<LUT_N;i++){
     const lg=i/LUT_K, d=Math.max(1, SQ*(Math.pow(10,lg)-1));
-    LUT_R[i]=clamp(14.3*Math.pow(d,-0.35), .5, 11);
-    LUT_A[i]=clamp(1.48*Math.pow(d,-0.22), .16, 1);
+    /* STEEPENED 2026-09-11 at Joe's ask - "make the nearer stars bigger and
+       the more distant ones smaller and dimmer". Physically size falls as 1/d
+       and brightness as 1/d squared; at -0.35 and -0.22 the picture had barely
+       any depth cue left in it and every star read as the same speck. These
+       are still far shallower than the truth, because the truth over a range
+       from 4 to 8,000 light years is one blazing disc and nothing else, but
+       there is now a depth ordering the eye can actually use. */
+    LUT_R[i]=clamp(15.5*Math.pow(d,-0.50), .35, 13);
+    LUT_A[i]=clamp(1.60*Math.pow(d,-0.34), .10, 1);
   }
 })();
 
@@ -913,13 +971,23 @@ function drawChart(cam, alpha, o){
     const cl=CULL? CULL[i] : 0;
     const fade = (cl<0)? 1 : clamp((cut-cl)/band, 0, 1);
     const dim  = DIM? (1+(DIM[i]-1)*thinT) : 1;
-    let r=LUT_R[li]*zk, av=LUT_A[li];
+    /* distance from the table, the star's own size and light from its mass and
+       temperature - the two multiply, exactly as they do in the sky */
+    const im=SRMUL? SRMUL[i] : 1, ia=SAMUL? SAMUL[i] : 1;
+    let r=clamp(LUT_R[li]*zk*im, .3, 26), av=clamp(LUT_A[li]*ia, 0, 1);
     /* A rung of the ladder never shrinks into the background. Six hundred
        light years from anywhere its honest size is a fraction of a pixel, and
        the whole run is about watching it go by. */
     if (cl===-2 && thinT>0){
-      const boost=thinT;
-      r  = r + (Math.max(r,5.0)-r)*boost;
+      /* THE FLOOR CARRIES THE STAR'S OWN SIZE. At a flat 5 px every rung was
+         drawn as the same dot however big the star really was, which threw
+         away exactly what Joe asked to see - the floor is what the eye reads
+         on the crossing, because six hundred light years out the honest size
+         is a fraction of a pixel and the boost is doing all the work. Scaling
+         the floor keeps the ladder visible AND keeps a red dwarf smaller than
+         an F star. */
+      const boost=thinT, floorR=7.0*(SRMUL? SRMUL[i] : 1);
+      r  = r + (Math.max(r,floorR)-r)*boost;
       av = av + (Math.max(av,.95)-av)*boost;
     }
     ctx.globalAlpha=alpha*av*fade*dim;
@@ -1219,20 +1287,49 @@ function frame(now){
     const rc=relClocks(x, distLy);
     shipV=rc.v*299792; earthYr=rc.T; shipYr=rc.tau; doneLy=x;
 
+    /* THE CAMERA HOLDS STILL FOR THE WHOLE CROSSING (Joe, 2026-09-11: "I still
+       find the path to the distant star to be confusing. Let's turn off the
+       rotating view as we go").
+
+       He is right, and the reason is worth naming: while the view turns, every
+       star on screen is moving for TWO reasons at once - the ship going
+       forward, and the chart going round - and nothing in the picture tells
+       you which is which. Held still, the only thing that moves is the thing
+       that is actually moving, and the rungs slide past the ship the way
+       milestones slide past a car. The orientation is frozen once, on entry,
+       so it also cannot drift between one viewing and the next. */
+    CAM.spin  = cruiseSpin;
+    CAM.tilt  = cruiseTilt;
     /* The zoom sizes itself to whatever rung is coming: chartSpan is last
        frame's distance to the fourth nearest star still on the chart, so a
-       couple of them are always in frame and the ones we brush past fill it. */
-    const want=clamp(offForRadius(chartSpan*2.4), 1.05, 4.20);
-    closeOff += (want-closeOff)*clamp(dt*0.9,0,1);
-    CAM.spin += dt*0.035;
-    CAM.tilt  = .30 + .10*Math.sin(u*TAU*0.75);
+       couple of them are always in frame and the ones we brush past fill it.
+       1.45, not 2.4: at 2.4 the corridor sat in a thin band across the middle
+       of the screen with most of the frame empty, which is the other half of
+       "maximize the size of the travel visualization to fill the screen". */
+    const want=clamp(offForRadius(chartSpan*2.0), 0.80, 4.20);
+    /* SNAP ON THE FIRST FRAME, ease after. Easing from whatever the previous
+       phase left meant the crossing opened by zooming, which is one more
+       motion the eye has to explain; and it made the headless check lie, since
+       a per-frame accumulator never converges when only the last few frames
+       render. */
+    if (closeOff<=0) closeOff=want;
+    else closeOff += (want-closeOff)*clamp(dt*0.9,0,1);
     CAM.off   = closeOff;
-    CAM.xpand = 1;
-    /* names:0 - only the rungs, home and the destination are named on the
+    /* And a little across-track stretch, which the fly-round already uses and
+       names: at 1 the corridor is a hairline, because a nine-star cylinder a
+       dozen light years wide really is a hairline beside a thousand-light-year
+       journey. This is the same cartographer's lie, told smaller. */
+    CAM.xpand = CRUISE_XPAND;
+    /* cut:-1 drops the near-the-way tier. It was there to give the corridor a
+       little depth behind it, but on the crossing it reads as a scatter of
+       specks with no relationship to the path - "let's turn off the background
+       stars". The rungs and the destination carry negative cull values below
+       this, so they stay.
+       names:0 - only the rungs, home and the destination are named on the
        crossing. Naming the near-corridor tier as well put twenty labels on
        screen and buried the nine that matter. */
     drawChart(CAM, 1, {pivot:[destVec[0]*f, destVec[1]*f, destVec[2]*f],
-                       cut:0, thin:1, gal:0, line:0, tube:0,
+                       cut:-1, thin:1, gal:0, line:0, tube:0,
                        names:0, rungs:1, ship:true});
   }
   else { /* -------- the tour -------- */
