@@ -2284,9 +2284,7 @@ function frame(now){
 
   if(passesDone>=act.passes && !finishedAt){ finishedAt=now;   /* standalone: nothing to record to */ }
   /* The verdict screen - every leak tinted green or red - holds about
-     fifteen seconds (Joe's number); then the DETECTION CURVE, the whole
-     table's logistic fit with this survey's leaks marked; then the page
-     moves on. */
+     fifteen seconds (Joe's number), and then the next survey begins. */
   if(finishedAt && now-finishedAt>CONFIG.finalMs){
     if(!PINNED && actIndex+1>=CONFIG.actsPerTurn){ handOff(); return; }
     newAct(); return;
