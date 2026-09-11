@@ -169,8 +169,13 @@ const CONFIG = {
      villageTop, villageFrac) are gone with the caption band they were
      measured against. The village's fade duration is applied to the element
      as an inline transition, so this number is the only place it lives. */
-  villageHoldMs:    9000,   // full frame, opaque
-  villageFadeMs:    6000,   // then dissolved off the river over this long
+  /* THE VILLAGE OPENING IS OFF (Joe, TV change requests 2026-09-09: "skip that
+     initial screen showing blocks over the top of horizontal lines. Doesn't
+     make visual intuitive sense."). Zero here skips it outright - the act
+     opens on the river, which is the picture the piece is actually about.
+     Restoring it is a matter of putting the two durations back. */
+  villageHoldMs:       0,   // full frame, opaque
+  villageFadeMs:       0,   // then dissolved off the river over this long
   showCount:         true,  // the living-surname Mark at the right frontier
 
   /* ---- the naming pause ----
@@ -1256,6 +1261,16 @@ function startAct() {
      the only place the duration lives; restoring the village for the next act
      has to switch the transition off first, or the act would open by fading
      the village IN from nothing over the same six seconds. */
+  if (CONFIG.villageHoldMs <= 0) {
+    /* Skipped outright: never turn it on, never composite it, and do not
+       schedule the two timers that would only turn it off again. */
+    villageLive = false;
+    villageCv.style.transition = 'none';
+    villageCv.style.opacity    = '0';
+    villageCv.style.display    = 'none';
+    vctx.clearRect(0, 0, W, VH);
+    return;
+  }
   villageLive = true;
   villageCv.style.display    = '';
   villageCv.style.transition = 'none';
@@ -1386,7 +1401,16 @@ function frame(now) {
   /* A finished act is held on screen so the outcome can be taken in, then
      the next act begins. "Finished" is fixation, extinction, or the cap. */
   if (sim.done || overTime) {
-    if (!finishedAt) { finishedAt = now; drawCount(sim); }
+    if (!finishedAt) { finishedAt = now; drawCount(sim);
+      /* HOW LONG IT TOOK (Joe, TV change requests 2026-09-09: "at the end of
+         the simulation, show how many generations were simulated"). The
+         number is the whole point of the piece - drift is slow - and it was
+         only ever visible behind the `i` key. */
+      const r = sim.richness;
+      Wall.lane((r === 1 ? 'One surname left' : r + ' surnames left') +
+                ' after ' + sim.gen + ' generations.',
+                { hold: Math.max(2000, CONFIG.holdMs - 600) });
+    }
     if (now - finishedAt > CONFIG.holdMs) nextAct();
     return;
   }

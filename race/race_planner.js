@@ -38,6 +38,34 @@ const DIR=[[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];          // 8
 const DLEN=[1,Math.SQRT2,1,Math.SQRT2,1,Math.SQRT2,1,Math.SQRT2];
 const TURN=[0,0.35,1.5,4.0,Infinity,4.0,1.5,0.35];                         // cost factor by heading change (x d)
 
+/* HOW HARD A COURSE IS (Joe, 2026-09-10). The old planner had one grade cap,
+   12%, which is the MEAN grade of a hard trail in Joe's own measurements - so
+   the course could never contain a steep pitch at all, only average ones.
+
+   A course now picks a grade of difficulty first, and the two knobs that set it
+   pull against each other, which is what makes switchbacks emergent rather than
+   drawn. `cap` is the steepest step the router will take. `turn` prices every
+   change of heading. A low cap with cheap turns means the trail CANNOT go
+   straight up and can afford to zigzag, so an easy course climbs on long
+   gentle traverses with many hairpins. A high cap with dear turns means it may
+   go straight up and cannot afford to weave, so a hard course takes the pitch
+   head on. `side` is what sidehill costs, which decides how willing the trail
+   is to cling to a steep face rather than seek a bench.
+
+   The caps are set from Joe's trail data: hard trails average 10-12% and reach
+   about 35%, so 30% is the steepest step a hard course may take and the mean
+   comes out well below it because grade is priced against the cap. */
+/* `gPen` prices grade AGAINST THE CAP, so it decides how much of the allowance
+   the trail actually spends. Measured: with one value for all three, a hard
+   course came out at a 7.3% mean where Joe's real hard trails run 10-12%, so
+   the hard tier is made much less reluctant to point uphill and the easy tier
+   more so. */
+const GRADES={
+  easy:   {cap:0.12, turn:0.60, side:3.0, gPen:2.2},   /* 0.10 first: too tight to close a loop on a third of worlds */
+  medium: {cap:0.18, turn:1.00, side:2.5, gPen:1.5},
+  hard:   {cap:0.32, turn:1.70, side:2.0, gPen:1.0}   /* 0.5 sent 7% of the course above the beds' drive limit and the winner walked 720 m */
+};
+
 function rng32(seed){ let a=seed>>>0; return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
 
 /* steepness (rise/run magnitude) of every cell */
@@ -92,13 +120,13 @@ function route(z,nx,ny,cell,slope,from,to,P,used){
     if(c===to){ found=s; break; }
     const x=c%nx, y=(c-x)/nx, zc=z[c];
     for(let d=0;d<8;d++){
-      const turn=TURN[(d-hd+8)&7]; if(turn===Infinity) continue;
+      const turn=TURN[(d-hd+8)&7]*P.turnMul; if(!isFinite(turn)) continue;
       const xx=x+DIR[d][0], yy=y+DIR[d][1]; if(xx<0||xx>=nx||yy<0||yy>=ny) continue;
       const cc=yy*nx+xx; if(slope[cc]>P.slopeMax) continue;
       const len=DLEN[d]*cell, grade=Math.abs(z[cc]-zc)/len; if(grade>P.gradeCap) continue;
       const side=slope[cc]/P.slopeMax;
       if(used && used[cc] && cc!==to) continue;                                          // an earlier leg's ground: impassable
-      const cost=len*(1+turn+2.5*side*side+1.5*(grade/P.gradeCap));
+      const cost=len*(1+turn+P.sideW*side*side+P.gPen*(grade/P.gradeCap));
       const ns=cc*8+d, ng=g[s]+cost;
       if(ng<g[ns]){ g[ns]=ng; parent[ns]=s; heap.push(ng+h(cc),ns); }
     }
@@ -132,8 +160,15 @@ function findStart(z,nx,ny,slope,R){
    to leave a canyon by the corridor it came in through. Waypoints are
    re-picked until the loop's length lands in the asked band. */
 function loop(z,nx,ny,cell,opts){
-  const P={gradeCap:opts.gradeCap||0.12, slopeMax:opts.slopeMax||0.7};
-  const R=rng32(opts.seed||1), slope=slopes(z,nx,ny,cell), N=nx*ny;
+  const R=rng32(opts.seed||1);
+  /* the model chooses the day's course when the caller does not: a third each,
+     so the wall shows all three kinds over a run of races */
+  const tier = opts.difficulty || (R()<0.34?'easy':(R()<0.5?'hard':'medium'));
+  const G0 = GRADES[tier] || GRADES.medium;
+  const P={gradeCap:opts.gradeCap||G0.cap, slopeMax:opts.slopeMax||0.7,
+           turnMul:opts.turnMul||G0.turn, sideW:(opts.sideW!=null?opts.sideW:G0.side),
+           gPen:(opts.gPen!=null?opts.gPen:G0.gPen), tier};
+  const slope=slopes(z,nx,ny,cell), N=nx*ny;
   /* candidate start lines, best first by reachable AREA TIMES RELIEF - a start
      on the plateau top can reach a lot of flat, a start on a bench can reach the
      canyon floor and the climb out. A start on a one-corridor bench cannot host
@@ -192,9 +227,23 @@ function loop(z,nx,ny,cell,opts){
   }
   if(best && best.length>=opts.minLen && best.length<=opts.maxLen) break;   // a loop in the band from this start: done
   }
-  if(best){ best.slope=slope; best.P=P; best.switchbacks=countHairpins(best.path,nx);
+  if(best){ best.slope=slope; best.P=P; best.tier=tier; best.switchbacks=countHairpins(best.path,nx);
     let lo=Infinity, hi=-Infinity, climb=0; for(let i=0;i<best.path.length;i++){ const e=z[best.path[i]]; if(e<lo) lo=e; if(e>hi) hi=e; if(i&&e>z[best.path[i-1]]) climb+=e-z[best.path[i-1]]; }
-    best.courseRelief=hi-lo; best.climb=climb; }
+    best.courseRelief=hi-lo; best.climb=climb;
+    /* THE GRADES ACTUALLY CUT, not the ones allowed. The cap is a ceiling; what
+       the router does under it depends on the ground and on what turning costs,
+       so the only honest description of a course is measured from its own path.
+       Reported so the page can name the course and so a test can check that
+       easy, medium and hard really do come out different. */
+    const gr=[]; for(let i=1;i<best.path.length;i++){
+      const a=best.path[i-1], b=best.path[i], ax=a%nx, bx=b%nx;
+      const d=Math.hypot(bx-ax,((b-bx)-(a-ax))/nx)*cell;
+      if(d>0) gr.push(Math.abs(z[b]-z[a])/d); }
+    gr.sort((u,v)=>u-v);
+    const at=q=>gr.length?gr[Math.min(gr.length-1,Math.floor(q*gr.length))]:0;
+    best.grade={ mean:gr.length?gr.reduce((u,v)=>u+v,0)/gr.length:0, p50:at(0.5), p90:at(0.9),
+                 max:gr.length?gr[gr.length-1]:0,
+                 pctOver15:gr.length?gr.filter(g=>g>0.15).length/gr.length:0 }; }
   return best;
 }
 /* does a path run back along its own cells? On a 10 m grid a switchback's two

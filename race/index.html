@@ -76,7 +76,10 @@ const CONFIG = {
   freezeStep: 600,        // erosion steps before the land is frozen (300,000 model years)
   raceCell: 10,           // metres per erosion cell at the race scale
   loop:{minLen:3200, maxLen:8000, targetLen:5000},   // 2-5 miles
-  gradeCap:0.12, slopeMax:0.7,
+  /* gradeCap is no longer set here: the planner picks a grade of difficulty for
+     the day and the cap comes with it (easy 10%, medium 18%, hard 30%). Add
+     ?grade=easy|medium|hard to demand one, or ?cap=0.24 to override outright. */
+  slopeMax:0.7,
   riders: 8, laps: 2,
   timeScale: 4,           // race seconds per real second
   rosterSec: 30,          // how long the cards stand
@@ -131,11 +134,24 @@ function makePlanner(){
   return wk;
 }
 function raceZ(){ const s=CONFIG.raceCell/w.dx, z=new Float64Array(w.N); for(let i=0;i<w.N;i++) z[i]=w.z[i]*s; return z; }
-function planOpts(){ return Object.assign({seed:seed*7+1,tries:12,gradeCap:CONFIG.gradeCap,slopeMax:CONFIG.slopeMax},CONFIG.loop); }   // attempts per start line; each is tens of ms
+function planOpts(){
+  const q=new URLSearchParams(location.search);
+  const o=Object.assign({seed:seed*7+1,tries:12,slopeMax:CONFIG.slopeMax},CONFIG.loop);
+  if(q.get('grade')) o.difficulty=q.get('grade');
+  if(q.get('cap')) o.gradeCap=parseFloat(q.get('cap'));
+  return o;
+}   // attempts per start line; each is tens of ms
 function onPlan(L){
   plan=L; revealed=0;
   if(!L){ Wall.lane('No rideable loop on this land. A new one folds.'); Wall.after(8000,()=>nextWorld()); return; }
-  Wall.lane('A '+(L.length/1000).toFixed(1)+' km loop with '+L.switchbacks+' switchbacks and '+Math.round(L.climb)+' m of climbing: grade capped at 12 %, cliffs off limits, so the trail zigzags where the ground is steep.');
+  /* Name the course by what it IS, measured off its own line, not by the cap
+     the router was given. An easy course zigzags because it may not climb hard;
+     a hard one goes at the pitch head on and pays for it in the legs. */
+  const g=L.grade||{mean:0,max:0};
+  const say={easy:'An easy course',medium:'A middling course',hard:'A hard course'}[L.tier]||'A course';
+  Wall.lane(say+': '+(L.length/1000).toFixed(1)+' km, '+Math.round(L.climb)+' m of climbing, '+
+            L.switchbacks+' switchbacks. Grades average '+(100*g.mean).toFixed(1)+' % and reach '+
+            (100*g.max).toFixed(0)+' %; cliffs are off limits, so the trail zigzags where it must.');
 }
 function nextWorld(){ const next=(seed*1664525+1013904223)>>>0; if(PINNED) location.replace(SELF+'?pin&seed='+next); else newWorld(next); }
 

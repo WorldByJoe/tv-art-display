@@ -60,8 +60,28 @@ function RaceSimFactory(global){
 'use strict';
 function rng32(seed){ let a=seed>>>0; return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
 const G=9.81, RHO=1.1, CDA=0.42;
-const BED={ sandstone:{mu:0.90,crr:0.008,rough:0.15}, limestone:{mu:0.85,crr:0.010,rough:0.25}, siltstone:{mu:0.70,crr:0.018,rough:0.45},
-            mudstone:{mu:0.60,crr:0.024,rough:0.60}, shale:{mu:0.55,crr:0.030,rough:0.75}, basement:{mu:0.80,crr:0.012,rough:0.35} };
+/* GRADE INTERACTS WITH ROCK TYPE (Joe, 2026-09-10). `mu` is what the bed gives
+   a tyre that is braking or cornering - the whole contact patch working against
+   a surface that is not moving. Climbing asks something different: the rear
+   tyre has to shear the surface itself, and loose material gives way under
+   torque long before it gives way under a skid. So a bed needs its own DRIVE
+   limit, `walk` - the steepest grade it can be ridden up before the fastest way
+   forward is on foot, pushing.
+
+   Slickrock is famous for going up absurdly steep because there is nothing on
+   it to shear; shale is a staircase of loose plates and spits the wheel out on
+   ground a rider could walk without using their hands. The ceiling on all of
+   them is the bike, not the bed: past about a third, the front wheel comes up
+   whatever the tyre is doing. */
+const BED={ sandstone:{mu:0.90,crr:0.008,rough:0.15,walk:0.38}, limestone:{mu:0.85,crr:0.010,rough:0.25,walk:0.33},
+            siltstone:{mu:0.70,crr:0.018,rough:0.45,walk:0.28}, mudstone:{mu:0.60,crr:0.024,rough:0.60,walk:0.24},
+            shale:{mu:0.55,crr:0.030,rough:0.75,walk:0.20},     basement:{mu:0.80,crr:0.012,rough:0.35,walk:0.30} };
+/* The first pass put shale's limit at 14%, and measured that against a hard
+   course it sent 6.3% of the trail off the bike and cost the winner eight
+   minutes of walking. 14% is 8 degrees: nobody gets off for that, loose or not.
+   Hike-a-bike on loose rock really begins around a fifth, so every limit moved
+   up by about six points and the ORDER - which is the part that matters - is
+   unchanged. */
 const NAMES=['Ruiz','Okafor','Lindqvist','Tanaka','Moreau','Adeyemi','Novak','Castellano','Byrne','Haddad','Kowalski','Ferreira','Iversen','Mbeki','Salazar','Petrova'];
 const INKS=['#e34948','#2a78d6','#f2d43d','#ffffff','#eb6834','#33c2c2','#a463f2','#5ad45a'];
 
@@ -86,7 +106,7 @@ function buildTrail(plan, w, cell, ds){
     const h1=Math.atan2(s.y-p.y,s.x-p.x), h2=Math.atan2(q.y-s.y,q.x-s.x); let dh=h2-h1; while(dh>Math.PI) dh-=2*Math.PI; while(dh<-Math.PI) dh+=2*Math.PI;
     s.curv=Math.abs(dh)/(6*ds); s.heading=h2;
     const cx=s.x|0, cy=s.y|0, c=cy*nx+cx, k=Strata.layerAt(w,c,s.zE);
-    s.bed=k<0?'basement':w.layers[k].type; const b=BED[s.bed]; s.mu=b.mu; s.crr=b.crr; s.rough=b.rough; s.color=k<0?[92,86,88]:w.layers[k].color;
+    s.bed=k<0?'basement':w.layers[k].type; const b=BED[s.bed]; s.mu=b.mu; s.crr=b.crr; s.rough=b.rough; s.walk=b.walk; s.color=k<0?[92,86,88]:w.layers[k].color;
     let exposed=false; for(let dy=-3;dy<=3&&!exposed;dy++) for(let dx=-3;dx<=3;dx++){ const xx=cx+dx, yy=cy+dy; if(xx<0||yy<0||xx>=nx||yy>=w.ny) continue; const cc=yy*nx+xx; if(slope[cc]>0.7 && slope[cc]<5 && w.z[cc]<s.zE-10){ exposed=true; break; } }
     s.exposed=exposed;
     s.wide=(i*ds<220) || (Math.abs(s.grade)<0.05 && s.curv<0.02 && s.rough<0.3);
@@ -164,6 +184,29 @@ function step(race,dt){
     const th=Math.atan(seg.grade), cosT=Math.cos(th), sinT=Math.sin(th), m=rd.mass;
     const Fres=m*G*sinT+seg.crr*m*G*cosT+0.5*RHO*CDA*rd.v*rd.v;
     let a, mode;
+    /* HIKE-A-BIKE. Past the bed's drive limit the rear wheel cannot hold, and
+       every rider in the field gets off and pushes - there is no skill in it,
+       only fitness, so the spread here is small and the strong gain a little.
+       Pushing a bike up a pitch is roughly as costly as carrying yourself up it
+       and then some: the useful work is the same mgh, done a good deal more
+       awkwardly, so it is charged at a 15% premium and the awkwardness is why
+       nobody chooses it. No crash test while walking - a rider on foot with a
+       bike beside them is the one place on the course that is safe. */
+    if(seg.walk != null && seg.grade > seg.walk){
+      const vw=Math.max(0.55, Math.min(1.65, (0.95+0.5*(rd.wkg-2.8)/2.0)*(0.75+0.25*(rd.E/rd.E0))));
+      a=(vw-rd.v)/Math.max(dt,1e-3);
+      P=m*G*sinT*vw*1.15;
+      mode='pushing'; rd.pushed=(rd.pushed||0)+vw*dt;
+      rd.mode=mode; rd.P=P; rd.vlim=vlim; rd.perceived=perceived; rd.vt=vt; rd.seg=seg; rd.fat=fat;
+      rd.v=Math.max(0.3,rd.v+a*dt); rd.s+=rd.v*dt;
+      rd.work+=P*dt; if(seg.grade>0) rd.climbed+=seg.grade*rd.v*dt;
+      physiology(rd,P,dt,race.day);
+      if(P>Psus) rd.E=Math.max(0,rd.E-(P-Psus)*dt); else rd.E=Math.min(rd.E0,rd.E+(Psus-P)*0.25*dt);
+      rd.lastSeg=((Math.floor(rd.s/trail.ds)%n)+n)%n;
+      if(rd.s>=L){ rd.s-=L; rd.lap++; race.events.push({t:race.t,kind:'lap',rider:rd,lap:rd.lap});
+        if(rd.lap>=race.laps){ rd.status='finished'; rd.finish=race.t; race.finished++; race.events.push({t:race.t,kind:'finish',rider:rd,place:race.finished}); } }
+      continue;
+    }
     if(rd.v>vt){ a=-Math.min(seg.mu*G*0.75,(rd.v-vt)/dt)-Fres/m; P=0; mode='braking'; }
     else { const Fdrive=Math.min(P/Math.max(rd.v,1.5), seg.mu*m*G*cosT*0.8); a=(Fdrive-Fres)/m;
       mode=rd.sprintLeft>0?'sprinting':seg.grade>0.03?'climbing':seg.grade<-0.03?'descending':'pedalling'; }
@@ -185,10 +228,17 @@ function step(race,dt){
       const over=rd.v/sg.vlim-1;
       if(over>0.03){
         const p=Math.min(1,over*2.5)*(1-0.55*rd.execution)*Math.min(2,rd.errMul||1);
-        if(race.R()<p){ crash(race,rd,sg,over>0.22&&sg.exposed?'severe':'mild',over); continue; }
+        if(race.R()<p){ crash(race,rd,sg,over,rd.v); continue; }
       }
-      const pm=0.0025*sg.rough*(1-rd.execution)*(0.3+fat)*Math.min(2,rd.errMul||1);   // rough ground throws the tired, the clumsy and the overheated
-      if(race.R()<pm) { crash(race,rd,sg,'mild',0); continue; }
+      /* Rough ground throws the tired, the clumsy and the overheated. MEASURED
+         AND RETUNED 2026-09-10: at 0.0025 this fired on a per-2-metre-segment
+         basis about 5,000 times a race per rider and produced 16-20 crashes in
+         a field of eight - two apiece, which is not a bike race, it is a
+         pile-up. With severity now costing up to two minutes and a lasting
+         injury, that had to come down; 0.0005 lands at roughly one crash per
+         three riders on easy ground and rather more on hard. */
+      const pm=0.0005*sg.rough*(1-rd.execution)*(0.3+fat)*Math.min(2,rd.errMul||1);
+      if(race.R()<pm) { crash(race,rd,sg,0,rd.v); continue; }
     }
     /* laps */
     if(rd.s>=L){ rd.s-=L; rd.lap++; race.events.push({t:race.t,kind:'lap',rider:rd,lap:rd.lap});
@@ -200,10 +250,52 @@ function step(race,dt){
   if(riders.every(r=>r.status==='finished'||r.status==='out')) race.done=true;
   return race;
 }
-function crash(race,rd,seg,kind,over){
+/* HOW BAD A CRASH IS, FROM ITS ENERGY (Joe, 2026-09-10: "crash severity should
+   be related to kinetic energy of the crash ... a threshold where a rider would
+   be too injured to ride, or it would take a while to recover").
+
+   The rider has half v-squared per kilogram to get rid of, and what decides the
+   injury is not how much but how FAST it leaves. A slide across slickrock sheds
+   it over twenty metres and costs skin; the same speed into blocky ground stops
+   the rider in a metre. Roughness is already the measure of that, so the share
+   delivered abruptly is taken straight from it. Where the trail runs on a lip
+   the fall adds gh, and a lip in this world is at least ten metres, which on
+   its own is worth an impact at fourteen metres a second - so going over the
+   edge ends a race almost every time, as it should.
+
+   The bands are specific energy in joules per kilogram:
+      under 10   a slide. Up in a couple of seconds, skin and pride.
+      10 to 40   off the bike properly. Ten seconds to find it and remount.
+      40 to 110  a hard hit. Half a minute to two, and the rider is not the
+                 same afterwards: they ride shy - more mistakes, less power -
+                 for the rest of the race.
+      over 110   too injured to continue.
+   A crash also always scrubs the speed it happened at; nobody carries pace
+   through one. */
+function crash(race,rd,seg,over,vAt){
   rd.crashes++;
-  if(kind==='severe'){ rd.status='out'; rd.v=0; race.out++; race.events.push({t:race.t,kind:'out',rider:rd,seg,over}); }
-  else { rd.status='down'; rd.down=3+race.R()*6; rd.v=0; rd.E=Math.max(0,rd.E-4000); race.events.push({t:race.t,kind:'crash',rider:rd,seg,over}); }
+  const v=Math.max(0,vAt||rd.v||0);
+  const absorb=0.30+0.55*(seg.rough||0.4);              // the share that arrives at once
+  /* `exposed` only means a lip WITHIN THIRTY METRES, and most crashes beside a
+     cliff are crashes beside a cliff - the rider slides, swears, and gets up.
+     Measured: treating every one of them as a fall over the edge put 16% of
+     the field out of a hard race, which is several times what really happens.
+     About a third go over, and those are the ones that end a race. */
+  const drop=(seg.exposed && race.R()<0.35) ? 10+20*race.R() : 0;   // the lip, in metres
+  const e=0.5*v*v*absorb + G*drop;                      // joules per kilogram
+  rd.v=0; rd.lastCrashE=e;
+  if(e>110){ rd.status='out'; race.out++;
+    race.events.push({t:race.t,kind:'out',rider:rd,seg,over,e}); return; }
+  rd.status='down';
+  if(e<10){ rd.down=1.5+race.R()*2.5; rd.E=Math.max(0,rd.E-800); }
+  else if(e<40){ rd.down=6+race.R()*9; rd.E=Math.max(0,rd.E-3200); }
+  else {
+    rd.down=28+race.R()*80; rd.E=Math.max(0,rd.E-9000);
+    rd.errMul=Math.min(2.2,(rd.errMul||1)*1.35);        // rides shy from here on
+    rd.powerMul=(rd.powerMul||1)*0.90;
+    rd.hurt=(rd.hurt||0)+1;
+  }
+  race.events.push({t:race.t,kind:'crash',rider:rd,seg,over,e});
 }
 /* where a rider is, in erosion-grid cells, for drawing */
 function place(trail,rd){ const n=trail.n; const f=rd.s/trail.ds, i=((Math.floor(f)%n)+n)%n, j=(i+1)%n, t=f-Math.floor(f); const a=trail.S[i], b=trail.S[j];

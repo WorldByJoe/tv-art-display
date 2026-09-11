@@ -130,7 +130,13 @@ const CONFIG = {
   trail:          0.34,   // 0 = infinite smear, 1 = hard clear
   camRate:       0.035,   // camera orbit, radians/second
   camTilt:        0.40,   // camera elevation, radians
-  viewMax:         150,   // zoom ceiling: escapers leave frame, nothing shrinks
+  /* The ceiling exists so a single escaper cannot drag the picture out until
+     the system is a dot. It was 150, and with the old framing rule the view
+     sat at 28 while bound bodies orbited out to 1,400 - so the ceiling was a
+     second, invisible reason the interesting orbits were off screen. The
+     quantile below is what keeps escapers from setting the scale; the ceiling
+     is only a backstop, so it can afford to be much further out. */
+  viewMax:         600,   // zoom ceiling: escapers leave frame, nothing shrinks
   /* Both PER FRAME, deliberately - see recentre() and the frame loop. zoomEase
      is how eagerly the view chases its target; zoomMaxRate is the hard ceiling
      on how fast the picture may scale, and is what stops the fast-forward from
@@ -145,9 +151,16 @@ const CONFIG = {
      zoomDeadband is the one that buys stillness - inside it the target is not
      moved at all, so the view stops creeping after the last digit of a
      percentile and only responds to a real change of scale. */
-  zoomDeadband:  0.055,
-  zoomEase:      0.010,
-  zoomMaxRate:   0.007,
+  /* SLOWED 2026-09-10 at Joe's ask - "make sure the zoom window changes slowly
+     so it's not zooming in and out and causing motion sickness". The dominant-
+     primary rule below moves the target further than the old one did (it now
+     tracks the satellites, which is the whole point), so the easing has to be
+     gentler or the picture would breathe with every wide orbit. A 0.35% ceiling
+     per frame takes about three and a half seconds to change the view by half,
+     which is slower than the eye reads as movement. */
+  zoomDeadband:  0.090,
+  zoomEase:      0.006,
+  zoomMaxRate:   0.0035,
 
   barHeight:      0.052,  // mass bar height as a fraction of screen height
   runsPerTurn:        1,  // one three-minute run, then the wall moves on
@@ -710,12 +723,13 @@ class Sim {
     let acc = 0, rHalf = 10;
     for (const [rr, mi] of byDist) { acc += mi; if (acc <= 0.5*bm) rHalf = rr; }
     rHalf = Math.max(rHalf, 1e-6);
+    this.rHalf = rHalf;          // kept for escaping(): the scale of the scrum
 
     const framing = [];
     let fMass = 0;
     for (const [rr, mi, i] of byDist) {
       if (!cur[i] && rr > rHalf*3.2) continue;      // on its way out: do not frame for it
-      framing.push([rr, mi]); fMass += mi;
+      framing.push([rr, mi, i]); fMass += mi;
     }
     if (!framing.length) return;
 
@@ -730,8 +744,45 @@ class Sim {
        Mass is CONSERVED by a merger. The radius holding 92% of the framing
        mass does not move when two bodies become one, so the view no longer
        twitches every time something lands. */
-    let acc2 = 0, rFrame = framing[framing.length-1][0];
-    for (const [rr, mi] of framing) { acc2 += mi; if (acc2 >= 0.92*fMass) { rFrame = rr; break; } }
+    /* THE CENTRAL MASS DOES NOT GET A VOTE ON THE FRAME (Joe, 2026-09-10).
+
+       He suspected that late in a run one body holds most of the system and a
+       handful of others push the total past the 92% mark, so those few set the
+       zoom and everything further out - the wide eccentric orbits, the slow
+       encounters, the part worth watching - falls outside the picture. He was
+       right about the cause. Measured on a live run at t=801: the frame held
+       2 of 13 bodies, the view was 28 units, and bound bodies were orbiting
+       out to 1,400.
+
+       Two things had to change from his sketch, both because the measurement
+       said so rather than because the idea was wrong.
+
+       FIRST, it is rarely ONE body. The same run was a hard BINARY - 73.3% at
+       r=7.7 and 20.6% at r=12.3 - so subtracting only the largest left the
+       second holding 77% of the remainder and the frame closed on the pair
+       again. The core is therefore taken as however many bodies it takes to
+       account for 90% of the mass, which measures out at two or three.
+
+       SECOND, the remaining MASS is the wrong ruler. What is left after the
+       core is dust - forty specks of 0.05% each strung from r=125 to r=1429 -
+       so "80% of the remaining mass" is really "80% of the specks" and lands
+       out at r~900. Rendered, that is a black field with a few dots in it.
+       Counting the remaining BODIES and taking the 60th percentile gives
+       90-290 units across these runs with 70-100% of the framed bodies in
+       shot, which is the picture he asked for.
+
+       Counting bodies was what this code did originally, and it was changed to
+       mass because a merger moved the index and the view stepped. That cannot
+       happen here: the bodies being counted are the ones that never merge -
+       the core, where the merging happens, has already been taken out. */
+    const byMass = framing.slice().sort((p, q) => q[1] - p[1]);
+    const core = new Set();
+    let held = 0;
+    for (const [, mi, i] of byMass){ if (held >= 0.90*fMass) break; core.add(i); held += mi; }
+    const outer = framing.filter(e => !core.has(e[2]));      // still sorted by radius
+    const rFrame = outer.length
+      ? outer[Math.min(outer.length-1, Math.floor(0.60*outer.length))][0]
+      : framing[framing.length-1][0];
     /* Only DECIDE the zoom here. Moving it is the frame loop's job.
 
        This used to ease viewRadius by a fixed fraction on every call - and
@@ -760,6 +811,37 @@ class Sim {
      out in the halo. It also uses the full colour range for free: the scale is
      anchored at both ends by physics rather than by whatever the fastest body
      happened to be doing this frame. */
+  /* IS IT ACTUALLY LEAVING? (Joe, TV change requests 2026-09-09: the label was
+     "applied too often, and usually proves untrue as speedy objects near the
+     center lose velocity as they interact with other objects".)
+
+     He is right, and the fault was that the word rode a COLOUR. escapeFraction
+     asks one instantaneous question - speed against the escape speed of the
+     mass inside this radius - and that is the right question for a colour ramp
+     and the wrong one for a claim about the future. A body deep in the scrum
+     can be flung past the local escape speed for a moment and then hand the
+     energy straight back to whatever flung it, which is exactly what he
+     watched happen.
+
+     Three conditions, each cheap and each necessary:
+       BOUND      the instantaneous test, at 1.0 rather than the 0.92 the mark
+                  used, because a claim should not be made at nine tenths of it;
+       RECEDING   radial velocity outward - a body falling inward at twice the
+                  escape speed is on its way to an encounter, not out of the
+                  system;
+       CLEAR      beyond 1.6 half-mass radii, out of the crowd, where there is
+                  little left to trade momentum with.
+     The colour ramp is untouched: it still says how fast, and only the WORD
+     now says leaving. */
+  escaping(i) {
+    const x = this.x[i], y = this.y[i], z = this.z[i];
+    const r = Math.hypot(x, y, z) + this.s.soft;
+    const v2 = this.vx[i]*this.vx[i] + this.vy[i]*this.vy[i] + this.vz[i]*this.vz[i];
+    if (0.5*v2 < this.s.G*this.boundMass/r) return false;            // still bound
+    if ((x*this.vx[i] + y*this.vy[i] + z*this.vz[i]) <= 0) return false;   // heading in
+    return r > 1.6*(this.rHalf || 0);                                // out of the scrum
+  }
+
   escapeFraction(i) {
     const r = Math.hypot(this.x[i], this.y[i], this.z[i]) + this.s.soft;
     const vEsc = Math.sqrt(2*this.s.G*this.boundMass/r);
@@ -1138,7 +1220,7 @@ function draw(nowSec) {
     /* Only a body that is genuinely on screen may carry the Mark. An orphaned
        label sliding along an edge is the exact failure the "a number touches
        its subject" rule exists to catch. */
-    if (esc > redF && sx > 0 && sx < W && sy > 0 && sy < H) {
+    if (esc > redF && sim.escaping(i) && sx > 0 && sx < W && sy > 0 && sy < H) {
       redF = esc; redX = sx; redY = sy; redRad = rad; redCol = col;
     }
 
@@ -1181,7 +1263,10 @@ function drawEscapeMark(esc, sx, sy, rad, col) {
   /* 0.92 of escape speed, not 1.0. At exactly 1 the body is already the same
      red as the top of the ramp and has usually left the frame; a shade below
      it, the word is beside something the viewer can still see turning red. */
-  if (!col || esc < 0.92) return;
+  /* The caller now only offers bodies that pass sim.escaping(), so the old
+     0.92-of-escape-speed gate has done its job and gone: the remaining test is
+     simply that there was a candidate at all. */
+  if (!col || esc < 0) return;
   const size = Math.round(W*(37*1.167/3840));      // --t4, the sofa floor
   ctx.save();
   ctx.font = `500 ${size}px ui-monospace, Menlo, monospace`;
