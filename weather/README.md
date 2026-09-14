@@ -16,7 +16,7 @@ a pointer. A standalone copy starts itself again when a run ends; add
 ## What it is doing
 
 - The wind is not arrows and not a texture: thousands of tracers are advected through the interpolated field and leave fading trails, so the streak length IS the speed and the eye reads convergence and shear without a legend.
-- The base map is shaded relief, rendered at build time from an elevation model - not a satellite photograph. Coastlines and state lines are drawn over it as vectors. All of that is embedded in the page; the only thing fetched at run time is the forecast itself, so this one piece does need a network. If the fetch fails it falls back to the last field it saw, and says which it is using.
+- The base map is a satellite composite under a shaded-relief hillshade, both assembled at build time: twenty-six days of VIIRS imagery reduced per pixel to its darkest quintile, which keeps the ground and throws the cloud away, then modelled with an elevation model so the ranges have form. Towns, major roads and a degree grid are drawn over it as vectors. All of that is embedded in the page; the only thing fetched at run time is the forecast itself, so this one piece does need a network. If the fetch fails it falls back to the last field it saw, and says which it is using.
 - A strip along the bottom is the clock: where in the thirty-seven hours you are, and which side of now. The page opens by saying the region, the window and what it is drawing, and then stops talking.
 - Three regions - Colorado, the Chesapeake, the Salish Sea - chosen because each has a different reason for its weather: mountains, a bay, an inland sea behind mountains.
 
