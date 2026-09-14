@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v1.0 · 2026-09-13
+   wall.js · v1.1 · 2026-09-14
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,6 +39,8 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.1  stallSecs() accepts WALL_SECONDS_ONCE - a page's one-time load,
+           counted once per visit rather than multiplied by the repeat count
      v1.0  versioning starts here; this file predates the scheme
 */
 (function (global) {
@@ -720,7 +722,22 @@
     } else {
       const per = Number(global.WALL_SECONDS_PER_RUN) || 0;
       if (!per) return 0;                      /* has not declared: no opinion */
-      secs = Math.round(per * (s.value || 1));
+      /* WALL_SECONDS_ONCE: what a page spends ONCE per visit however many runs
+         it does - fetching and parsing before the first frame, mostly.
+
+         The budget is wall-clock on one URL, and a page owns that URL from the
+         moment it opens, not from its first frame. tree_growth.html declared
+         only its animation and was killed twice on 2026-09-13 for sitting
+         1,621 s against a declared 1,043 s: it had understated itself by
+         exactly its own load, now 90 s for the largest tree and climbing as
+         the trees get older. Folding that into the PER-RUN figure instead
+         would multiply a one-time cost by the repeat count and hand a
+         genuinely wedged page grace it never earned.
+
+         Optional and additive: absent or zero this is exactly the old sum, so
+         every other stop is unaffected. STALL_CAP still bounds the total. */
+      const once = Math.max(0, Number(global.WALL_SECONDS_ONCE) || 0);
+      secs = Math.round(once + per * (s.value || 1));
     }
     return Math.min(STALL_CAP, Math.max(0, secs));
   }
