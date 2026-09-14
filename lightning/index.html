@@ -38,7 +38,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v2.0 · 2026-09-14
+  lightning.html · v2.1 · 2026-09-14
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -74,6 +74,9 @@
 ==========================================================================
 
   CHANGED
+    v2.1  accepts a cache that declares either global, so a pipeline slip
+          degrades to a stale sky instead of a dead page; refuses a handoff
+          older than what is already showing
     v2.0  opens INSTANTLY on the cached sky and says how old it is, while the
           Pi fetches the current one behind it; the globe is no longer an
           opening but a flight from the old sky to the fresh one, triggered
@@ -123,7 +126,16 @@ const PINNED = Q.has('pin');
    "This is for nerds and nerds like very fresh data" - so nothing waits on a
    clock that could be waiting on the data instead. The twenty seconds are not
    filled time: they carry the explanation and the age of what is on screen. */
-let SHOW = window.GLM_SHOW || null;
+/* GLM_NEXT IS A FALLBACK HERE, AND ONLY A FALLBACK.
+   The contract is that the cache declares GLM_SHOW. But on 2026-09-14 a
+   promotion renamed glm_next.js to glm_show.js without rewriting the global
+   inside it, so the cache declared GLM_NEXT - and this page, looking only for
+   GLM_SHOW, told the room "No storm is built" while a perfectly good sky sat
+   in the file it had just loaded. The wall went dead over a variable name.
+   Accepting either name costs one `||` and means a mistake in the pipeline
+   downgrades to a stale sky rather than a blank screen. glm_refresh.py v2.1
+   fixes the cause; this is the seatbelt. */
+let SHOW = window.GLM_SHOW || window.GLM_NEXT || null;
 let nextShow = null;        // the fresh capture, once it has been handed in
 let phase = 'play';         // 'play' | 'transition'
 let transAt = 0;            // when the transition began
@@ -330,6 +342,9 @@ window.__glmNext = function(){
   if (!SHOW)            return 'no-current';
   if (phase !== 'play') return 'busy';
   if (window.GLM_NEXT.t0 === SHOW.t0) return 'same-capture';
+  /* Reachable now that SHOW may have come from GLM_NEXT itself: a handoff
+     older than what is on screen is a step backwards, not a refresh. */
+  if (window.GLM_NEXT.t0 < SHOW.t0) return 'older';
   nextShow = window.GLM_NEXT;
   fromBox  = SHOW.box.slice();
   phase    = 'transition';
