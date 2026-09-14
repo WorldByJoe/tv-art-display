@@ -1,5 +1,6 @@
 /* ---------------------------------------------------------------------------
-   race_planner.js - cuts a mountain-bike course into a frozen Strata world.
+   race_planner.js · v1.0 · 2026-09-13
+   cuts a mountain-bike course into a frozen Strata world.
    Joe, 2026-09-07: the race is a loop of 2-5 miles; the start is a wide
    two-track so the field spreads out; the route takes switchbacks on the steep
    parts and avoids the cliffs.
@@ -30,7 +31,11 @@
    Units: grid cells with `cell` metres each; z in metres AT THE RACE SCALE
    (the caller rescales the world: all lengths shrink together, so slopes,
    and therefore every rule above, are unchanged).
---------------------------------------------------------------------------- */
+---------------------------------------------------------------------------
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 function RacePlannerFactory(global){
 'use strict';
 let lastDiag=null;                     // why the last loop() failed or how it went

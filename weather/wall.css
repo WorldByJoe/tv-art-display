@@ -1,5 +1,6 @@
 /* ===========================================================================
-   wall.css - the house type and surface tokens for every page on the wall.
+   wall.css · v1.0 · 2026-09-13
+   the house type and surface tokens for every page on the wall.
 
    WHY THIS FILE EXISTS. Every page used to size its own text in
    clamp(MIN, N vw, MAX), and on a 3840-wide screen the vw term always exceeds
@@ -27,7 +28,11 @@
      angle      arcmin = 0.70 * px * 0.3174 / viewing_mm * 3437.75
    A paperback at 40 cm subtends about 23 arcmin. Broadcast "glanceable" is
    about 13. Below roughly 6 arcmin nobody reads anything from a sofa.
-   =========================================================================== */
+   ===========================================================================
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 
 :root{
   /* ---- the distance knob ----

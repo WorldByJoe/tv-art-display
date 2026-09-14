@@ -1,5 +1,6 @@
 /* ---------------------------------------------------------------------------
-   wall.js - the wall's shared language layer.
+   wall.js · v1.0 · 2026-09-13
+   the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
    own title card and its own scrim, and the result was thirteen dialects of
@@ -35,7 +36,11 @@
    prose may be lit in any frame. lane() and moment() share a single lock:
    whichever speaks second silences the first. A page cannot violate it by
    accident, which is the only kind of violation that has ever happened.
---------------------------------------------------------------------------- */
+---------------------------------------------------------------------------
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 (function (global) {
   'use strict';
 
@@ -501,12 +506,21 @@
     { file:'kiosk.html',         name:'Mosaic Wall',      kind:'runs', unit:'works',      def:3,  loop:'inside' },
     { file:'gravity.html',       name:'Accretion',        kind:'runs', unit:'runs',       def:1,  loop:'inside' },
     { file:'surnames.html',      name:'Patriline',        kind:'runs', unit:'cycles',     def:1,  loop:'inside' },
-    { file:'physarum.html',      name:'Slime Network',    kind:'runs', unit:'species',    def:2,  loop:'inside' },
-    { file:'reaction.html',      name:'Turing Patterns',  kind:'runs', unit:'patterns',   def:2,  loop:'inside' },
+    { file:'physarum.html',      name:'Slime Network',    kind:'time', unit:'minutes',    def:6,  loop:'time'   },
+    /* Both of these used to show a fixed preset for 46 s and hand on. They now
+       settle and then WANDER their parameters, so neither has a discrete end
+       any more and the setup screen gives them minutes (Joe, 2026-09-13). */
+    { file:'reaction.html',      name:'Turing Patterns',  kind:'time', unit:'minutes',    def:6,  loop:'time'   },
     { file:'weather.html',       name:'Sun and Wind',     kind:'runs', unit:'tours',      def:1,  loop:'reload' },
     { file:'plume.html',         name:'Finding the Leak', kind:'runs', unit:'surveys',    def:2,  loop:'inside' },
     { file:'hike.html',          name:'The Long Walk',    kind:'runs', unit:'walks',      def:1,  loop:'reload' },
-    { file:'tree.html',          name:'Heartwood',        kind:'runs', unit:'trees',      def:1,  loop:'inside' },
+    /* ONE MAPLE, NOT TWO (Joe, 2026-09-12). tree.html - "Heartwood", the
+       pen-and-ink tree that grew its own geometry in JS - is retired from the
+       ring in favour of tree_growth.html, which replays the real MATLAB model's
+       output. The file is still on disk and still reachable by typing its URL;
+       it is simply not a stop any more, so it never comes round and never
+       appears on the setup screen. */
+    { file:'tree_growth.html',   name:'Sugar Maple',      kind:'runs', unit:'runs',       def:1,  loop:'inside' },
     { file:'descent.html',       name:'The Fastest Line', kind:'runs', unit:'descents',   def:1,  loop:'reload' },
     { file:'reading.html',       name:'Reading',          kind:'runs', unit:'passages',   def:1,  loop:'reload' },
     { file:'artworks.html',      name:'Open Gallery',     kind:'runs', unit:'works',      def:5,  loop:'inside' },
@@ -515,6 +529,12 @@
     { file:'weatherclocks.html', name:'House Electricity',kind:'time', unit:'minutes',    def:4,  loop:'time'   },
     { file:'strata.html',        name:'Strata',           kind:'runs', unit:'landscapes', def:1,  loop:'reload' },
     { file:'race.html',          name:'The Race',         kind:'runs', unit:'races',      def:1,  loop:'reload' },
+    { file:'flowers.html',       name:'Flowering',        kind:'runs', unit:'flowers',    def:2,  loop:'inside' },
+    /* The family pictures, ordered by something the pictures themselves
+       measure - colour, compressibility, or the sun's real altitude - and
+       panned as one strip with the seams dissolved (Joe, 2026-09-13). One
+       show per visit; the page advances the theme itself. */
+    { file:'photos.html',        name:'Photographs',      kind:'runs', unit:'shows',      def:1,  loop:'reload' },
   ];
   /* Pages that are not stops but doorways: they decide whether today is worth
      a word and then pass the viewer along to whatever ?next= says. The ring
@@ -522,6 +542,11 @@
   const PASSTHROUGH = ['occasion.html', 'precip.html'];
 
   const FOREVER = 1e9;            // "leave it on" - minutes, not a sentinel to test for
+  /* The three frequencies the setup screen offers, as weights. Words on screen,
+     numbers here: "rare" and "often" are things a person can choose from a
+     sofa, 1 and 7 are not. */
+  const WEIGHTS = [1, 3, 7], WEIGHT_DEF = 3;
+  const WEIGHT_WORD = w => (w <= 1 ? 'seldom' : w >= 7 ? 'often' : 'normal');
 
   function here() {
     return (location.pathname.split('/').pop() || 'kiosk.html');
@@ -532,30 +557,83 @@
     return -1;
   }
 
-  let cache = null;
+  let cache = null, optCache = null;
+  function readRaw() {
+    try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}; }
+    catch (e) { return {}; }                        /* a corrupt blob is not worth a dead wall */
+  }
   function settings() {
     if (cache) return cache;
-    let saved = {};
-    try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}; }
-    catch (e) { saved = {}; }                       /* a corrupt blob is not worth a dead wall */
+    const saved = readRaw();
     const out = {};
     for (const r of RING) {
       const s = (saved.pages && saved.pages[r.file]) || {};
       out[r.file] = {
         on:    s.on === undefined ? true : !!s.on,
         value: (typeof s.value === 'number' && s.value > 0) ? s.value : r.def,
+        /* HOW OFTEN, when the order is shuffled. A weight, not a percentage:
+           three is normal, so a piece at seven comes up a bit over twice as
+           often as its neighbours and one at one comes up seldom. */
+        weight: (typeof s.weight === 'number' && s.weight > 0) ? s.weight : WEIGHT_DEF,
       };
     }
     cache = out;
     return out;
   }
+
+  /* Settings that belong to the WALL rather than to any one piece. Kept in the
+     same blob so there is still one thing to read, one thing to write, and one
+     thing to clear. */
+  function wallOpts() {
+    if (optCache) return optCache;
+    const o = readRaw().opts || {};
+    optCache = {
+      /* Shuffled by default, Joe 2026-09-13. The wall ran in a fixed circuit
+         for a month and the order became part of the furniture; you knew what
+         was coming next, which is the opposite of what the thing is for. */
+      shuffle: o.shuffle === undefined ? true : !!o.shuffle,
+      solo: (o.solo && typeof o.solo.file === 'string' &&
+             typeof o.solo.until === 'number') ? o.solo : null,
+    };
+    return optCache;
+  }
   function saveSettings(next) {
+    const raw = readRaw();
     cache = null;
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ v: 1, pages: next })); }
+    try { localStorage.setItem(SETTINGS_KEY,
+            JSON.stringify({ v: 1, pages: next, opts: raw.opts || {} })); }
     catch (e) { /* private mode, full disk: the wall still runs on the defaults */ }
   }
+  function saveOpts(next) {
+    const raw = readRaw();
+    optCache = null;
+    try { localStorage.setItem(SETTINGS_KEY,
+            JSON.stringify({ v: 1, pages: raw.pages || {}, opts: next })); }
+    catch (e) {}
+  }
+  function setShuffle(on) { const o = wallOpts(); saveOpts({ shuffle: !!on, solo: o.solo }); }
+
+  /* ---- ONE PIECE, FOR AN HOUR (Joe, 2026-09-13) -------------------------
+     Not a switch that has to be undone: it carries its own expiry, so the wall
+     returns to normal on its own whether or not anybody comes back to the
+     menu. Held as an absolute time rather than a countdown because nothing on
+     this wall is running while it waits - every page navigation is a reload,
+     and a counter would start again each time. */
+  function startSolo(file, minutes) {
+    const o = wallOpts();
+    saveOpts({ shuffle: o.shuffle,
+               solo: { file: file, until: Date.now() + (minutes || 60) * 60000 } });
+  }
+  function clearSolo() { const o = wallOpts(); saveOpts({ shuffle: o.shuffle, solo: null }); }
+  function soloNow() {
+    const o = wallOpts();
+    if (!o.solo) return null;
+    if (Date.now() >= o.solo.until) { clearSolo(); return null; }   /* self-clearing */
+    if (ringIndex(o.solo.file) < 0) { clearSolo(); return null; }
+    return o.solo;
+  }
   function resetSettings() {
-    cache = null;
+    cache = null; optCache = null;      /* the options live in the same blob */
     try { localStorage.removeItem(SETTINGS_KEY); } catch (e) {}
   }
 
@@ -576,6 +654,70 @@
   function forever(fallbackMinutes) {
     const r = settings()[here().split('?')[0]];
     return ((r && r.value) ? r.value : fallbackMinutes) >= FOREVER;
+  }
+
+  /* =====================================================================
+     HOW LONG THIS PAGE MAY LEGITIMATELY SIT ON THE SAME URL
+
+     watchdog.sh restarts the kiosk when the URL has not changed for
+     STUCK_SECS, on the reasoning that the hand-off chain must have stopped.
+     That reasoning was sound when the number was written and the longest turn
+     on the wall was a few minutes. It is not sound now, and the setup screen
+     is what broke it: it offers dwells of 30, 45, 60, 90, 120, 180 and 240
+     minutes and "leave it on", every one of which is longer than the watchdog
+     tolerates. So the indefinite option Joe asked for could not work, and a
+     piece set to two hours was being chopped back to the mosaic every 25
+     minutes. Nobody noticed because nothing was set that long until now.
+
+     The page is the only thing that knows the answer, so the page is asked.
+     For a piece that never ends, the answer is the dwell the viewer chose.
+     For a piece that ENDS, only the page knows how long one turn takes, so it
+     declares it:
+
+         window.WALL_SECONDS_PER_RUN = 1043;   // ONE run
+
+     and the REPEAT COUNT is applied here, not there - a page cannot know how
+     many times the viewer asked for it, and asking it to guess is how you get
+     two components each half-applying the same multiplier.
+
+     Returning 0 means "no opinion, use your own number", which is the right
+     answer for every page that has not declared anything: nothing regresses.
+
+     WHY THIS IS STILL SAFE. The dangerous case is a page that wedges and then
+     claims a long budget. It cannot: this runs in the page's own JavaScript,
+     so a page with a hung main thread never answers at all, the watchdog's
+     query times out, and the old flat limit applies. What survives is a page
+     that is alive but whose show has quietly stalled - and that is what the
+     cap is for.
+     ===================================================================== */
+  const STALL_CAP = 6 * 3600;     /* Six hours. Long enough that "leave it on"
+                                     means the whole evening - the set is off
+                                     22:00 to 06:00 anyway - and short enough
+                                     that an indefinite page which has silently
+                                     died still recovers the same day. */
+  function stallSecs() {
+    const me = here().split('?')[0];
+    const i = ringIndex(me);
+    if (i < 0) return 0;                       /* not a stop: no opinion */
+    const spec = RING[i], s = settings()[me];
+    /* Under a solo hour the page reloads itself, so the URL never changes and
+       the watchdog would otherwise chop the hour in the middle. Ask for what
+       is left of it. A piece being soloed is deliberately exempt from the
+       switched-off test below: the viewer chose it just now. */
+    const solo = soloNow();
+    if (solo && solo.file === me) {
+      return Math.min(STALL_CAP, Math.max(60, Math.round((solo.until - Date.now()) / 1000)));
+    }
+    if (!s || !s.on) return 0;
+    let secs;
+    if (spec.kind === 'time') {
+      secs = s.value >= FOREVER ? STALL_CAP : Math.round(s.value * 60);
+    } else {
+      const per = Number(global.WALL_SECONDS_PER_RUN) || 0;
+      if (!per) return 0;                      /* has not declared: no opinion */
+      secs = Math.round(per * (s.value || 1));
+    }
+    return Math.min(STALL_CAP, Math.max(0, secs));
   }
 
   /* The next page that is actually switched on.
@@ -600,6 +742,39 @@
     } catch (e) {}
   }
 
+  /* The next piece round the circuit, in the order the RING lists them. */
+  function nextInTurn(from) {
+    const s = settings();
+    for (let k = 1; k <= RING.length; k++) {
+      const cand = RING[(from + k) % RING.length];
+      if (s[cand.file] && s[cand.file].on) return cand.file;
+    }
+    return null;
+  }
+
+  /* A piece drawn at random, with the frequencies the viewer set.
+
+     NEVER THE SAME PIECE TWICE RUNNING, which is Joe's rule and also the only
+     thing that makes a shuffle feel like a shuffle: a fair draw from nineteen
+     pieces repeats about one time in nineteen, and the one time it does is the
+     only draw anybody notices. The exception is when it is the only piece left
+     switched on, because then the alternative is a black screen. */
+  function pickWeighted(exclude) {
+    const s = settings();
+    let pool = RING.filter(r => s[r.file] && s[r.file].on);
+    if (!pool.length) return null;
+    const others = pool.filter(r => r.file !== exclude);
+    if (others.length) pool = others;
+    let total = 0;
+    for (const r of pool) total += (s[r.file].weight || WEIGHT_DEF);
+    let x = Math.random() * total;
+    for (const r of pool) {
+      x -= (s[r.file].weight || WEIGHT_DEF);
+      if (x <= 0) return r.file;
+    }
+    return pool[pool.length - 1].file;
+  }
+
   function nextPage(fallback) {
     /* AN EMPTY nextPage IS NOT A MISSING ONE. The published copies are built
        by rewriting nextPage to '' to mean "standalone: there is nowhere else",
@@ -612,6 +787,15 @@
     const from = ringIndex(me);
     const spec = from >= 0 ? RING[from] : null;
 
+    /* ONE PIECE FOR AN HOUR outranks everything below, including the rule
+       against repeating: repeating is the whole point of it. */
+    const solo = soloNow();
+    if (solo) {
+      if (solo.file === me) return me;
+      const soloBase = (fallback || '').split('?')[0];
+      return PASSTHROUGH.indexOf(soloBase) >= 0 ? soloBase + '?next=' + solo.file : solo.file;
+    }
+
     /* A piece that does one thing per visit repeats by being visited again. */
     if (spec && spec.loop === 'reload' && s[me] && s[me].on) {
       const done = runCount(me) + 1;
@@ -621,10 +805,7 @@
 
     let target = null;
     if (from >= 0) {
-      for (let k = 1; k <= RING.length; k++) {
-        const cand = RING[(from + k) % RING.length];
-        if (s[cand.file] && s[cand.file].on) { target = cand.file; break; }
-      }
+      target = wallOpts().shuffle ? pickWeighted(me) : nextInTurn(from);
     }
     if (!target) {
       /* A page that is not a ring stop at all - a pass-through, or something
@@ -674,7 +855,9 @@
     lane, moment, signature, instrument, episode, clearEpisode,
     after, every, clearTimers, holdFor, place,
     hideLane, hideMoment,
-    RING, PASSTHROUGH, FOREVER, settings, saveSettings, resetSettings,
+    RING, PASSTHROUGH, FOREVER, WEIGHTS, WEIGHT_DEF, WEIGHT_WORD,
+    settings, saveSettings, resetSettings, stallSecs,
+    wallOpts, setShuffle, startSolo, clearSolo, soloNow,
     repeats, holdMs, forever, nextPage, enabled, here, openSetup,
     runCount, setRunCount,
     ARRIVE_MS, FADE_IN, FADE_OUT, MOMENT_HOLD,

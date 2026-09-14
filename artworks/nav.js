@@ -1,5 +1,6 @@
 /* ---------------------------------------------------------------------------
-   nav.js - makes the wall controllable when the remote is in MOUSE MODE.
+   nav.js · v1.0 · 2026-09-13
+   makes the wall controllable when the remote is in MOUSE MODE.
 
    WHY THIS EXISTS. The Fm4 remote has two modes. In keyboard mode the D-pad
    sends key codes and every page listens for them. In air-mouse mode it sends
@@ -21,7 +22,11 @@
    It attaches to whatever the host page already provides - rotateTo() if it
    has one, CONFIG.nextPage if not - so no page needs to know about it beyond
    loading the file.
---------------------------------------------------------------------------- */
+---------------------------------------------------------------------------
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 (function (global) {
   'use strict';
 

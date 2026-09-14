@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html - a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
+  race.html · v1.0 · 2026-09-13
+  a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
        years (strata_engine.js in a worker, strata_view.js drawing), then
@@ -38,7 +39,11 @@
   race, which keeps the wall's watchdog quiet). ?act=2|3|4&seed=N (and
   &race=SECONDS for act 4) runs synchronously to that point for a photograph.
   Not in the ring.
-========================================================================== -->
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   html, body { margin:0; padding:0; height:100%; background:#04060c; overflow:hidden; }
   * { cursor:none; }
@@ -86,7 +91,7 @@ const CONFIG = {
   resultsSec: 45,         // the ranked cards at the end
   mapSec: 40, heliSec: 30,  // the overview alternates: flat map, then the helicopter orbit
   orbitSec: 490, vexag:1.8, fpsCap:8,
-  nextPage: '' /* standalone: nowhere to hand on to; start again */,  // back to the mosaic when the race is over
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,  // on to the flowers (2026-09-12); only a fallback - Wall.nextPage reads the ring
   holdMin:20,             // NOT the pacing - a full show runs ~11 min. This is the
                           // deadline for a show that has somehow stalled.
 };

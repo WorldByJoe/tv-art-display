@@ -48,6 +48,8 @@ function rotateTo(step){
 }
 
 /* =======================================================================
+   physarum.html · v1.0 · 2026-09-13
+
    Physarum transport networks.
 
    Every agent follows three rules and nothing else:
@@ -63,7 +65,11 @@ function rotateTo(step){
 
    Named for the slime mould Physarum polycephalum, which solves mazes and
    reproduces rail maps with no nervous system at all.
-   ======================================================================= */
+   =======================================================================
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 
 const CONFIG = {
   targetCells: 620000,   // grid budget; the blur is the cost, so cap area not width
@@ -82,8 +88,9 @@ const CONFIG = {
      under its own workforce. A sample of one in sixteen is enough to read as
      a swarm, and leaves the network it is drawing plainly visible through it. */
   agentShown:    0.062,
-  holdMs:       48000,   // how long one species runs before the next
-  speciesPerTurn:   2,   // species shown before handing the screen on
+  /* THE PIECE NO LONGER ENDS: it settles once and then wanders, so the setup
+     screen gives it minutes rather than a count of species. */
+  minutes:          6,
   fadeMs:        1400,
   nextPage: '' /* standalone: nowhere to hand on to; start again */
 };
@@ -168,6 +175,111 @@ function sizeGrid() {
    something moving OVER the structure rather than as part of it. */
 const AGENT_PIX = (255<<24) | (255<<16) | (238<<8) | 178;
 
+
+/* ===================== THE WANDER =====================================
+   Joe, 2026-09-13: settle, then meander the parameters slowly enough that the
+   network has time to catch up, and confine the wander if parts of the space
+   make no pattern.
+
+   WHY THIS ONE IS CONFINED BY A BOX AND A RULE RATHER THAN BY A MAP. The
+   Turing page has two parameters, so its region could be measured outright -
+   576 points of the plane, run and scored. This page has six, and six
+   dimensions cannot be swept. So the wander is held inside the box the four
+   named species already span, widened a little, with the one relationship
+   this file had already measured and written down:
+
+       turn must comfortably exceed sensorAng, or an agent cannot steer
+       sharply enough to leave a trail it has joined, every filament merges
+       into a few thick smooth curves and no network forms.
+
+   Jones's original uses a rotation angle about twice the sensor angle, and
+   three of the four species sit near that ratio. The walk holds turn at no
+   less than 1.6 times sensorAng.
+
+   And, as on the Turing page, the real fence is the page WATCHING ITS OWN
+   TRAIL MAP: if the network flattens into an even glow or fades toward
+   nothing, the walk turns round and goes back to where it was last healthy.
+   A box drawn round four known-good points is a guess; the trail map is not. */
+const WALK = {
+  lo: { sensorAng:0.18, sensorDist:4,  turn:0.55, speed:0.85, deposit:0.85, decay:0.875 },
+  hi: { sensorAng:0.80, sensorDist:15, turn:1.75, speed:1.40, deposit:1.15, decay:0.955 },
+  keys: ['sensorAng','sensorDist','turn','speed','deposit','decay'],
+  settleMs:  26000,     /* watch it emerge before anything moves */
+  /* HOW IT MOVES. The first version gave each parameter a velocity that
+     random-walked. Measured over seven minutes it covered about a fifth of
+     each range and came back to where it started - a diffusion, not a
+     journey, because a velocity that reverses at random has no net travel.
+
+     Each parameter now rides its own slow sine, with periods that share no
+     common multiple, so the point sweeps the whole box smoothly, never sits
+     still, never leaves, and does not visibly repeat inside a dwell. The
+     shortest period is 97 seconds against a 26-second settle, so the network
+     always has several times longer to answer than the parameter takes to
+     move. */
+  periods: { sensorAng:97, sensorDist:127, turn:113, speed:149, deposit:167, decay:181 },
+  amp:        0.85,     /* of each half-range, so it does not sit in the corners */
+  checkEvery:   45,     /* frames between health checks */
+  minRatio:    1.6      /* turn / sensorAng */
+};
+let walking=false, phase={}, base={}, lastGood=null, sick=0, lastHealth=null, frameNo=0, walkT0=0;
+
+function clamp(v,a,b){ return v<a?a:v>b?b:v; }
+function applyRules(){
+  /* The one relationship that decides whether there is a network at all. */
+  const need = species.sensorAng * WALK.minRatio;
+  if(species.turn < need) species.turn = Math.min(WALK.hi.turn, need);
+  if(species.turn < need) species.sensorAng = species.turn / WALK.minRatio;
+}
+function startWalk(){
+  walking=true; walkT0=performance.now();
+  /* Start each sine at the phase that puts it exactly where the named species
+     already is, so the wander LEAVES from the flower it grew, with no jump. */
+  for(const k of WALK.keys){
+    const mid=(WALK.lo[k]+WALK.hi[k])/2, half=(WALK.hi[k]-WALK.lo[k])/2*WALK.amp;
+    base[k]=mid;
+    const x = clamp((species[k]-mid)/half, -1, 1);
+    phase[k] = Math.asin(x) * (Math.random()<0.5 ? 1 : -1) + (Math.random()<0.5 ? 0 : Math.PI);
+  }
+  lastGood=Object.assign({}, species); sick=0;
+}
+function stepWalk(){
+  const t=(performance.now()-walkT0)/1000;
+  for(const k of WALK.keys){
+    const half=(WALK.hi[k]-WALK.lo[k])/2*WALK.amp;
+    species[k] = base[k] + half*Math.sin(2*Math.PI*t/WALK.periods[k] + phase[k]);
+  }
+  applyRules();
+}
+/* Is there still a network? A flat glow and an empty field both score low. */
+function health(){
+  let n=0, sum=0, sum2=0;
+  for(let i=0;i<trail.length;i+=11){ const v=trail[i]; sum+=v; sum2+=v*v; n++; }
+  const mean=sum/n, sd=Math.sqrt(Math.max(0,sum2/n-mean*mean));
+  const contrast = sd/Math.max(mean,1e-6);
+  /* THE THRESHOLD IS MEASURED, not guessed. Nine parameter sets were forced
+     and scored, including the extremes of the box: sensor angle at its
+     maximum, the turn ratio at its minimum, the fastest and slowest forgetting,
+     the shortest sensor. Every one of them scored between 7.0 and 15.7. So
+     nothing inside this box collapses, and 3.0 is a backstop set well below
+     anything observed rather than a fence the walk is expected to meet. */
+  return { mean, sd, contrast, ok: contrast > 3.0 && mean > 0.002 };
+}
+function checkWalk(){
+  const h=health(); lastHealth=h;
+  if(h.ok){ sick=0; lastGood=Object.assign({}, species); }
+  else {
+    sick++;
+    /* Nothing inside the box scored anywhere near this, so if it ever fires
+       something is wrong that the box does not describe: go back to the last
+       healthy point and start the sines again from there. */
+    if(lastGood && sick>=3){
+      for(const k of WALK.keys) species[k]=lastGood[k];
+      startWalk(); sick=0;
+    }
+  }
+  return h;
+}
+
 /* A 256-entry lookup turns the per-pixel colour mapping into one array read.
    Computing the ramp per pixel would cost more than the simulation. */
 function buildLut(pal) {
@@ -204,6 +316,10 @@ function newSpecies() {
   buildLut(palette);
   seedAgents();
   startedAt = performance.now();
+  /* The named species is the STARTING POINT of the wander. Copied, because the
+     walk writes to it and the table must stay the table. */
+  species = Object.assign({}, species);
+  walking=false; lastGood=null; sick=0; lastHealth=null;
 
   /* ---- the episode's one sentence -------------------------------------
      A new species IS a new episode, so this is where the wall speaks. Two
@@ -327,15 +443,27 @@ function render() {
   ctx.putImageData(img, 0, 0);
 }
 
+/* The permanent readout. The parameters are no longer a fixed label on a fixed
+   species - they are the thing that is moving, so they belong on screen. */
+function panel() {
+  Wall.instrument({ place:'tr', cols:1, rows:[
+    { k:'sensor',  v: species.sensorAng.toFixed(2) + ' rad @ ' + species.sensorDist.toFixed(1) + ' px' },
+    { k:'turn',    v: species.turn.toFixed(2) + ' rad' },
+    { k:'forgets', v: (100*(1-species.decay)).toFixed(1) + ' % a frame' },
+    { k:'state',   v: walking ? 'wandering' : 'settling' }
+  ]});
+}
 function updateInfo() {
   infoEl.textContent =
     `species   ${species.name}\n` +
+    `state     ${walking ? 'wandering' : 'settling'}  sick ${sick}\n` +
+    `health    ${lastHealth ? ('contrast ' + lastHealth.contrast.toFixed(2) + ' mean ' + lastHealth.mean.toFixed(4) + (lastHealth.ok ? ' ok' : ' LOW')) : '-'}\n` +
     `grid      ${GW} x ${GH}\n` +
     `agents    ${nAgents.toLocaleString()}\n` +
     `sensor    ${species.sensorAng.toFixed(2)} rad @ ${species.sensorDist}px\n` +
     `turn      ${species.turn.toFixed(2)} rad\n` +
     `speed     ${species.speed.toFixed(2)}   deposit ${species.deposit.toFixed(2)}\n` +
-    `decay     ${species.decay}\n` +
+    `decay     ${species.decay.toFixed(4)}\n` +
     `elapsed   ${((performance.now()-startedAt)/1000).toFixed(0)}s\n` +
     `fps       ${fps.toFixed(0)}${paused ? '  [PAUSED]' : ''}`;
 }
@@ -362,13 +490,17 @@ function frame(now) {
   fps = fps ? fps*0.9 + (1000/dt)*0.1 : 1000/dt;
   if (paused || handingOff) return;
 
-  if (now - startedAt > CONFIG.holdMs) {
-    if (!PINNED && speciesIndex + 1 >= Wall.repeats(CONFIG.speciesPerTurn)) { handOff(); return; }
-    newSpecies();
+  if (!PINNED && now - startedAt > Wall.holdMs(CONFIG.minutes)) { handOff(); return; }
+  frameNo++;
+  if (!walking && now - startedAt > WALK.settleMs) startWalk();
+  if (walking) {
+    stepWalk();
+    if (frameNo % WALK.checkEvery === 0) checkWalk();
   }
   stepAgents();
   diffuseDecay();
   render();
+  panel();
   if (document.body.classList.contains('showinfo')) updateInfo();
 }
 

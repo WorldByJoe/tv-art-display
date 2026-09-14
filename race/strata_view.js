@@ -1,5 +1,6 @@
 /* ---------------------------------------------------------------------------
-   strata_view.js - the shared PICTURE of a Strata world, used by strata.html
+   strata_view.js · v1.0 · 2026-09-13
+   the shared PICTURE of a Strata world, used by strata.html
    (the eroding landscape) and race.html (the course cut into a frozen one).
 
    Two views of one world:
@@ -21,7 +22,11 @@
    each sample moves about two screen rows, and never interpolate a bed edge
    across most of a cell.
    Written as a named FACTORY so a page can also run it inside a worker.
---------------------------------------------------------------------------- */
+---------------------------------------------------------------------------
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 function StrataViewFactory(global){
 'use strict';
 const U=3;

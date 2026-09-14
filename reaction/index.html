@@ -49,6 +49,8 @@ function rotateTo(step){
 }
 
 /* =======================================================================
+   reaction.html · v1.0 · 2026-09-13
+
    Gray-Scott reaction-diffusion: Turing's answer to how a leopard gets
    its spots.
 
@@ -68,7 +70,11 @@ function rotateTo(step){
    Every pattern below comes from the same four lines above. Only F (feed) and
    k (kill) differ - a two-number parameter plane that contains spots,
    stripes, mazes, and things that divide like cells.
-   ======================================================================= */
+   =======================================================================
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 
 const CONFIG = {
   targetCells: 125000,   // grid budget; upscaled to the panel by CSS
@@ -93,8 +99,11 @@ const CONFIG = {
   Du:             1.0,
   Dv:             0.5,
   dt:             1.0,
-  holdMs:       46000,   // per pattern
-  patternsPerTurn:  2,
+  /* THE PIECE NO LONGER ENDS. It used to show two fixed patterns of 46 s and
+     hand on; it now settles once and then wanders the (F,k) plane for as long
+     as the viewer's dwell allows, so it is a "runs on" piece like the ecology
+     and the clocks, and the setup screen gives it minutes. */
+  minutes:          6,
   fadeMs:        1400,
   nextPage: '' /* standalone: nowhere to hand on to; start again */
 };
@@ -266,6 +275,9 @@ function newPattern(){
   lastPal = (lastPal + 1 + Math.floor(Math.random()*(PALETTES.length-1))) % PALETTES.length;
   buildLut(PALETTES[lastPal]);
   seed(); ticks=0; startedAt=performance.now();
+  /* The preset is the STARTING POINT of the wander, not the whole show. */
+  wF=pattern.F; wK=pattern.k; wTheta=Math.random()*Math.PI*2;
+  walking=false; haven=null; sick=0; sdRef=0; okStreak=0; sinceSeed=0; rescues=0; nearest=pattern;
   /* ---- the episode's one sentence -------------------------------------
      A new pattern IS a new episode. Two sentences alternate by position
      rather than both firing, so the wall is silent most of every 46 seconds:
@@ -295,12 +307,191 @@ function newPattern(){
   Wall.episode(patternIndex % 3 === 0 ? MECHANISM : pattern.line);
 }
 
+
+/* ===================== THE WANDER =====================================
+   Joe, 2026-09-13: "let the visualization run for a bit until the pattern
+   stabilizes, then slowly meander the parameter values ... The parameter
+   meander should make slow changes so that the emergence of the pattern has
+   time to catch up ... If it turns out that parts of the parameter space lead
+   to no pattern, then we can confine the wander."
+
+   WHERE IT MAY GO, MEASURED. 576 points of the (F,k) plane were run to 6,000
+   steps with this page's own numerics and its own seeding, and scored on the
+   spread of the self-copier: structure present, and not the saturated full
+   field that k below about 0.035 gives (mean 0.92 - alive everywhere, which is
+   not a pattern). 80 of 576 passed, dilated to 164 because the grid step is
+   coarse next to a sharp boundary. All thirteen named patterns fall inside it.
+
+   THE FIRST SWEEP WAS WRONG and it is worth saying why. It seeded U=0.5,
+   V=0.25 and reported everything above F=0.056 dead - which would have
+   condemned five of this page's own presets. The comment in seed() had already
+   written down the reason: that patch sits on the break-even between growth
+   and loss, so every seed dies. Rendering the real page at three of the
+   "dead" presets showed healthy patterns, which is what sent me back.
+
+   THE MASK IS A GUIDE, NOT A FENCE. It is 24x24 over a plane whose boundaries
+   are sharp, so the fine edge is held by the page WATCHING ITS OWN FIELD: if
+   the spread collapses or the dish saturates, the walk turns round and goes
+   back to the last place it was healthy. That check cannot be wrong about the
+   grid it is actually running on. */
+const WALK = {
+  F0:0.0050, F1:0.1200, k0:0.0300, k1:0.0750, n:24,
+  mask:'000000000000000000000000000001110011110000000000000001111111111100000000000001111111111111000000000000001111111111100000000000000001111111110000000000000000111111110000000000000000011111111000000000000000001111111000000000000000001111111000000000000000000111111000000000000000000111111000000000000000000111111000000000000000000111111000000000000000001111110000000000000000001111110000000000000000011111110000000000000000011111100000000000000000111111100000000000000001111111000000000000000001111110000000000000000011111100000000000000000111111000000000000000000011000000000000',
+  settleSteps: 4500,     /* let the pattern find its character before moving */
+  rate:      2.5e-6,     /* normalised units per SOLVER STEP - paced by the
+                            chemistry's own clock, not by the frame rate, so
+                            the show is the same speed on the Pi as here */
+  turn:       0.105,     /* radians of heading change per check - measured at
+                            0.055 the path ran almost straight up in F */
+  checkEvery:    45      /* frames between health checks */
+};
+let wF=0, wK=0, wTheta=0, walking=false, haven=null, sick=0, nearest=null, sdRef=0;
+let okStreak=0, sinceSeed=0, rescues=0;
+
+const wFn = () => (wF - WALK.F0)/(WALK.F1 - WALK.F0);
+const wKn = () => (wK - WALK.k0)/(WALK.k1 - WALK.k0);
+function maskAt(fn, kn){
+  if(fn<0||fn>1||kn<0||kn>1) return false;
+  const i=Math.min(WALK.n-1, Math.floor(fn*WALK.n)), j=Math.min(WALK.n-1, Math.floor(kn*WALK.n));
+  return WALK.mask.charCodeAt(i*WALK.n+j) === 49;
+}
+/* Is the dish still making a pattern? Sampled, because this runs every frame-ish
+   and the grid is 125,000 cells. */
+function health(){
+  let n=0, sum=0, sum2=0;
+  for(let i=0;i<V.length;i+=7){ const v=V[i]; sum+=v; sum2+=v*v; n++; }
+  const mean=sum/n, sd=Math.sqrt(Math.max(0, sum2/n - mean*mean));
+  return { mean, sd, ok: sd > 0.020 && mean < 0.60 };
+}
+/* HOW CLOSE IS THE EDGE, AND WHICH WAY IS IN. The band is narrow - around
+   Foam it is barely two mask cells wide - so waiting until the pattern dies is
+   waiting too long. Probe a ring of directions and lean away from whichever
+   are already outside. */
+function edgeBias(){
+  const fn=wFn(), kn=wKn(), R=0.055;
+  let bx=0, by=0, out=0;
+  for(let a=0; a<8; a++){
+    const th=a*Math.PI/4;
+    if(!maskAt(fn+Math.cos(th)*R, kn+Math.sin(th)*R)){ bx-=Math.cos(th); by-=Math.sin(th); out++; }
+  }
+  return out ? { x:bx, y:by, out } : null;
+}
+function stepWalk(frames){
+  const d = WALK.rate * CONFIG.iters * frames;
+  for(let attempt=0; attempt<6; attempt++){
+    const fn = wFn() + Math.cos(wTheta)*d, kn = wKn() + Math.sin(wTheta)*d;
+    if(maskAt(fn, kn)){
+      wF = WALK.F0 + fn*(WALK.F1-WALK.F0);
+      wK = WALK.k0 + kn*(WALK.k1-WALK.k0);
+      return;
+    }
+    /* Off the edge: turn rather than stop. Stopping at a boundary parks the
+       picture there for the rest of the visit, which is the one thing a
+       wander must not do. */
+    wTheta += (Math.PI/3) * (attempt%2 ? 1 : -1) * (1 + (attempt>>1));
+  }
+  if(haven){ wF=haven.F; wK=haven.k; wTheta=Math.random()*Math.PI*2; }
+}
+/* WHAT THE FIRST LONG RUN TAUGHT, and it could only be learnt by running it.
+   Four minutes in a real browser: the walk left Plankton, marched more or less
+   straight up in F, washed out at F=0.0298 and then sat there for 160 seconds
+   with the spread at 0.01 and the dish going quietly uniform.
+
+   TWO THINGS WERE WRONG.
+
+   1. THE MAP OVERSTATES THE GROUND. Every point in the sweep was started from
+      a fresh seed. Gray-Scott is multistable - where you END UP depends on
+      where you came FROM - so a point you WALK into can settle into the
+      uniform state even though seeding there directly gives a pattern. The
+      mask is therefore an upper bound on the safe region, never a guarantee,
+      and the only reliable fence is the live reading.
+
+   2. RETREATING TO "THE LAST HEALTHY POINT" RETREATS NOWHERE. That point is
+      by definition one step inside the boundary you just fell off, so the walk
+      turned round, immediately failed again, and oscillated on the edge.
+
+   So the haven is kept a real distance behind, retreating RESEEDS the dish -
+   a washed-out field will not recover on its own, because uniform is a stable
+   state, and a fresh seed is exactly how the page starts in the first place -
+   and the walk now turns away when the pattern starts FADING rather than
+   waiting until it is gone. */
+const HAVEN_GAP = 0.045;     /* normalised distance a haven must be behind */
+function checkWalk(){
+  sinceSeed++;
+  const h = health();
+  /* A freshly sown dish is uniform by construction. Judging it in the first
+     couple of seconds after a reseed is judging the seed, not the chemistry. */
+  if(sinceSeed < 4) return h;
+
+  wTheta += (Math.random()-0.5)*2*WALK.turn;
+
+  /* Lean away from the edge of the measured region while there is still room
+     to turn. */
+  const b = edgeBias();
+  if(b){
+    const want = Math.atan2(b.y, b.x);
+    let d = want - wTheta;
+    while(d >  Math.PI) d -= 2*Math.PI;
+    while(d < -Math.PI) d += 2*Math.PI;
+    wTheta += d * Math.min(0.5, 0.12*b.out);
+  }
+
+  if(h.ok){
+    sick=0; okStreak++;
+    sdRef = Math.max(h.sd, sdRef*0.98);
+    /* THE HAVEN MUST HAVE PROVED ITSELF. Health is a reading of the FIELD, and
+       the field lags the parameters: a point can look healthy on the strength
+       of a pattern built somewhere else a moment ago. Measured - the first
+       version adopted a haven that did not pattern at all, retreated to it,
+       reseeded, died, and did that twenty-four times in five minutes. So a
+       point is only a haven after the dish has stayed healthy there for a
+       while, and only once we are a real distance from the last one. */
+    if(okStreak >= 8){
+      if(!haven) haven={F:wF, k:wK};
+      else {
+        const df=(wF-haven.F)/(WALK.F1-WALK.F0), dk=(wK-haven.k)/(WALK.k1-WALK.k0);
+        if(Math.sqrt(df*df+dk*dk) > HAVEN_GAP) haven={F:wF, k:wK};
+      }
+      rescues = 0;
+    }
+    if(sdRef > 0 && h.sd < 0.55*sdRef) wTheta += (Math.random()<0.5?-1:1)*(0.6+Math.random()*0.6);
+  } else {
+    sick++; okStreak=0;
+    if(sick>=2){
+      rescues++;
+      /* Twice rescued without the dish coming back means the haven is no good
+         either. Go to one of the thirteen named patterns, which are known to
+         work because the page has been showing them for a year. */
+      if(rescues>=2 || !haven){
+        const p = PATTERNS[Math.floor(Math.random()*PATTERNS.length)];
+        wF=p.F; wK=p.k; haven=null; rescues=0;
+      } else {
+        wF=haven.F; wK=haven.k;
+      }
+      wTheta=Math.random()*Math.PI*2;
+      seed(); ticks=0; walking=false; sick=0; sdRef=0; okStreak=0; sinceSeed=0;
+    }
+  }
+  return h;
+}
+/* The nearest named pattern, so the panel can say where in the plane we are
+   and the wall can speak when the character changes. */
+function nearestPattern(){
+  let best=null, bd=1e9;
+  for(const p of PATTERNS){
+    const df=(p.F-wF)/(WALK.F1-WALK.F0), dk=(p.k-wK)/(WALK.k1-WALK.k0);
+    const d=df*df+dk*dk;
+    if(d<bd){ bd=d; best=p; }
+  }
+  return best;
+}
+
 /* One solver step. The Laplacian is the standard 9-point stencil (0.05 on
    diagonals, 0.2 on edges, -1 centre) which is noticeably less grid-aligned
    than the 5-point version - with 5-point, stripes visibly prefer to run
    along the axes, which looks like an artefact because it is one. */
 function step(){
-  const F=pattern.F, k=pattern.k, Du=CONFIG.Du, Dv=CONFIG.Dv, dt=CONFIG.dt;
+  const F=wF, k=wK, Du=CONFIG.Du, Dv=CONFIG.Dv, dt=CONFIG.dt;
   for(let y=0;y<GH;y++){
     const ym=((y-1+GH)%GH)*GW, y0=y*GW, yp=((y+1)%GH)*GW;
     for(let x=0;x<GW;x++){
@@ -344,11 +535,24 @@ function render(){
   ctx.putImageData(img,0,0);
 }
 
+/* The permanent readout: where in the plane the dish is, right now. A wander
+   with no numbers on screen is just a picture that will not hold still. */
+let lastHealth = null;
+function panel(){
+  Wall.instrument({ place:'tr', cols:1, rows:[
+    { k:'feed F',  v:wF.toFixed(4) },
+    { k:'kill k',  v:wK.toFixed(4) },
+    { k:'nearest', v: walking ? (nearest?nearest.name:'\u2014') : 'settling' }
+  ]});
+}
 function updateInfo(){
   infoEl.textContent =
-    `pattern   ${pattern.name}\n` +
-    `feed F    ${pattern.F.toFixed(4)}\n` +
-    `kill k    ${pattern.k.toFixed(4)}\n` +
+    `start     ${pattern.name}\n` +
+    `feed F    ${wF.toFixed(5)}  (start ${pattern.F.toFixed(4)})\n` +
+    `kill k    ${wK.toFixed(5)}  (start ${pattern.k.toFixed(4)})\n` +
+    `walking   ${walking?'yes':'settling'}  sick ${sick}  ok ${okStreak}  rescues ${rescues}\n` +
+    `health    ${lastHealth?('sd '+lastHealth.sd.toFixed(3)+' mean '+lastHealth.mean.toFixed(3)+(lastHealth.ok?' ok':' LOW')):'-'}\n` +
+    `nearest   ${nearest?nearest.name:'-'}\n` +
     `grid      ${GW} x ${GH}\n` +
     `steps     ${ticks}  (${CONFIG.iters}/frame)\n` +
     `elapsed   ${((performance.now()-startedAt)/1000).toFixed(0)}s\n` +
@@ -375,12 +579,22 @@ function frame(now){
   const dt=now-lastFrame; lastFrame=now;
   fps=fps?fps*0.9+(1000/dt)*0.1:1000/dt;
   if(paused||handingOff) return;
-  if(now-startedAt>CONFIG.holdMs){
-    if(!PINNED && patternIndex+1>=Wall.repeats(CONFIG.patternsPerTurn)){ handOff(); return; }
-    newPattern();
-  }
+  if(!PINNED && now-startedAt > Wall.holdMs(CONFIG.minutes)){ handOff(); return; }
   for(let s=0;s<CONFIG.iters;s++) step();
+
+  /* Settle first, then wander - the point of the whole thing is that you can
+     watch the pattern emerge, and only then watch it change. */
+  if(!walking && ticks >= WALK.settleSteps){ walking=true; if(!haven) haven={F:wF,k:wK,sd:0}; }
+  if(walking){
+    stepWalk(1);
+    if(ticks % (WALK.checkEvery*CONFIG.iters) < CONFIG.iters){
+      lastHealth = checkWalk();
+      const n = nearestPattern();
+      if(n !== nearest){ nearest = n; Wall.lane(n.line); }
+    }
+  }
   render();
+  panel();
   if(document.body.classList.contains('showinfo')) updateInfo();
 }
 

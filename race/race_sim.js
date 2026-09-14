@@ -1,5 +1,6 @@
 /* ---------------------------------------------------------------------------
-   race_sim.js - the riders and the race, on a course cut by race_planner.js
+   race_sim.js · v1.0 · 2026-09-13
+   the riders and the race, on a course cut by race_planner.js
    into a frozen Strata world. Joe, 2026-09-07:
      "n riders ... randomly drawn skill and strength for hill climbing ... a
       wide 2-track so the riders get spaced out by sprinting ... a loop of
@@ -55,7 +56,11 @@
    Tallied for the cards: work at the pedals -> kilocalories at 22%, litres
    sweated, vertical metres climbed, peak core temperature.
    Pure and seeded. Distances in metres along the loop, speeds m/s.
---------------------------------------------------------------------------- */
+---------------------------------------------------------------------------
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 function RaceSimFactory(global){
 'use strict';
 function rng32(seed){ let a=seed>>>0; return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }

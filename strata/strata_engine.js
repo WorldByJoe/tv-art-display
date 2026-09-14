@@ -1,5 +1,6 @@
 /* ---------------------------------------------------------------------------
-   strata_engine.js - a sedimentary landscape that folds and then erodes.
+   strata_engine.js · v1.0 · 2026-09-13
+   a sedimentary landscape that folds and then erodes.
    Joe, 2026-09-04: "create a sedimentary landscape, induce geologic folding,
    and then erosion ... like Utah, different hardnesses of sedimentary layers,
    different colors, rain-based erosion. The observer would watch the
@@ -47,7 +48,11 @@
    a Web Worker: Chromium will not load a worker script from file://, but it
    will run one built from a Blob of StrataFactory.toString(). The wall page
    does exactly that, so erosion runs on a second core while the first draws.
---------------------------------------------------------------------------- */
+---------------------------------------------------------------------------
+
+   CHANGED
+     v1.0  versioning starts here; this file predates the scheme
+*/
 function StrataFactory(global) {
 'use strict';
 
