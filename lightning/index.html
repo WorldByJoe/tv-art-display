@@ -10,7 +10,20 @@
 <style>
   html,body{margin:0;height:100%;background:#04070d;overflow:hidden}
   #cv{display:block;width:100vw;height:100vh}
-  #scrim{position:fixed; top:0; right:0; width:30vw; height:46vh; z-index:6;
+  /* THE PANEL IS SEVEN ROWS DEEP, so it takes the tier below the house
+     default on both halves of every row. Joe, 2026-09-13: "make the font size
+     in the info box smaller; it takes up too much space." Values drop --t3 to
+     --t4 and keys --t4 to --t5, the hero --t1 to --t2 - all still above the
+     26 px glyph floor, and the box loses about a third of its height. */
+  .instr .v{ font-size:var(--t4); }
+  .instr .k{ font-size:var(--t5); }
+  .instr .cap{ font-size:var(--t5); }
+  .instr .hero .hv{ font-size:var(--t2); }
+  .instr .hero .hu{ font-size:var(--t5); }
+  .instr{ gap:calc(10 * var(--wu)); padding:calc(22 * var(--wu)) calc(28 * var(--wu)); }
+  .instr .grid{ gap:calc(8 * var(--wu)) calc(28 * var(--wu)); }
+  .instr .row{ gap:calc(2 * var(--wu)); }
+  #scrim{position:fixed; top:0; right:0; width:26vw; height:40vh; z-index:6;
          pointer-events:none;
          background:radial-gradient(92% 84% at 100% 0%,
                     rgba(4,7,13,.86) 0%, rgba(4,7,13,.62) 42%, rgba(4,7,13,0) 100%);}
@@ -70,7 +83,12 @@ function rotateTo(step){
 
 const CONFIG = {
   exagg:    10,        // Joe's tenfold slowdown of each flash's own duration
-  afterMs:  9000,      // how long a spent flash keeps fading, in show time
+  pulseMs:  2200,      // how long ONE pulse takes to die
+                       /* The flash's ring used to outlive its pulses by nine
+                          seconds, which read as "this flash is still going"
+                          long after it had stopped (Joe, 2026-09-13). Ring and
+                          pulses now share one clock: a flash is finished one
+                          pulse-fade after its last pulse fires. */
   holdMin:  9,
   nextPage: '' /* standalone: nowhere to hand on to; start again */,
 };
@@ -105,7 +123,7 @@ const toY = lat => mapY + (SHOW.box[1] - lat)*mapS;
 /* ---- the show clock ------------------------------------------------------
    Driven by the wall clock so a slow Pi shows the same six minutes, just with
    fewer frames. */
-const bootAt = performance.now();
+let bootAt = performance.now();
 let handedOff=false;
 function showT(now){ return SHOW.t0 + (now - bootAt); }
 function spanMs(){ return SHOW.t1 - SHOW.t0; }
@@ -116,7 +134,7 @@ let lo=0, hi=0;
 function advance(T){
   const tail = T - (SHOW.flashes[0] ? 0 : 0);
   while (hi < SHOW.flashes.length && SHOW.flashes[hi].t <= T) hi++;
-  while (lo < hi && SHOW.flashes[lo].t + SHOW.flashes[lo].d*CONFIG.exagg + CONFIG.afterMs < T) lo++;
+  while (lo < hi && SHOW.flashes[lo].t + SHOW.flashes[lo].d*CONFIG.exagg + CONFIG.pulseMs < T) lo++;
 }
 
 /* size = energy, through a log: 4 fJ to 4,000 fJ is a thousandfold, and on a
@@ -130,14 +148,15 @@ function draw(){
   if (baseReady) ctx.drawImage(base, mapX, mapY,
       (SHOW.box[3]-SHOW.box[2])*cosLat*mapS, (SHOW.box[1]-SHOW.box[0])*mapS);
 
+  drawCities();
   advance(T);
-  let live=0, lit=0, energy=0;
+  let live=0, lit=0, energy=0; const durs=[], areas=[];
   for (let i=lo; i<hi; i++){
     const f = SHOW.flashes[i];
     const age = T - f.t;
-    const life = f.d*CONFIG.exagg + CONFIG.afterMs;
+    const life = f.d*CONFIG.exagg + CONFIG.pulseMs;
     if (age < 0 || age > life) continue;
-    live++; energy += f.e;
+    live++; energy += f.e; durs.push(f.d); areas.push(f.a);
     const x = toX(f.lon), y = toY(f.lat);
     if (x < -40 || y < -40 || x > W+40 || y > H+40) continue;
     const mag = magOf(f.e);
@@ -160,7 +179,7 @@ function draw(){
       const gt = g[0]*CONFIG.exagg;
       const since = age - gt;
       if (since < 0) break;                        // groups are time-sorted
-      const gk = Math.max(0, 1 - since/2200);
+      const gk = Math.max(0, 1 - since/CONFIG.pulseMs);
       if (gk <= 0) continue;
       lit++;
       const gx = toX(f.lon + g[2]/100), gy = toY(f.lat + g[1]/100);
@@ -178,11 +197,41 @@ function draw(){
   }
   ctx.globalAlpha = 1;
   drawKey();
-  panel(live, lit, energy, T);
+  panel(live, lit, durs, areas);
 
-  if (!PINNED && !handedOff && CONFIG.nextPage !== '' &&
-      (T > SHOW.t1 + 4000 || (now-bootAt)/1000 > CONFIG.holdMin*60)) handOff();
+  if (T > SHOW.t1 + 4000) {
+    /* A PINNED PAGE LOOPS instead of sitting on a spent sky. Without this the
+       six minutes ran out and left an empty basemap for as long as anyone
+       cared to watch (2026-09-13). Unpinned, the wall moves on as usual. */
+    if (PINNED) { bootAt = performance.now(); lo = hi = 0; }
+    else if (!handedOff && CONFIG.nextPage !== '') handOff();
+  } else if (!PINNED && !handedOff && CONFIG.nextPage !== '' &&
+             (now-bootAt)/1000 > CONFIG.holdMin*60) handOff();
   requestAnimationFrame(draw);
+}
+
+/* The four biggest towns in frame, spread out by the builder so they read as
+   four bearings rather than one city and three of its boroughs. A Blue Marble
+   basemap carries no labels of its own. */
+function drawCities(){
+  const t = SHOW.towns || [];
+  if (!t.length) return;
+  const u = W/3840, tf = Math.round(30*1.167*u);
+  ctx.font = `${tf}px ui-sans-serif, system-ui, sans-serif`;
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  for (const c of t){
+    const x = toX(c.lon), y = toY(c.lat);
+    if (x < 0 || y < 0 || x > W || y > H) continue;
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = 'rgba(255,240,215,0.95)';
+    ctx.beginPath(); ctx.arc(x, y, Math.max(2, 2.6*DPR), 0, 6.2832); ctx.fill();
+    ctx.lineWidth = Math.max(2, 3.4*DPR);
+    ctx.strokeStyle = 'rgba(6,10,18,0.85)';
+    ctx.strokeText(c.n, x + 12*u, y);          // halo first, so the name reads
+    ctx.fillStyle = 'rgba(255,243,222,0.92)';
+    ctx.fillText(c.n, x + 12*u, y);
+  }
+  ctx.globalAlpha = 1;
 }
 
 /* ---- the key ------------------------------------------------------------
@@ -248,25 +297,29 @@ function drawKey(){
 }
 
 let lastRows='';
-function panel(live, lit, energy, T){
+function med(a){ if(!a.length) return 0; a.sort((x,y)=>x-y); return a[a.length>>1]; }
+function panel(live, lit, durs, areas){
   const s = SHOW.stats;
-  const el = Math.max(0, Math.round((T - SHOW.t0)/1000));
-  const clock = Math.floor(el/60) + ':' + String(el%60).padStart(2,'0');
+  /* EVERY ROW MOVES, or the panel looks broken. Joe, 2026-09-13: "the field
+     for flash lasts and lights up seem to not be updating." They were the
+     capture's whole-show medians sitting beside two live counters, which is a
+     worse sin than being wrong - half a panel frozen reads as a dead page.
+     They are now the median of the flashes actually in the air. */
   const rows = [
-    {k:'in the air now', v: live + ' flashes'},
-    {k:'pulses lit',     v: lit + ''},
-    {k:'flash rate',     v: s.rate + ' / s'},
-    {k:'pulses / flash', v: s.medGroups + ' median, ' + s.maxGroups + ' most'},
-    {k:'flash lasts',    v: s.medDur + ' ms median, ' + s.maxDur + ' longest'},
-    {k:'lights up',      v: s.medArea + ' km² median, ' + s.maxArea + ' most'},
-    {k:'seen from',      v: '35,786 km, at 777.4 nm'},
+    {k:'in the air now',  v: live + ' flashes'},
+    {k:'pulses lit',      v: lit + ''},
+    {k:'flash rate',      v: s.rate + ' / s'},
+    {k:'pulses per flash',v: (live ? Math.round(lit/live) : 0) + ' now, ' + s.maxGroups + ' most'},
+    {k:'flash lasts',     v: (durs.length ? med(durs) : 0) + ' ms, up to ' + s.maxDur},
+    {k:'lights up',       v: (areas.length ? Math.round(med(areas)) : 0) + ' km², up to '
+                             + s.maxArea.toLocaleString()},
+    {k:'light came',      v: (SHOW.slantKm ? SHOW.slantKm.toLocaleString() + ' km, '
+                             + SHOW.lightMs + ' ms' : '—')},
+    {k:'at',              v: '777.4 nm, oxygen'},
   ];
-  Wall.instrument({place:'tr', cols:1,
-    hero:{v: clock, u:'of ' + Math.round(spanMs()/60000) + ' min'},
-    rows: rows, cap: SHOW.where});
+  Wall.instrument({place:'tr', cols:1, rows: rows, cap: SHOW.where});
   if (document.body.classList.contains('showinfo')) updateInfo(live, lit);
 }
-Wall.instrument && 0;
 
 function handOff(){ handedOff=true; Wall.lane('');
   setTimeout(()=>{ location.href = Wall.nextPage(CONFIG.nextPage); }, 1400); }
