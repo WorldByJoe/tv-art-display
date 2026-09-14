@@ -88,6 +88,33 @@ function rotateTo(step){
   let i = ROTATION.indexOf(here);
   if (i < 0) i = 0;
   location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+/* ---- the piece's own pacing and scale ----------------------------------
+   RESTORED 2026-09-14. This block was deleted by accident on 2026-09-13 when
+   rotateTo() above was rewritten for Wall.step: the old rotateTo was a single
+   line followed immediately by "const CONFIG = {", and the replacement ran on
+   through CONFIG's closing brace. Every reference to CONFIG below therefore
+   threw at the first tick and the page sat on a black screen showing only its
+   name until the Pi's watchdog restarted the kiosk 27 minutes later.
+   Restored from the published copy at 84f9d9f, with nextPage put back to the
+   wall's value (the published build blanks it for the standalone page). */
+const CONFIG = {
+  freezeStep: 600,        // erosion steps before the land is frozen (300,000 model years)
+  raceCell: 10,           // metres per erosion cell at the race scale
+  loop:{minLen:3200, maxLen:8000, targetLen:5000},   // 2-5 miles
+  /* gradeCap is no longer set here: the planner picks a grade of difficulty for
+     the day and the cap comes with it (easy 10%, medium 18%, hard 30%). Add
+     ?grade=easy|medium|hard to demand one, or ?cap=0.24 to override outright. */
+  slopeMax:0.7,
+  riders: 8, laps: 2,
+  timeScale: 4,           // race seconds per real second
+  rosterSec: 30,          // how long the cards stand
+  resultsSec: 45,         // the ranked cards at the end
+  mapSec: 40, heliSec: 30,  // the overview alternates: flat map, then the helicopter orbit
+  orbitSec: 490, vexag:1.8, fpsCap:8,
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,  // on to the flowers (2026-09-12); only a fallback - Wall.nextPage reads the ring
+  holdMin:20,             // NOT the pacing - a full show runs ~11 min. This is the
+                          // deadline for a show that has somehow stalled.
 };
 const Q=new URLSearchParams(location.search), PINNED=Q.has('pin');
 let seed=Q.has('seed')?(Q.get('seed')|0):((Math.random()*1e9)|0);

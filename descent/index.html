@@ -4,6 +4,44 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Fastest Line</title>
+<!-- ==========================================================================
+  descent.html · v1.0 · 2026-09-13
+  The Fastest Line: a mountain bike descent, ridden by a physics model.
+
+  Ring stop 11 of 20, one descent per visit, loop:'reload'. A rider and a
+  knowledge mode are drawn at random each run and named in two chips top-left,
+  because the whole point is watching the difference between runs - what a
+  rider who has seen the trail does with it against one who has not.
+
+  FIRST READ: the trail ahead and the two chips. The panel carries the run.
+
+  THE PHYSICS is a 1 m-station trail model: gravity, drag in thin air
+  (rho 1.02 - these mountains sit at altitude), grip against surface
+  roughness eaten by 0.35 of the suspension's travel, and a 14.2 m/s gear
+  ceiling past which the legs spin out and pedalling adds nothing.
+
+  THREE MEASURED DEFECTS were found in review and fixed, and none of them
+  was visible without measuring: a no-op render cap that was costing half the
+  frame rate (6.4 -> 13.4 fps), an endo cap that counted gravity twice, and a
+  planner whose bank angle disagreed with the slide test it was feeding.
+  Measure fixes on this page; do not assume them.
+
+  THE RUN DEADLINE LIVES OUTSIDE THE ANIMATION LOOP ON PURPOSE. The only
+  hand-off is at the end of a run inside frame(), so anything that throws in
+  frame() takes the rAF chain down and the hand-off with it, and the wall
+  parks on a frozen still until somebody power-cycles the television. A
+  deadline checked inside the loop would be just as dead; a setTimeout is not.
+  Eleven minutes is far beyond any real run - the longest of thirty-two
+  measured was 7.4 minutes - because a backstop that fires mid-descent looks
+  like a crash rather than a rescue.
+
+  KEYS  n new descent · m same seed, new mode · r same seed, new rider ·
+  c camera · p pause · t self-test · i diagnostics.
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   html, body { margin:0; padding:0; height:100%; background:#000; overflow:hidden; }
   canvas#cv { display:block; width:100vw; height:100vh; }

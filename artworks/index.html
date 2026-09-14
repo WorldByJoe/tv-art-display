@@ -10,6 +10,37 @@
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Open Gallery</title>
+<!-- ==========================================================================
+  artworks.html · v1.0 · 2026-09-13
+  Open Gallery: works from the Art Institute of Chicago, fetched live.
+
+  Ring stop 13 of 20, five works per visit at 55 s each - about 4.6 minutes,
+  in step with the rest of the rotation - loop:'inside'. Half the draws come
+  from the boosted front pages and half from the whole collection, so the
+  gallery is neither all masterpieces nor all storeroom.
+
+  TWO MEASURED FACTS ABOUT THE MUSEUM'S IMAGE SERVER, both of which took the
+  page black before they were understood:
+
+  IT REFUSES ANY FOREIGN REFERER. The wall sat black on 2026-09-08 until
+  <meta name="referrer" content="no-referrer"> went in, with referrerpolicy on
+  every <img> and on the preloader as well - one missed element is enough.
+
+  IT ENFORCES A SIZE ALLOWLIST. The best-fit box request (!2400,2400) began
+  answering 403 for every work (measured 2026-08-28, 8 of 8 sampled). 843 is
+  the width the museum documents as always available and 1686 is the retina
+  step, present for most works: ask sharp first, then fall back to the
+  guaranteed size.
+
+  Verify this page with headless Chrome, not the browser pane - the pane is
+  not a faithful client for it.
+
+  KEYS  n next work · i diagnostics · left/right walk the ring.
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   /* =====================================================================
      ARTWORKS - great works drawn live from an open museum collection.

@@ -4,6 +4,48 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sun and Wind</title>
+<!-- ==========================================================================
+  weather.html · v1.0 · 2026-09-13
+  Sun and Wind: real forecast wind over real terrain, three locations.
+
+  Ring stop 6 of 20, one tour per visit, loop:'reload'. Live Open-Meteo wind
+  on a 7x8 sample grid per location, advected as 3,600 tracer particles over
+  a NASA GIBS satellite basemap with a DEM hillshade. The clock runs from 18
+  hours BEHIND to 18 hours AHEAD at 1.7 s per hour, so one pass shows how the
+  day actually went as well as where it is going, with a marker crossing the
+  present.
+
+  FIRST READ: the streamers. Then the timeline across the top - yellow
+  through the daylight hours, grey at night (Joe, 2026-09-13), computed from
+  real solar geometry, with the zone offset read from
+  Intl.DateTimeFormat timeZoneName:'longOffset'. Radiation was tried as the
+  sunrise clock and is a poor one: it is a mean over the PRECEDING hour, so a
+  06:42 sunrise landed at 07:30.
+
+  THE CANVAS IS NEVER CLEARED - that is what makes the wind trails - and this
+  page has been bitten by it twice. Anything drawn at a moving position or
+  redrawn every frame ACCUMULATES: the degree grid built up into vertical
+  white bars (measured 40 lines then 82 four seconds later) and the clock left
+  ghosts. Both fixed the same way: the graticule is baked into the BASEMAP by
+  graticuleInto(), and the timeline and clock draw to hudCv, which is cleared
+  every frame. Anything new that moves goes on hudCv or into the basemap -
+  never onto the main canvas.
+
+  TOWNS AND ROADS come from wxplaces.js (GeoNames + Natural Earth, built by
+  build_weather_places.py), the basemap from wxsat.js
+  (build_weather_satellite.py), the coastlines from borders.js. All three are
+  baked at build time: the Pi drops off wifi, and a map that loses its
+  coastline when the network blips is worse than one that never had it. Both
+  drawRoads() and drawTowns() return early when their file is missing, so a
+  page published without them is silently bare - which is exactly what
+  happened on the public site until the extras list was fixed.
+
+  KEYS  n next location · i diagnostics · p pause · left/right walk the ring.
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   html, body { margin:0; padding:0; height:100%; background:#04060b; overflow:hidden; }
   canvas { position:fixed; inset:0; display:block; width:100vw; height:100vh; }

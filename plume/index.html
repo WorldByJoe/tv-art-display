@@ -4,6 +4,48 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Finding the Leak</title>
+<!-- ==========================================================================
+  plume.html · v1.0 · 2026-09-13
+  Finding the Leak: a mobile methane survey, drawn as belief over ground.
+
+  Ring stop 7 of 20, two surveys per visit, loop:'inside'. The professional
+  half of the wall - also published on its own as plume-survey-sim - and the
+  one page whose subject genuinely fills the frame, so the information gets
+  its own territory rather than an overlay (Joe, 2026-08-26: keep the map at
+  the screen's own 16:9).
+
+  FIRST READ: the car, its plumes, and the posterior painting itself onto the
+  ground behind it.
+
+  THE PLUME IS PUFFS, NOT A CONE. A cone evaluated with the instantaneous
+  wind swings rigidly about the source like a searchlight - the far end moves
+  the moment the wind turns, which is not what a plume does. Gas 200 m
+  downwind was released a minute ago and remembers the wind from then, so a
+  real plume SNAKES: it is the wind's recent history laid out in space.
+  Releasing puffs and letting each ride the wind it meets reproduces that for
+  free. The budget is 460 live puffs across ALL leaks, so the Pi does the
+  same work whether there is one source or four.
+
+  A NON-DETECTION IS EVIDENCE. Clean air upwind subtracts from the wedge it
+  came from, which is what makes the belief field sharpen rather than only
+  grow. The analyser logs at a fixed 4 Hz like a real instrument - a reading
+  every ~2 m at survey speed - not once per rendered frame; depositing every
+  frame swept the whole grid 60 times a second and is what made the car
+  stutter.
+
+  TIME IS STRETCHED PER MAP so one pass takes about the same wall time
+  wherever the survey is, and the leak count scales with road length so a big
+  map is not mostly empty. Streets come from streets.js (Overture, built by
+  build_streets.py) - nine neighbourhoods chosen for CONTRASTING MORPHOLOGY,
+  because street pattern is what decides how a survey performs: a grid gives
+  four approaches, a cul-de-sac tract gives one.
+
+  KEYS  n new survey · i diagnostics · p pause · left/right walk the ring.
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   html, body { margin:0; padding:0; height:100%; background:#06080b; overflow:hidden; }
   canvas { position:fixed; inset:0; display:block; width:100vw; height:100vh; }

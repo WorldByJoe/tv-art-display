@@ -4,6 +4,49 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Patriline</title>
+<!-- ==========================================================================
+  surnames.html · v1.0 · 2026-09-13
+  Patriline: surname loss as a river, live rather than pre-rendered.
+
+  Ring stop 3 of 20, one cycle per visit, loop:'inside'. A JavaScript
+  restaging of Claude/Patralineal name simulation/surname_fixation.Rmd. The
+  models are re-implemented rather than replayed BECAUSE the piece is about a
+  stochastic process: every showing is a different run, and the long tail of
+  fixation times means some runs really do drag on. Pre-computed frames would
+  quietly remove exactly that.
+
+  FIRST READ: the river - time left to right, newest generation at the right
+  edge, one horizontal band per surname, thickness = its share of living men.
+  It is a Muller plot, and read backwards it is the coalescent tree of the
+  male line.
+
+  THREE ACTS: drift (neutral Galton-Watson / Wright-Fisher), wealth
+  (heritable fortune biasing survival - drift becomes selection and the
+  timescale changes functional form), and invention (neutral plus a trickle
+  of newly coined names, which never fixates and is what makes the piece
+  loopable instead of ending on one dead colour).
+
+  THE RIVER SQUASHES ITSELF because surname loss has two regimes on wildly
+  different timescales - a cliff over ~20 generations, then a crawl over
+  hundreds - and no fixed time axis shows both. At the right edge it copies
+  itself onto its own left half at half width and carries on: a log-ish axis
+  bought with one drawImage instead of a transform on every band.
+
+  THE NAMING PAUSE at eight survivors is Joe's number and a good one: few
+  enough that every label fits the height, and it lands well before the last
+  two names, so the endgame is watched with the names attached.
+
+  THE VILLAGE OPENING IS OFF (Joe, 2026-09-09: "skip that initial screen
+  showing blocks over the top of horizontal lines. Doesn't make visual
+  intuitive sense."). villageHoldMs/villageFadeMs at zero skip it outright;
+  putting the two durations back restores it.
+
+  KEYS  n new cycle · i diagnostics · left/right walk the ring.
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   /* Self-contained on purpose: no external files, fonts or libraries, so this
      works as a file:// page on the Pi kiosk AND as a single drop-in file on

@@ -4,6 +4,45 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Accretion</title>
+<!-- ==========================================================================
+  gravity.html · v1.0 · 2026-09-13
+  Accretion: a cloud of bodies collapsing into a system under real gravity.
+
+  Ring stop 2 of 20, one run per visit, loop:'inside'. A run is 180 s of
+  accretion then a 26 s pull-back, and it hands on through occasion.html -
+  which passes straight to surnames.html on a day with nothing to celebrate.
+  Self-contained on purpose: no external files, fonts or libraries, so the
+  same file runs from file:// on the Pi and as a drop-in on GitHub Pages.
+
+  FIRST READ: the bodies and their trails. Everything else is the panel.
+
+  ALWAYS REAL TIME. A fast-forward used to run up to 8x once merging went
+  quiet. Joe asked for it out - "let's just watch gravity do its thing" - so a
+  second on screen is a second of simulated time, and the run is ended by the
+  CLOCK rather than by a settling test. Nothing about the pacing is a lie.
+
+  COLLISION RADIUS AND DRAWN RADIUS ARE SEPARATE NUMBERS, deliberately. Tied
+  together, a collision radius large enough to look right merged 226 of 250
+  bodies inside 15 seconds, and shrinking it to fix that turned every body
+  into a speck.
+
+  THE FRAMING RULE is what this page got wrong longest and the current one is
+  worth stating: the CORE is the largest bodies out to 90% of total mass, and
+  the view is then set by the 60th percentile of what REMAINS (recentre(),
+  ~line 792). Mass out there is dust and 80% of it is a black field, so a
+  plain quantile over all bodies stopped counting the central ones and framed
+  the emptiness. On top of that the zoom is deliberately sluggish - Joe,
+  2026-09-10, "so it's not zooming in and out and causing motion sickness":
+  a 0.35% ceiling per frame plus a deadband, inside which the target is not
+  moved at all, so the view stops creeping after the last digit of a
+  percentile and answers only a real change of scale.
+
+  KEYS  n new run · i diagnostics · left/right walk the ring.
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   /* Self-contained on purpose: no external files, fonts or libraries, so this
      works as a file:// page on the Pi kiosk AND as a single drop-in file on

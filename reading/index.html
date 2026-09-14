@@ -4,6 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reading</title>
+<!-- ==========================================================================
+  reading.html · v1.0 · 2026-09-13
+  Reading: a passage of real literature, revealed line by line.
+
+  Ring stop 12 of 20, one passage per visit, loop:'reload'. 165 s a turn: the
+  lines land on a stagger finishing a third of the way in, and the author,
+  work and date are held back until half way, so the piece is read before it
+  is attributed.
+
+  THE CORPUS IS STANDARD EBOOKS and that is not a preference. It is the only
+  large public-domain corpus that sends CORS headers, so it is the only one a
+  file:// page on the Pi can fetch at all - gutenberg.org is blocked outright
+  from file://. One URL per book returns the whole text.
+
+  FOURTEEN LINES IS A HEIGHT BUDGET, NOT A TASTE, and it is a ceiling checked
+  by measurement rather than an estimate: fitToScreen() drops trailing lines
+  before layout on a night when they do not fit, instead of pushing them off
+  the bottom edge where nobody would ever see them.
+
+  KEYS  n new passage · i diagnostics · left/right walk the ring.
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   /* Self-contained apart from the wall's three shared files - wall.css,
      wall.js and nav.js - like the rest of the rotation. */

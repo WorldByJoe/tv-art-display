@@ -78,6 +78,46 @@
         than per-frame stepping. Nothing to change.
      ====================================================================== -->
 <title>Heartwood</title>
+<!-- ==========================================================================
+  tree.html · v1.0 · 2026-09-13
+  Heartwood: a pen-and-ink sugar maple growing its own geometry in JS.
+
+  RETIRED FROM THE RING on 2026-09-12 - "one maple, not two" (Joe). The stop
+  belongs to tree_growth.html, which replays the real MATLAB model's output;
+  this page grows its own tree in the browser instead. It is still on disk and
+  still reachable by typing its URL, so it is maintained but never comes round
+  on its own and does not appear on the setup screen.
+
+  THE MODEL HERE IS NOT THE MATLAB MODEL and must not be confused with it.
+  The sugar maple simulation proper (tree_phase11.m and its lineage) is owned
+  by its own long-running session; nothing in this file is authoritative about
+  it, and changes to the science belong there, not here.
+
+  WHAT IT DRAWS: 22 simulated years in about 205 s of wall clock, fitted to
+  the frame from 34% of the height as a seedling to 88% grown, with a 1.75 m
+  figure for absolute scale and a slow orbit. Twenty-two years rather than
+  thirteen because the decurrent spread - the spire opening into a dome -
+  happens AFTER the leader retires around year 10; height plateaus near 7.8 m
+  under the hydraulic cap, so the later years go into WIDTH, which is the part
+  worth staying for.
+
+  WOOD RENDERING (2026-09-11, Joe): 'line' is the original constant hairline
+  where thickness reads only as pen scatter, 'taper' puts thickness into
+  stroke width while keeping the wandering line, 'ribbon' draws solid tapered
+  wood with rounded junctions. pinLook holds one look while Joe watches
+  version A; set it to null to restore the random draw over all six presets.
+
+  MEASURED ON THE PI at 4K, year ~9, 2,997 shoots: ~18% CPU on the main
+  Chromium process, 61.5 C, no throttling - the cheapest page in the
+  rotation (plume.html runs at 47%). If leafCap or maxPasses were ever held
+  down for performance, they need not be.
+
+  KEYS  r new tree · n hand on · i diagnostics · p pause.
+==========================================================================
+
+  CHANGED
+    v1.0  versioning starts here; this file predates the scheme
+-->
 <style>
   /* Self-contained on purpose: no external files, fonts or libraries, so this works as a
      file:// page on the Pi kiosk AND as a single drop-in file on GitHub Pages. Same
