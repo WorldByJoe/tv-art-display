@@ -38,7 +38,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v2.1 · 2026-09-14
+  lightning.html · v2.2 · 2026-09-14
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -74,6 +74,8 @@
 ==========================================================================
 
   CHANGED
+    v2.2  age is measured from the NEWEST flash, not the oldest: a capture
+          whose last flash was 40 s old was calling itself 7 minutes old
     v2.1  accepts a cache that declares either global, so a pipeline slip
           degrades to a stale sky instead of a dead page; refuses a handoff
           older than what is already showing
@@ -300,29 +302,59 @@ const MONTH3 = ['Jan','Feb','Mar','Apr','May','Jun',
    (or hours) ago". It is the first thing said, because the cached sky is the
    recent past and a piece that shows the past should admit it before it says
    anything clever. Reuses the same age arithmetic as the signature. */
+/* Natural Earth gives formal country names, which do not sit in a sentence:
+   "the sky over United States of America". A handful take a definite article
+   and two are worth shortening; everything else passes through untouched. The
+   panel and the globe still show the formal name - this is only for prose. */
+const PLACE_WORDS = {
+  'United States of America': 'the United States',
+  'Democratic Republic of the Congo': 'the DR Congo',
+  'Republic of the Congo': 'the Congo',
+  'Dominican Republic': 'the Dominican Republic',
+  'Bahamas': 'the Bahamas',
+  'Netherlands': 'the Netherlands',
+  'Philippines': 'the Philippines',
+  'Central African Republic': 'the Central African Republic',
+};
+function placeWords(w){
+  if (!w) return 'this hemisphere';
+  if (PLACE_WORDS[w]) return PLACE_WORDS[w];
+  /* "sea, 207 km from Colombia" already reads as a phrase. */
+  return w;
+}
+
 function agedWords(){
   if (!SHOW || !SHOW.t0) return 'Here is a recent sky.';
-  const mins = (Date.now() - SHOW.t0)/60000;
+  /* t1, NOT t0. Joe, 2026-09-14: "it just moved to a new location, but the
+     text on the bottom says it's from 7 minutes ago. I thought the latest data
+     would be less than a minute old?" He was right and the page was reporting
+     the wrong end of the window: t0 is the OLDEST flash in a six-minute
+     capture, so a sky whose newest flash was 40 seconds old described itself
+     as seven minutes old. Measured lag from last flash to file written: 42 s. */
+  const mins = (Date.now() - SHOW.t1)/60000;
   const when = mins < 1.5  ? 'a moment ago'
              : mins < 90   ? Math.round(mins) + ' minutes ago'
              : mins < 2880 ? Math.round(mins/60) + ' hour' + (Math.round(mins/60) === 1 ? '' : 's') + ' ago'
              :               Math.round(mins/1440) + ' days ago';
-  return 'Here is what the sky over ' + (SHOW.where || 'this hemisphere')
+  return 'Here is what the sky over ' + placeWords(SHOW.where)
        + ' was doing ' + when + '.';
 }
 
 function recordedWords(){
-  if (!SHOW || !SHOW.t0) return 'recording time unknown';
-  const d = new Date(SHOW.t0);
+  if (!SHOW || !SHOW.t1) return 'recording time unknown';
+  const d = new Date(SHOW.t1);
   const when = d.getUTCDate() + ' ' + MONTH3[d.getUTCMonth()] + ' ' + d.getUTCFullYear()
              + ', ' + String(d.getUTCHours()).padStart(2, '0')
              + ':' + String(d.getUTCMinutes()).padStart(2, '0') + ' UTC';
-  const hrs = (Date.now() - SHOW.t0) / 3600000;
+  const hrs = (Date.now() - SHOW.t1) / 3600000;
   const ago = hrs < 0     ? ''                                   // clock skew
             : hrs < 1.5   ? ' (' + Math.max(1, Math.round(hrs*60)) + ' min ago)'
             : hrs < 48    ? ' (' + Math.round(hrs) + ' h ago)'
             :               ' (' + Math.round(hrs/24) + ' days ago)';
-  return 'sky recorded ' + when + ago;
+  /* Name the END of the window and how long it ran, so "six minutes of sky to
+     22:57" cannot be misread as "a snapshot from 22:51". */
+  const span = SHOW.spanSec ? Math.round(SHOW.spanSec/60) + ' min of sky to ' : 'sky to ';
+  return span + when + ago;
 }
 
 /* ---- THE HANDOFF, CALLED FROM OUTSIDE THE PAGE ---------------------------
@@ -351,9 +383,9 @@ window.__glmNext = function(){
   transAt  = performance.now();
   /* Say it BEFORE the globe moves, so the words explain the movement rather
      than chasing it. */
-  const mins = Math.max(0, Math.round((Date.now() - nextShow.t0)/60000));
+  const mins = Math.max(0, Math.round((Date.now() - nextShow.t1)/60000));
   Wall.lane('New sky, captured ' + (mins < 1 ? 'moments' : mins + ' minute' +
-            (mins === 1 ? '' : 's')) + ' ago over ' + nextShow.where +
+            (mins === 1 ? '' : 's')) + ' ago over ' + placeWords(nextShow.where) +
             '. Going there now.', {hold: 7000});
   return 'accepted';
 };
