@@ -752,6 +752,30 @@
     return null;
   }
 
+  /* The next ENABLED piece in EITHER direction, for the remote's D-pad.
+
+     Joe, 2026-09-13: "if I try to skip to the next one it goes to the next one
+     in the ring, regardless if that one is turned on or not." The wall's own
+     hand-off has always honoured the switches - nextInTurn() has skipped
+     switched-off pieces since the setup screen existed. The arrow keys did
+     not, because every page carried its own flat ROTATION list that knew
+     nothing about the settings. This is the one place that knowledge lives,
+     so the pages can stop guessing.
+
+     Returns null when the current page is not a ring stop at all (a published
+     copy, or the setup screen), and null again when every piece is switched
+     off - in both cases the caller keeps whatever it was going to do. */
+  function step(dir) {
+    const from = ringIndex(here());
+    if (from < 0) return null;
+    const s = settings(), d = dir < 0 ? -1 : 1, n = RING.length;
+    for (let k = 1; k <= n; k++) {
+      const cand = RING[(((from + d * k) % n) + n) % n];
+      if (s[cand.file] && s[cand.file].on) return cand.file;
+    }
+    return null;
+  }
+
   /* A piece drawn at random, with the frequencies the viewer set.
 
      NEVER THE SAME PIECE TWICE RUNNING, which is Joe's rule and also the only
@@ -858,7 +882,7 @@
     RING, PASSTHROUGH, FOREVER, WEIGHTS, WEIGHT_DEF, WEIGHT_WORD,
     settings, saveSettings, resetSettings, stallSecs,
     wallOpts, setShuffle, startSolo, clearSolo, soloNow,
-    repeats, holdMs, forever, nextPage, enabled, here, openSetup,
+    repeats, holdMs, forever, nextPage, step, enabled, here, openSetup,
     runCount, setRunCount,
     ARRIVE_MS, FADE_IN, FADE_OUT, MOMENT_HOLD,
   };

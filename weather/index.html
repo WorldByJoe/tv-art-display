@@ -85,6 +85,13 @@
    backwards. Keep this list in step with the nextPage chain. */
 const ROTATION = ['index.html'];   // standalone: nowhere else to go
 function rotateTo(step){
+  /* The next ENABLED piece, not simply the next one listed. Joe, 2026-09-13:
+     "if I try to skip to the next one it goes to the next one in the ring,
+     regardless if that one is turned on or not." Wall.step() walks the ring
+     honouring the setup screen's switches; ROTATION below is the fallback for
+     a page opened outside the wall, where there are no settings to read. */
+  const want = (window.Wall && Wall.step) ? Wall.step(step) : null;
+  if (want) { location.href = want; return; }
   const here = (location.pathname.split('/').pop() || 'kiosk.html');
   let i = ROTATION.indexOf(here);
   if (i < 0) i = 0;
@@ -956,6 +963,71 @@ function draw(){
 /* A strip showing the whole window with the present marked, and a cursor
    riding along it. Without this the clock alone cannot tell you whether you
    are watching last night or tomorrow morning. */
+/* ---- which of the bar is DAYLIGHT ---------------------------------------
+   Joe, 2026-09-13: the time bar should be "yellow-colored for the daylight
+   hours, and gray (or whatever it currently is) for nighttime".
+
+   THE SUN'S REAL ALTITUDE, not the radiation array. Radiation was the obvious
+   source - it is already in the data and is exactly zero after dark - but it
+   is the mean over the PRECEDING hour, so near the terminator it is an hour
+   coarse: on 2026-09-13 it placed a 06:42 sunrise at 07:30. The geometry is
+   ten lines and good to a few tenths of a degree.
+
+   The API returns naive LOCAL stamps (timezone=loc.tz), which the browser
+   would parse in ITS zone - wrong for two of the three regions - so the
+   region's true offset is recovered from the stamp the data calls "now". */
+function sunAltAt(utcMs, lat, lon){
+  const n = utcMs/86400000 + 2440587.5 - 2451545.0;
+  const L = (280.460 + 0.9856474*n) % 360;
+  const g = ((357.528 + 0.9856003*n) % 360) * Math.PI/180;
+  const lam = (L + 1.915*Math.sin(g) + 0.020*Math.sin(2*g)) * Math.PI/180;
+  const eps = (23.439 - 4e-7*n) * Math.PI/180;
+  const dec = Math.asin(Math.sin(eps)*Math.sin(lam));
+  const ra  = Math.atan2(Math.cos(eps)*Math.sin(lam), Math.cos(lam));
+  const gmst = (18.697374558 + 24.06570982441908*n) % 24;
+  const lst = (((gmst*15 + lon) % 360) + 360) % 360 * Math.PI/180;
+  const H = lst - ra, la = lat*Math.PI/180;
+  return Math.asin(Math.sin(la)*Math.sin(dec) +
+                   Math.cos(la)*Math.cos(dec)*Math.cos(H)) * 180/Math.PI;
+}
+
+let DAYSPANS = null;
+function tzOffsetMs(){
+  const iso = data.times[data.nowOffset|0];
+  if(!iso || /Z$/.test(iso)) return 0;          // synthetic data is real UTC
+  /* Ask the zone itself. Deriving the offset by comparing the "now" stamp
+     with the real instant cannot work: the stamp is the top of the hour and
+     now is somewhere inside it, so the answer came out 15 minutes wrong and
+     put sunrise at 06:30 instead of 06:45 (2026-09-13). Intl knows the zone's
+     true offset including whether summer time is in force. */
+  try{
+    const p = new Intl.DateTimeFormat('en-US', {timeZone: loc.tz, timeZoneName:'longOffset'})
+                .formatToParts(new Date()).find(x => x.type === 'timeZoneName').value;
+    const m = /GMT([+-])(\d{1,2}):?(\d{2})?/.exec(p);
+    if(m) return (m[1]==='-'?-1:1) * ((+m[2])*3600000 + (+(m[3]||0))*60000);
+  }catch(e){}
+  /* Last resort: the stamp is at or before now, so round UP to the hour. */
+  return Math.ceil((Date.parse(iso+'Z') - Date.now())/3600000)*3600000;
+}
+function daySpans(){
+  if (DAYSPANS) return DAYSPANS;
+  const n = data.hours, den = Math.max(1, n-1), off = tzOffsetMs();
+  const raw = data.times[0];
+  const t0 = /Z$/.test(raw) ? Date.parse(raw) : Date.parse(raw+'Z') - off;
+  const STEP = 6*60000, total = den*3600000;
+  const out = []; let start = null;
+  for(let t=0; t<=total; t+=STEP){
+    /* -0.833 deg is the standard sunrise: the sun's upper limb at the horizon
+       with mean refraction, which is the moment people call sunrise. */
+    const up = sunAltAt(t0+t, loc.lat, loc.lon) > -0.833;
+    const f = (t/3600000)/den;
+    if(up && start===null) start = f;
+    if(!up && start!==null){ out.push([start, f]); start = null; }
+  }
+  if(start!==null) out.push([start, 1]);
+  return (DAYSPANS = out);
+}
+
 function drawTimeline(){
   const w=Math.round(W*0.34), h=Math.round(3*DPR);
   /* TOP of the safe rectangle, not H*0.876. The bottom band is the Lane's,
@@ -970,6 +1042,19 @@ function drawTimeline(){
   ctx.fillStyle='rgba(150,172,205,0.22)'; ctx.fillRect(x,y,w,h);
   // the past half, slightly brighter, so the two halves are distinguishable
   ctx.fillStyle='rgba(150,190,225,0.34)'; ctx.fillRect(x,y,Math.round(w*nowF),h);
+
+  /* Daylight, laid over the night ground. The past-is-brighter convention is
+     kept on the yellow too, so the "now" division still reads across both. */
+  const nx0=x+Math.round(w*nowF);
+  for(const [a,b] of daySpans()){
+    const xa=x+Math.round(w*a), xb=x+Math.round(w*b);
+    ctx.fillStyle='rgba(255,201,92,0.42)';
+    ctx.fillRect(xa, y, Math.max(1, xb-xa), h);
+    if(xa < nx0){
+      ctx.fillStyle='rgba(255,214,132,0.66)';
+      ctx.fillRect(xa, y, Math.max(1, Math.min(xb,nx0)-xa), h);
+    }
+  }
 
   // "now" tick
   const nx=x+Math.round(w*nowF);
@@ -1119,7 +1204,7 @@ async function nextLocation(){
   wxImg.onload=()=>{ lastBaseHour=-1; };      // force the base to rebuild with it
   wxImg.src='wx_'+loc.key+'.png';
   computeMap();
-  data=null; hourF=0; startedAt=performance.now();
+  data=null; DAYSPANS=null; hourF=0; startedAt=performance.now();
   ctx.fillStyle='#04060b'; ctx.fillRect(0,0,W,H);
   /* A new location IS a new episode. The place, the window and the mechanism
      are one sentence, said once, then gone - not a banner held for 63

@@ -76,24 +76,18 @@
 <div id="info"></div>
 <script>
 const ROTATION = ['index.html'];   // standalone: nowhere else to go
-function rotateTo(step){ const here=(location.pathname.split('/').pop()||'kiosk.html'); let i=ROTATION.indexOf(here); if(i<0) i=0; location.href=ROTATION[(i+step+ROTATION.length)%ROTATION.length]; }
-const CONFIG = {
-  freezeStep: 600,        // erosion steps before the land is frozen (300,000 model years)
-  raceCell: 10,           // metres per erosion cell at the race scale
-  loop:{minLen:3200, maxLen:8000, targetLen:5000},   // 2-5 miles
-  /* gradeCap is no longer set here: the planner picks a grade of difficulty for
-     the day and the cap comes with it (easy 10%, medium 18%, hard 30%). Add
-     ?grade=easy|medium|hard to demand one, or ?cap=0.24 to override outright. */
-  slopeMax:0.7,
-  riders: 8, laps: 2,
-  timeScale: 4,           // race seconds per real second
-  rosterSec: 30,          // how long the cards stand
-  resultsSec: 45,         // the ranked cards at the end
-  mapSec: 40, heliSec: 30,  // the overview alternates: flat map, then the helicopter orbit
-  orbitSec: 490, vexag:1.8, fpsCap:8,
-  nextPage: '' /* standalone: nowhere to hand on to; start again */,  // on to the flowers (2026-09-12); only a fallback - Wall.nextPage reads the ring
-  holdMin:20,             // NOT the pacing - a full show runs ~11 min. This is the
-                          // deadline for a show that has somehow stalled.
+function rotateTo(step){
+  /* The next ENABLED piece, not simply the next one listed. Joe, 2026-09-13:
+     "if I try to skip to the next one it goes to the next one in the ring,
+     regardless if that one is turned on or not." Wall.step() walks the ring
+     honouring the setup screen's switches; ROTATION below is the fallback for
+     a page opened outside the wall, where there are no settings to read. */
+  const want = (window.Wall && Wall.step) ? Wall.step(step) : null;
+  if (want) { location.href = want; return; }
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
 };
 const Q=new URLSearchParams(location.search), PINNED=Q.has('pin');
 let seed=Q.has('seed')?(Q.get('seed')|0):((Math.random()*1e9)|0);

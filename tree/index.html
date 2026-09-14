@@ -136,6 +136,13 @@
    backwards. Keep this list in step with the nextPage chain. */
 const ROTATION = ['index.html'];   // standalone: nowhere else to go
 function rotateTo(step){
+  /* The next ENABLED piece, not simply the next one listed. Joe, 2026-09-13:
+     "if I try to skip to the next one it goes to the next one in the ring,
+     regardless if that one is turned on or not." Wall.step() walks the ring
+     honouring the setup screen's switches; ROTATION below is the fallback for
+     a page opened outside the wall, where there are no settings to read. */
+  const want = (window.Wall && Wall.step) ? Wall.step(step) : null;
+  if (want) { location.href = want; return; }
   const here = (location.pathname.split('/').pop() || 'kiosk.html');
   let i = ROTATION.indexOf(here);
   if (i < 0) i = 0;
