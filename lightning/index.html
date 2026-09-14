@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lantern</title>
+<link rel="stylesheet" href="wall.css">
+<script src="wall.js"></script>
+<script src="nav.js"></script>
+<script src="glm_show.js"></script>
+<style>
+  html,body{margin:0;height:100%;background:#04070d;overflow:hidden}
+  #cv{display:block;width:100vw;height:100vh}
+  #scrim{position:fixed; top:0; right:0; width:30vw; height:46vh; z-index:6;
+         pointer-events:none;
+         background:radial-gradient(92% 84% at 100% 0%,
+                    rgba(4,7,13,.86) 0%, rgba(4,7,13,.62) 42%, rgba(4,7,13,0) 100%);}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="scrim"></div>
+<div id="pname">Lantern</div>
+<div id="info"></div>
+<script>
+'use strict';
+/* ==========================================================================
+  lightning.html · v1.0 · 2026-09-13
+
+  "Lantern": six minutes of real lightning over wherever the sky was busiest,
+  replayed flash by flash and pulse by pulse.
+
+  WHY THE NAME. What the satellite sees is not a bolt. The cloud scatters the
+  light sideways, so a channel a few kilometres long makes the whole thunder-
+  head glow - a paper lantern lit from inside. The ring around each flash is
+  that glow at true scale, and it is routinely sixty kilometres across.
+
+  THE DATA IS REAL AND NONE OF THE MOTION IS INVENTED. Every dot is one flash
+  recorded by the Geostationary Lightning Mapper on GOES, 35,786 km up, in a
+  one-nanometre slice of oxygen light at 777.4 nm. A flash is not an instant:
+  it stutters through a median of seventeen separate pulses - GROUPS, in the
+  instrument's language, each one a set of pixels lit in the same 2 ms frame -
+  and this page draws every pulse at its own recorded moment, in its own
+  recorded place, slowed ten times so a fifth of a second becomes two seconds.
+
+  Joe, 2026-09-13: "Can we have the flash duration show up on the screen,
+  exaggerated by 10x?" That is EXAGG below, and it is the only liberty taken
+  with time. Flashes still ARRIVE at their true rate.
+
+  THE KEY, because a mark that means something has to say what.
+     size   = flash energy, through a log - it spans a thousandfold
+     colour = age, white at the instant and cooling as its hour passes
+     ring   = footprint, the area of cloud top the flash actually lit
+
+  WHERE THE DATA COMES FROM. glm_show.py ranks the whole Western Hemisphere,
+  picks the busiest spot, captures six minutes of groups there and bakes them
+  into glm_show.js with a Blue Marble basemap for the exact frame. The browser
+  cannot read HDF5 and GLM publishes nothing else, so the capture happens at
+  build time - which also means this page always has a storm, rather than
+  whatever the sky happens to be doing when a stranger opens it.
+========================================================================== */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const want = (window.Wall && Wall.step) ? Wall.step(step) : null;
+  if (want) { location.href = want; return; }
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+const CONFIG = {
+  exagg:    10,        // Joe's tenfold slowdown of each flash's own duration
+  afterMs:  9000,      // how long a spent flash keeps fading, in show time
+  holdMin:  9,
+  nextPage: '' /* standalone: nowhere to hand on to; start again */,
+};
+const Q = new URLSearchParams(location.search);
+const PINNED = Q.has('pin');
+const SHOW = window.GLM_SHOW || null;
+
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d', {alpha:false});
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+let W=0, H=0, base=null, baseReady=false;
+let hudCv=null;
+
+function resize(){
+  W = cv.width  = Math.max(2, Math.round(innerWidth  * DPR));
+  H = cv.height = Math.max(2, Math.round(innerHeight * DPR));
+}
+addEventListener('resize', resize);
+
+/* The frame is a plain equirectangular box, cover-fitted like the weather map:
+   the capture is 16:9 by construction, so the crop is tiny. */
+let mapS=1, mapX=0, mapY=0, cosLat=1;
+function computeMap(){
+  const [a0,a1,o0,o1] = SHOW.box;
+  cosLat = Math.cos((a0+a1)/2*Math.PI/180);
+  const dLon=(o1-o0)*cosLat, dLat=(a1-a0);
+  mapS = Math.max(W/dLon, H/dLat);
+  mapX = (W-dLon*mapS)/2; mapY = (H-dLat*mapS)/2;
+}
+const toX = lon => mapX + (lon - SHOW.box[2])*cosLat*mapS;
+const toY = lat => mapY + (SHOW.box[1] - lat)*mapS;
+
+/* ---- the show clock ------------------------------------------------------
+   Driven by the wall clock so a slow Pi shows the same six minutes, just with
+   fewer frames. */
+const bootAt = performance.now();
+let handedOff=false;
+function showT(now){ return SHOW.t0 + (now - bootAt); }
+function spanMs(){ return SHOW.t1 - SHOW.t0; }
+
+/* Flashes are time-sorted, so the active window is a sliding pair of indices
+   rather than a scan of three thousand every frame. */
+let lo=0, hi=0;
+function advance(T){
+  const tail = T - (SHOW.flashes[0] ? 0 : 0);
+  while (hi < SHOW.flashes.length && SHOW.flashes[hi].t <= T) hi++;
+  while (lo < hi && SHOW.flashes[lo].t + SHOW.flashes[lo].d*CONFIG.exagg + CONFIG.afterMs < T) lo++;
+}
+
+/* size = energy, through a log: 4 fJ to 4,000 fJ is a thousandfold, and on a
+   linear scale every ordinary flash would be a speck beside one monster. */
+function magOf(e){ return Math.max(0, Math.min(1, (Math.log10(Math.max(e,1)) - 0.3)/2.3)); }
+
+function draw(){
+  const now = performance.now();
+  const T = showT(now);
+  ctx.fillStyle = '#04070d'; ctx.fillRect(0,0,W,H);
+  if (baseReady) ctx.drawImage(base, mapX, mapY,
+      (SHOW.box[3]-SHOW.box[2])*cosLat*mapS, (SHOW.box[1]-SHOW.box[0])*mapS);
+
+  advance(T);
+  let live=0, lit=0, energy=0;
+  for (let i=lo; i<hi; i++){
+    const f = SHOW.flashes[i];
+    const age = T - f.t;
+    const life = f.d*CONFIG.exagg + CONFIG.afterMs;
+    if (age < 0 || age > life) continue;
+    live++; energy += f.e;
+    const x = toX(f.lon), y = toY(f.lat);
+    if (x < -40 || y < -40 || x > W+40 || y > H+40) continue;
+    const mag = magOf(f.e);
+    const k = 1 - age/life;                       // 1 at the instant, 0 at the end
+
+    /* THE RING IS THE FOOTPRINT, at true scale on the map: the area of cloud
+       top that actually glowed, not the size of the bolt. */
+    const rkm = Math.sqrt(f.a/Math.PI);
+    const rpx = rkm/111.0*mapS;
+    ctx.globalAlpha = 0.10 + 0.22*k;
+    ctx.strokeStyle = 'rgba(150,205,255,1)';
+    ctx.lineWidth = Math.max(1, 1.1*DPR);
+    ctx.beginPath(); ctx.arc(x, y, Math.max(2, rpx), 0, 6.2832); ctx.stroke();
+
+    /* EVERY PULSE AT ITS OWN MOMENT. This is the whole piece: the flash is
+       not faded in and out, it is REPLAYED, group by group, at ten times its
+       real duration. */
+    for (let j=0; j<f.g.length; j++){
+      const g = f.g[j];
+      const gt = g[0]*CONFIG.exagg;
+      const since = age - gt;
+      if (since < 0) break;                        // groups are time-sorted
+      const gk = Math.max(0, 1 - since/2200);
+      if (gk <= 0) continue;
+      lit++;
+      const gx = toX(f.lon + g[2]/100), gy = toY(f.lat + g[1]/100);
+      /* SIZED FOR THE SOFA, not for the pixel grid. DESIGN_STANDARDS: arcmin
+         = px x 0.2546 at 3 m, so the first attempt's 1.6-5.8 px dots spanned
+         0.4 to 1.5 arcmin - below the threshold of seeing. 4 to 20 px puts
+         the range at 1 to 5 arcmin: the big flashes read individually and the
+         small ones read as texture, which is what they are. */
+      const r = (4 + 16*mag)*DPR*(0.5 + 0.5*gk);
+      ctx.globalAlpha = 0.30 + 0.60*gk;
+      ctx.fillStyle = gk > 0.7 ? 'rgba(255,255,255,1)'
+                    : gk > 0.35 ? 'rgba(186,226,255,1)' : 'rgba(120,176,240,1)';
+      ctx.beginPath(); ctx.arc(gx, gy, r, 0, 6.2832); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+  drawKey();
+  panel(live, lit, energy, T);
+
+  if (!PINNED && !handedOff && CONFIG.nextPage !== '' &&
+      (T > SHOW.t1 + 4000 || (now-bootAt)/1000 > CONFIG.holdMin*60)) handOff();
+  requestAnimationFrame(draw);
+}
+
+/* ---- the key ------------------------------------------------------------
+   Bottom left, on its own layer so it cannot smear. Three dots for the energy
+   scale, one ring for the footprint, one ramp for age. */
+function drawKey(){
+  if(!hudCv) hudCv=document.createElement('canvas');
+  if(hudCv.width!==W||hudCv.height!==H){ hudCv.width=W; hudCv.height=H; }
+  const g = hudCv.getContext('2d');
+  g.clearRect(0,0,W,H);
+  const u = W/3840;
+  const tf = Math.round(30*1.167*u), tl = Math.round(37*1.167*u);
+  /* TOP LEFT. The first attempt put this bottom-left, where it sat underneath
+     BOTH the Lane's sentence and the signature - the two things that already
+     own the bottom of every page on this wall (2026-09-13). */
+  let x = Math.round(76*u), y = Math.round(120*u);
+
+  g.fillStyle='rgba(10,16,26,0.62)';
+  g.fillRect(x-Math.round(26*u), y-Math.round(58*u), Math.round(980*u), Math.round(300*u));
+
+  g.font = `${tl}px ui-monospace, Menlo, monospace`;
+  g.fillStyle='rgba(206,220,240,0.80)'; g.textBaseline='alphabetic';
+  g.fillText('EACH DOT IS ONE PULSE OF ONE FLASH', x, y - Math.round(18*u));
+
+  g.font = `${tf}px ui-monospace, Menlo, monospace`;
+  // energy: three dots
+  const es = [10, 100, 1000];
+  let dx = x + Math.round(10*u);
+  const row1 = y + Math.round(58*u);
+  for (const e of es){
+    const r = (4 + 16*magOf(e))*DPR;
+    g.globalAlpha=0.95; g.fillStyle='rgba(220,238,255,1)';
+    g.beginPath(); g.arc(dx, row1, r, 0, 6.2832); g.fill();
+    g.globalAlpha=0.8; g.fillStyle='rgba(180,200,226,0.9)';
+    g.fillText(e+'', dx - Math.round(14*u), row1 + Math.round(46*u));
+    dx += Math.round(116*u);
+  }
+  g.globalAlpha=0.8; g.fillStyle='rgba(180,200,226,0.9)';
+  g.fillText('SIZE = ENERGY, femtojoules at the satellite', x + Math.round(370*u), row1 + Math.round(8*u));
+
+  // age ramp
+  const row2 = y + Math.round(148*u);
+  const cols = ['rgba(255,255,255,1)','rgba(186,226,255,1)','rgba(120,176,240,1)'];
+  dx = x + Math.round(10*u);
+  for (const c of cols){
+    g.globalAlpha=0.95; g.fillStyle=c;
+    g.beginPath(); g.arc(dx, row2, 5*DPR, 0, 6.2832); g.fill();
+    dx += Math.round(58*u);
+  }
+  g.globalAlpha=0.8; g.fillStyle='rgba(180,200,226,0.9)';
+  g.fillText('COLOUR = AGE, the instant it fired, then cooling',
+             x + Math.round(370*u), row2 + Math.round(8*u));
+
+  // footprint ring
+  const row3 = y + Math.round(228*u);
+  g.globalAlpha=0.55; g.strokeStyle='rgba(150,205,255,1)'; g.lineWidth=Math.max(1,1.1*DPR);
+  g.beginPath(); g.arc(x + Math.round(66*u), row3, Math.round(30*u), 0, 6.2832); g.stroke();
+  g.globalAlpha=0.8; g.fillStyle='rgba(180,200,226,0.9)';
+  g.fillText('RING = FOOTPRINT, the cloud top it lit, to scale',
+             x + Math.round(370*u), row3 + Math.round(8*u));
+  g.globalAlpha=1;
+  ctx.drawImage(hudCv,0,0);
+}
+
+let lastRows='';
+function panel(live, lit, energy, T){
+  const s = SHOW.stats;
+  const el = Math.max(0, Math.round((T - SHOW.t0)/1000));
+  const clock = Math.floor(el/60) + ':' + String(el%60).padStart(2,'0');
+  const rows = [
+    {k:'in the air now', v: live + ' flashes'},
+    {k:'pulses lit',     v: lit + ''},
+    {k:'flash rate',     v: s.rate + ' / s'},
+    {k:'pulses / flash', v: s.medGroups + ' median, ' + s.maxGroups + ' most'},
+    {k:'flash lasts',    v: s.medDur + ' ms median, ' + s.maxDur + ' longest'},
+    {k:'lights up',      v: s.medArea + ' km² median, ' + s.maxArea + ' most'},
+    {k:'seen from',      v: '35,786 km, at 777.4 nm'},
+  ];
+  Wall.instrument({place:'tr', cols:1,
+    hero:{v: clock, u:'of ' + Math.round(spanMs()/60000) + ' min'},
+    rows: rows, cap: SHOW.where});
+  if (document.body.classList.contains('showinfo')) updateInfo(live, lit);
+}
+Wall.instrument && 0;
+
+function handOff(){ handedOff=true; Wall.lane('');
+  setTimeout(()=>{ location.href = Wall.nextPage(CONFIG.nextPage); }, 1400); }
+
+const infoEl=document.getElementById('info');
+function updateInfo(live, lit){
+  infoEl.textContent =
+    SHOW.where + '  ' + SHOW.flashes.length + ' flashes, ' + SHOW.stats.groups + ' groups\n'
+    + 'box ' + SHOW.box.map(b=>b.toFixed(1)).join(', ') + '\n'
+    + 'active ' + live + '  pulses lit ' + lit + '  window ' + lo + '..' + hi + '\n'
+    + 'keys: i info · arrows change page';
+}
+addEventListener('keydown', e => { if(e.key==='i'||e.key==='I'){
+  document.body.classList.toggle('showinfo'); Wall.hideLane && Wall.hideLane(); }});
+
+/* ---- go ----------------------------------------------------------------- */
+if (!SHOW){
+  Wall.lane('No storm is built. Run glm_show.py.');
+} else {
+  resize(); computeMap();
+  base = new Image();
+  base.onload = () => { baseReady = true; };
+  base.src = 'glm_basemap.jpg';
+  window.WALL_SECONDS_PER_RUN = Math.round(spanMs()/1000 + 8);
+  document.getElementById('pname').textContent = 'Lantern';
+
+  /* THE EXPLANATION, and it has to earn every word. Three beats: what a dot
+     is, why it stutters, and what the ring means. */
+  const s = SHOW.stats;
+  Wall.lane(`${SHOW.flashes.length.toLocaleString()} real flashes over ${SHOW.where}, six minutes of sky. `
+          + `A flash is not an instant: it stutters through ${s.medGroups} pulses in about `
+          + `${(s.medDur/1000).toFixed(1)} s, and every pulse here is drawn at its own recorded `
+          + `moment — slowed ten times so you can watch one happen.`);
+  Wall.after(19000, () => Wall.lane(
+      `The ring is not the bolt. Cloud scatters the light sideways, so a channel a few kilometres `
+    + `long makes the whole thunderhead glow — a paper lantern lit from inside. Median ${s.medArea} km²; `
+    + `the biggest here lit ${s.maxArea.toLocaleString()}.`));
+  Wall.after(40000, () => Wall.lane(
+      `The satellite caught a median of ${s.medE} femtojoules from each one. The flash that made it `
+    + `moved some 15 coulombs across a hundred million volts — of order a billion joules, through a `
+    + `channel at 30,000 K, five times the surface of the Sun.`));
+  Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble');
+  requestAnimationFrame(draw);
+}
+</script>
+</body>
+</html>

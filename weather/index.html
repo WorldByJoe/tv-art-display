@@ -220,6 +220,7 @@ const infoEl=document.getElementById('info');
 
 let W=0,H=0,DPR=1;
 let loc=null, locIndex=-1;
+let STRIKES=null;        // real GLM flashes for this region - see loadStrikes()
 let hudCv=null;          // the timeline's own layer - see drawTimeline
 const LOC_OFFSET=Math.floor(Math.random()*3);   // which region a visit opens on
 let data=null;            // {u,v,sun,temp:[hour][point], times:[], source}
@@ -1043,6 +1044,7 @@ function draw(){
     ctx.stroke();
   }
   ctx.globalAlpha=1;
+  drawStrikes(ctx);
   drawHomeCity();
   drawTowns();
   drawMarks();
@@ -1052,6 +1054,81 @@ function draw(){
 /* A strip showing the whole window with the present marked, and a cursor
    riding along it. Without this the clock alone cannot tell you whether you
    are watching last night or tomorrow morning. */
+/* ---- LIGHTNING ------------------------------------------------------------
+   Real flashes from the GOES Geostationary Lightning Mapper, collected by
+   glm_watch.py on the Pi and left in glm_strikes.json. Nothing is fetched from
+   orbit here: GLM publishes a 273 KB file every twenty seconds and there is no
+   aggregated product, so eighteen hours is 3,240 files - a watcher's job, not
+   a page's.
+
+   WHAT A FLASH CARRIES, and what it does not. Each one has a position, a time
+   good to a fraction of a second, an optical radiant energy in femtojoules and
+   a footprint in square kilometres. That energy is what the satellite SAW at
+   777.4 nm from 36,000 km up - it is not peak current, and this page must
+   never call it that. Peak current in kiloamps is what a ground network like
+   NLDN measures, and that is not free data.
+
+   THEY ONLY EXIST BEHIND "NOW". The map runs eighteen hours back and eighteen
+   forward; a flash is an observation, so the right-hand half of the window can
+   never have any. The lightning stops dead at the cursor, which is the honest
+   picture: it is the line between what was seen and what is guessed.
+
+   Joe, 2026-09-13: "The stroke should linger on the map for an hour in map
+   time after it hits, so it doesn't just flash and disappear." So a flash is
+   drawn from its own moment until an hour later IN THE MAP'S CLOCK, fading as
+   it goes - the map scrubs 37 hours in about a minute, so an hour of map time
+   is under two seconds of wall time and a storm accumulates into a visible
+   swarm rather than a flicker. */
+const LINGER_MS = 3600*1000;                    // one hour of MAP time
+
+function loadStrikes(){
+  STRIKES = [];
+  fetch('glm_strikes.json', {cache:'no-store'})
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if(!d || !d.strikes) return;
+      STRIKES = d.strikes.filter(x => x[5] === loc.key)
+                         .map(x => ({t:x[0], lat:x[1], lon:x[2], e:x[3], a:x[4]}));
+      STRIKES.sort((p,q) => p.t - q.t);
+    })
+    .catch(() => {});   // no store yet is not an error - the watcher may be new
+}
+
+/* The map's clock as a real instant, so a flash can be placed in it. */
+function mapNowMs(){
+  const off = tzOffsetMs();
+  const raw = data.times[0];
+  const t0  = /Z$/.test(raw) ? Date.parse(raw) : Date.parse(raw+'Z') - off;
+  return t0 + hourF*3600*1000;
+}
+
+function drawStrikes(g){
+  if(!STRIKES || !STRIKES.length) return;
+  const now = mapNowMs();
+  /* Energy spans about three orders of magnitude, so it goes through a log
+     before it becomes a radius - on a linear scale every ordinary flash would
+     be a dot and one monster would be a dinner plate. */
+  const R = Math.max(2, 2.0*DPR);
+  for(const f of STRIKES){
+    const age = now - f.t;
+    if(age < 0 || age > LINGER_MS) continue;
+    const x = toX(f.lon), y = toY(f.lat);
+    if(x < -20 || y < -20 || x > W+20 || y > H+20) continue;
+    const k = 1 - age/LINGER_MS;                 // 1 at the instant, 0 an hour on
+    const mag = Math.max(0, Math.min(1, (Math.log10(Math.max(f.e, 1)) - 0.4)/2.2));
+    const r = R*(1 + 2.6*mag)*(0.55 + 0.45*k);
+    g.globalAlpha = 0.18 + 0.62*k*k;
+    g.fillStyle = 'rgba(150,205,255,1)';
+    g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill();
+    if(k > 0.72){                                 // the first minutes get a core
+      g.globalAlpha = 0.85*(k-0.72)/0.28;
+      g.fillStyle = 'rgba(255,255,255,1)';
+      g.beginPath(); g.arc(x, y, r*0.42, 0, 6.2832); g.fill();
+    }
+  }
+  g.globalAlpha = 1;
+}
+
 /* ---- which of the bar is DAYLIGHT ---------------------------------------
    Joe, 2026-09-13: the time bar should be "yellow-colored for the daylight
    hours, and gray (or whatever it currently is) for nighttime".
@@ -1308,6 +1385,7 @@ async function nextLocation(){
      hundredth time. The OFFSET is random and the COUNT is not, so all three
      still play and the hand-off after the third is untouched. */
   loc = pin>=0 ? LOCATIONS[pin] : LOCATIONS[(locIndex + LOC_OFFSET) % LOCATIONS.length];
+  loadStrikes();          // whatever lightning the watcher has for this region
   /* Shaded relief for this region, rendered at build time by
      build_weather_maps.py from the same DEM the hiker walks on. Loaded as an
      <img>, not fetched: the kiosk runs from file://, where fetch() of a

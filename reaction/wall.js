@@ -535,6 +535,11 @@
        panned as one strip with the seams dissolved (Joe, 2026-09-13). One
        show per visit; the page advances the theme itself. */
     { file:'photos.html',        name:'Photographs',      kind:'runs', unit:'shows',      def:1,  loop:'reload' },
+    /* Six minutes of real GOES lightning over wherever the sky was busiest
+       when glm_show.py last looked, replayed pulse by pulse (Joe,
+       2026-09-13). One storm per visit; the run length is the capture's
+       own length, so the page sets WALL_SECONDS_PER_RUN itself. */
+    { file:'lightning.html',     name:'Lantern',          kind:'runs', unit:'storms',     def:1,  loop:'reload' },
   ];
   /* Pages that are not stops but doorways: they decide whether today is worth
      a word and then pass the viewer along to whatever ?next= says. The ring
