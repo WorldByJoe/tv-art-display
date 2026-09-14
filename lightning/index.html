@@ -38,7 +38,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v1.0 · 2026-09-13
+  lightning.html · v1.1 · 2026-09-14
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -71,6 +71,12 @@
   cannot read HDF5 and GLM publishes nothing else, so the capture happens at
   build time - which also means this page always has a storm, rather than
   whatever the sky happens to be doing when a stranger opens it.
+==========================================================================
+
+  CHANGED
+    v1.1  the signature says when the sky was recorded, and how long ago -
+          a published copy can be hours old and never said so
+    v1.0  first build
 ========================================================================== */
 const ROTATION = ['index.html'];   // standalone: nowhere else to go
 function rotateTo(step){
@@ -221,6 +227,36 @@ function drawGlobe(ms){
    fewer frames. */
 let bootAt = performance.now();
 let handedOff=false;
+/* WHEN THIS SKY WAS RECORDED, for the end of the signature line (Joe,
+   2026-09-14, looking at the published copy: the page never said how old its
+   data was).
+
+   t0 is the first flash's own timestamp - the moment the sky being replayed
+   actually happened - not when the file was written. UTC, because the storm
+   and the viewer are rarely in the same country and a local clock here would
+   mean a different thing to each of them.
+
+   THE AGE IS COMPUTED AT LOAD, and that is the point rather than a detail.
+   The TV re-captures after every showing, but the published copy only changes
+   when the Pi pushes, so a visitor can arrive at a sky several hours old and
+   until now had no way to tell. Saying "4 h ago" makes staleness visible on
+   the page itself instead of only in a log nobody reads. */
+const MONTH3 = ['Jan','Feb','Mar','Apr','May','Jun',
+                'Jul','Aug','Sep','Oct','Nov','Dec'];
+function recordedWords(){
+  if (!SHOW || !SHOW.t0) return 'recording time unknown';
+  const d = new Date(SHOW.t0);
+  const when = d.getUTCDate() + ' ' + MONTH3[d.getUTCMonth()] + ' ' + d.getUTCFullYear()
+             + ', ' + String(d.getUTCHours()).padStart(2, '0')
+             + ':' + String(d.getUTCMinutes()).padStart(2, '0') + ' UTC';
+  const hrs = (Date.now() - SHOW.t0) / 3600000;
+  const ago = hrs < 0     ? ''                                   // clock skew
+            : hrs < 1.5   ? ' (' + Math.max(1, Math.round(hrs*60)) + ' min ago)'
+            : hrs < 48    ? ' (' + Math.round(hrs) + ' h ago)'
+            :               ' (' + Math.round(hrs/24) + ' days ago)';
+  return 'sky recorded ' + when + ago;
+}
+
 function showT(now){ return SHOW.t0 + (now - bootAt - OPEN_MS); }
 function spanMs(){ return SHOW.t1 - SHOW.t0; }
 
@@ -471,7 +507,8 @@ if (!SHOW){
       `The satellite caught a median of ${s.medE} femtojoules from each one. The flash that made it `
     + `moved some 15 coulombs across a hundred million volts — of order a billion joules, through a `
     + `channel at 30,000 K, five times the surface of the Sun.`));
-  Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble');
+  Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble'
+                 + ' · ' + recordedWords());
   requestAnimationFrame(draw);
 }
 </script>
