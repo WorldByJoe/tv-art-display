@@ -7,6 +7,7 @@
 <script src="wall.js"></script>
 <script src="nav.js"></script>
 <script src="glm_show.js"></script>
+<script src="globe.js"></script>
 <style>
   html,body{margin:0;height:100%;background:#04070d;overflow:hidden}
   #cv{display:block;width:100vw;height:100vh}
@@ -90,6 +91,14 @@ const CONFIG = {
                           pulses now share one clock: a flash is finished one
                           pulse-fade after its last pulse fires. */
   holdMin:  9,
+  /* THE OVERTURE. Joe, 2026-09-13: "we can show a spinning globe, then zoom
+     into the target location, then start the lightning show. I think it's
+     worth the wait." Three acts before the storm: the globe turning while the
+     hemisphere is searched, the hot spot found and brought round to face us,
+     and the descent into the frame. */
+  searchMs:  7000,
+  foundMs:   5500,
+  descendMs: 7000,
   nextPage: '' /* standalone: nowhere to hand on to; start again */,
 };
 const Q = new URLSearchParams(location.search);
@@ -120,12 +129,99 @@ function computeMap(){
 const toX = lon => mapX + (lon - SHOW.box[2])*cosLat*mapS;
 const toY = lat => mapY + (SHOW.box[1] - lat)*mapS;
 
+/* ---- THE OVERTURE ---------------------------------------------------------
+   An orthographic globe, turned by hand rather than by a library. A point is
+   visible when the angle between it and the point facing us is under 90
+   degrees, which is the cos_c test below; everything else is two lines of
+   trigonometry. The land is Natural Earth 110m simplified to half a degree by
+   build_globe.py - finer than anything the eye can resolve on a globe this
+   size, and 40 KB rather than 800. */
+const OPEN_MS = CONFIG.searchMs + CONFIG.foundMs + CONFIG.descendMs;
+const D2R = Math.PI/180;
+function ortho(lat, lon, lon0, lat0, R, cx, cy){
+  const la = lat*D2R, lo = (lon-lon0)*D2R, p0 = lat0*D2R;
+  const cosc = Math.sin(p0)*Math.sin(la) + Math.cos(p0)*Math.cos(la)*Math.cos(lo);
+  if (cosc <= 0) return null;                        // round the back
+  return [cx + R*Math.cos(la)*Math.sin(lo),
+          cy - R*(Math.cos(p0)*Math.sin(la) - Math.sin(p0)*Math.cos(la)*Math.cos(lo))];
+}
+const ease = t => t<0?0 : t>1?1 : t*t*(3-2*t);
+
+function drawGlobe(ms){
+  const cy2 = (SHOW.box[0]+SHOW.box[1])/2, cx2 = (SHOW.box[2]+SHOW.box[3])/2;
+  const R0 = Math.min(W,H)*0.34;
+  let lon0, lat0, R = R0, mapA = 0;
+
+  if (ms < CONFIG.searchMs){                          // ACT ONE: turning
+    lon0 = -20 - ms/CONFIG.searchMs*260;
+    lat0 = 14;
+  } else if (ms < CONFIG.searchMs + CONFIG.foundMs){  // ACT TWO: bring it round
+    const t = ease((ms-CONFIG.searchMs)/CONFIG.foundMs);
+    const from = -20 - 260;
+    lon0 = from + (cx2-from)*t; lat0 = 14 + (cy2-14)*t;
+  } else {                                            // ACT THREE: descend
+    const t = ease((ms-CONFIG.searchMs-CONFIG.foundMs)/CONFIG.descendMs);
+    lon0 = cx2; lat0 = cy2;
+    /* The land outline is 110m simplified to half a degree - 60 km between
+       points - so past a certain magnification it reads as a polygon, not a
+       coast. The real basemap therefore comes up EARLY and the globe is gone
+       before anyone can count its corners (2026-09-13). */
+    R = R0*Math.pow(18, t);
+    mapA = Math.min(1, Math.max(0, (t-0.22)/0.42));
+  }
+  const gx = W/2, gy = H/2;
+
+  if (mapA > 0 && baseReady){
+    ctx.globalAlpha = mapA;
+    ctx.drawImage(base, mapX, mapY,
+      (SHOW.box[3]-SHOW.box[2])*cosLat*mapS, (SHOW.box[1]-SHOW.box[0])*mapS);
+    ctx.globalAlpha = 1;
+  }
+  const gA = 1 - mapA;
+  if (gA <= 0.01) return;
+
+  ctx.globalAlpha = gA;
+  ctx.fillStyle = '#0a1626';                          // the ocean disc
+  ctx.beginPath(); ctx.arc(gx, gy, R, 0, 6.2832); ctx.fill();
+
+  ctx.fillStyle = 'rgba(96,116,96,0.85)';
+  ctx.strokeStyle = 'rgba(150,180,160,0.5)';
+  ctx.lineWidth = Math.max(1, DPR);
+  for (const ring of (window.GLOBE_LAND||[])){
+    let started = false;
+    ctx.beginPath();
+    for (const p of ring){
+      const q = ortho(p[1], p[0], lon0, lat0, R, gx, gy);
+      if (!q){ started = false; continue; }
+      if (!started){ ctx.moveTo(q[0], q[1]); started = true; }
+      else ctx.lineTo(q[0], q[1]);
+    }
+    ctx.fill(); ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(150,190,235,0.30)';
+  ctx.beginPath(); ctx.arc(gx, gy, R, 0, 6.2832); ctx.stroke();
+
+  /* The mark, once it has been found. */
+  if (ms > CONFIG.searchMs*0.82){
+    const q = ortho(cy2, cx2, lon0, lat0, R, gx, gy);
+    if (q){
+      const pulse = 0.55 + 0.45*Math.sin(ms/260);
+      ctx.strokeStyle = 'rgba(255,226,150,0.95)';
+      ctx.lineWidth = Math.max(2, 2.4*DPR);
+      ctx.beginPath(); ctx.arc(q[0], q[1], (14 + 10*pulse)*DPR, 0, 6.2832); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,240,200,0.95)';
+      ctx.beginPath(); ctx.arc(q[0], q[1], 4*DPR, 0, 6.2832); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 /* ---- the show clock ------------------------------------------------------
    Driven by the wall clock so a slow Pi shows the same six minutes, just with
    fewer frames. */
 let bootAt = performance.now();
 let handedOff=false;
-function showT(now){ return SHOW.t0 + (now - bootAt); }
+function showT(now){ return SHOW.t0 + (now - bootAt - OPEN_MS); }
 function spanMs(){ return SHOW.t1 - SHOW.t0; }
 
 /* Flashes are time-sorted, so the active window is a sliding pair of indices
@@ -143,8 +239,14 @@ function magOf(e){ return Math.max(0, Math.min(1, (Math.log10(Math.max(e,1)) - 0
 
 function draw(){
   const now = performance.now();
+  const ms = now - bootAt;
   const T = showT(now);
   ctx.fillStyle = '#04070d'; ctx.fillRect(0,0,W,H);
+  if (ms < OPEN_MS){
+    drawGlobe(ms);
+    requestAnimationFrame(draw);
+    return;
+  }
   if (baseReady) ctx.drawImage(base, mapX, mapY,
       (SHOW.box[3]-SHOW.box[2])*cosLat*mapS, (SHOW.box[1]-SHOW.box[0])*mapS);
 
@@ -203,7 +305,7 @@ function draw(){
     /* A PINNED PAGE LOOPS instead of sitting on a spent sky. Without this the
        six minutes ran out and left an empty basemap for as long as anyone
        cared to watch (2026-09-13). Unpinned, the wall moves on as usual. */
-    if (PINNED) { bootAt = performance.now(); lo = hi = 0; }
+    if (PINNED) { bootAt = performance.now() - OPEN_MS; lo = hi = 0; }
     else if (!handedOff && CONFIG.nextPage !== '') handOff();
   } else if (!PINNED && !handedOff && CONFIG.nextPage !== '' &&
              (now-bootAt)/1000 > CONFIG.holdMin*60) handOff();
@@ -343,21 +445,29 @@ if (!SHOW){
   base = new Image();
   base.onload = () => { baseReady = true; };
   base.src = 'glm_basemap.jpg';
-  window.WALL_SECONDS_PER_RUN = Math.round(spanMs()/1000 + 8);
+  window.WALL_SECONDS_PER_RUN = Math.round((spanMs() + OPEN_MS)/1000 + 8);
   document.getElementById('pname').textContent = 'Lantern';
 
   /* THE EXPLANATION, and it has to earn every word. Three beats: what a dot
      is, why it stutters, and what the ring means. */
   const s = SHOW.stats;
-  Wall.lane(`${SHOW.flashes.length.toLocaleString()} real flashes over ${SHOW.where}, six minutes of sky. `
-          + `A flash is not an instant: it stutters through ${s.medGroups} pulses in about `
-          + `${(s.medDur/1000).toFixed(1)} s, and every pulse here is drawn at its own recorded `
-          + `moment — slowed ten times so you can watch one happen.`);
-  Wall.after(19000, () => Wall.lane(
+  /* THE OVERTURE NARRATES ITSELF, then the storm speaks. Saying "2,814 flashes
+     over Mexico" over a globe that has not arrived yet gives the answer before
+     the question. */
+  Wall.lane('Somewhere in this hemisphere the sky is busier than anywhere else. '
+          + 'Two satellites watch all of it, twenty seconds at a time.');
+  Wall.after(CONFIG.searchMs - 600, () => Wall.lane(
+      `Found it — ${SHOW.where}. ${SHOW.flashes.length.toLocaleString()} flashes in six minutes, `
+    + `${(SHOW.stats.rate).toFixed(1)} every second.`));
+  Wall.after(OPEN_MS + 600, () => Wall.lane(
+      `A flash is not an instant: it stutters through ${s.medGroups} pulses in about `
+    + `${(s.medDur/1000).toFixed(1)} s, and every pulse here is drawn at its own recorded `
+    + `moment — slowed ten times so you can watch one happen.`));
+  Wall.after(OPEN_MS + 26000, () => Wall.lane(
       `The ring is not the bolt. Cloud scatters the light sideways, so a channel a few kilometres `
     + `long makes the whole thunderhead glow — a paper lantern lit from inside. Median ${s.medArea} km²; `
     + `the biggest here lit ${s.maxArea.toLocaleString()}.`));
-  Wall.after(40000, () => Wall.lane(
+  Wall.after(OPEN_MS + 50000, () => Wall.lane(
       `The satellite caught a median of ${s.medE} femtojoules from each one. The flash that made it `
     + `moved some 15 coulombs across a hundred million volts — of order a billion joules, through a `
     + `channel at 30,000 K, five times the surface of the Sun.`));
