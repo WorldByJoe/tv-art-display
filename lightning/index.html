@@ -38,7 +38,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v1.1 · 2026-09-14
+  lightning.html · v2.0 · 2026-09-14
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -74,6 +74,10 @@
 ==========================================================================
 
   CHANGED
+    v2.0  opens INSTANTLY on the cached sky and says how old it is, while the
+          Pi fetches the current one behind it; the globe is no longer an
+          opening but a flight from the old sky to the fresh one, triggered
+          from outside through window.__glmNext()
     v1.1  the signature says when the sky was recorded, and how long ago -
           a published copy can be hours old and never said so
     v1.0  first build
@@ -109,7 +113,21 @@ const CONFIG = {
 };
 const Q = new URLSearchParams(location.search);
 const PINNED = Q.has('pin');
-const SHOW = window.GLM_SHOW || null;
+/* SHOW IS NO LONGER FIXED FOR THE LIFE OF THE PAGE (Joe, 2026-09-14).
+   The page opens on the CACHED sky - whatever was captured last time Lantern
+   was shown - and says how old it is, while the Pi captures the current
+   hemisphere behind it. A capture takes 17-21 s measured, so the fresh sky
+   lands about twenty seconds in; the page is then told about it from OUTSIDE
+   (glm_refresh.py, through cdp.py's Runtime.evaluate) and flies to it.
+
+   "This is for nerds and nerds like very fresh data" - so nothing waits on a
+   clock that could be waiting on the data instead. The twenty seconds are not
+   filled time: they carry the explanation and the age of what is on screen. */
+let SHOW = window.GLM_SHOW || null;
+let nextShow = null;        // the fresh capture, once it has been handed in
+let phase = 'play';         // 'play' | 'transition'
+let transAt = 0;            // when the transition began
+let fromBox = null;         // where we are flying FROM, kept after SHOW swaps
 
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d', {alpha:false});
 const DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -153,18 +171,40 @@ function ortho(lat, lon, lon0, lat0, R, cx, cy){
 }
 const ease = t => t<0?0 : t>1?1 : t*t*(3-2*t);
 
+/* THE GLOBE IS NOW A BRIDGE, NOT A PREAMBLE.
+   It used to open the page: nineteen seconds of spinning before anything had
+   happened, which is a preamble a viewer cannot learn anything from. It now
+   runs BETWEEN two skies - up off the cached storm, across the world, down
+   onto the fresh one - which is the same machinery doing a job that means
+   something: it shows you WHERE the weather moved to.
+
+   ms runs 0..OPEN_MS across three acts, as before, but act one now ASCENDS
+   from wherever we were rather than turning idly, and act two flies from
+   there to the new target instead of from a fixed longitude. */
 function drawGlobe(ms){
-  const cy2 = (SHOW.box[0]+SHOW.box[1])/2, cx2 = (SHOW.box[2]+SHOW.box[3])/2;
+  /* TARGET THE SKY WE ARE FLYING TO, NOT THE ONE WE ARE DRAWING.
+     SHOW is still the OLD capture through acts one and two - it has to be, or
+     the ascent would show the new basemap receding from a place we never were.
+     The swap happens at the top of act three, once the globe is small enough
+     that no basemap is visible at all. */
+  const tgt = (nextShow || SHOW).box;
+  const cy2 = (tgt[0]+tgt[1])/2, cx2 = (tgt[2]+tgt[3])/2;
+  const fy = fromBox ? (fromBox[0]+fromBox[1])/2 : cy2;
+  const fx = fromBox ? (fromBox[2]+fromBox[3])/2 : cx2;
   const R0 = Math.min(W,H)*0.34;
   let lon0, lat0, R = R0, mapA = 0;
 
-  if (ms < CONFIG.searchMs){                          // ACT ONE: turning
-    lon0 = -20 - ms/CONFIG.searchMs*260;
-    lat0 = 14;
-  } else if (ms < CONFIG.searchMs + CONFIG.foundMs){  // ACT TWO: bring it round
+  if (ms < CONFIG.searchMs){                          // ACT ONE: rise off the old sky
+    const t = ease(ms/CONFIG.searchMs);
+    lon0 = fx; lat0 = fy;
+    R = R0*Math.pow(18, 1-t);                         // the descent, run backwards
+    mapA = Math.min(1, Math.max(0, ((1-t)-0.22)/0.42));
+  } else if (ms < CONFIG.searchMs + CONFIG.foundMs){  // ACT TWO: cross to the new one
     const t = ease((ms-CONFIG.searchMs)/CONFIG.foundMs);
-    const from = -20 - 260;
-    lon0 = from + (cx2-from)*t; lat0 = 14 + (cy2-14)*t;
+    /* Longitude the SHORT way round: flying from -70 to +100 must not sweep
+       backwards across the Pacific just because the numbers say so. */
+    let d = cx2 - fx; while (d > 180) d -= 360; while (d < -180) d += 360;
+    lon0 = fx + d*t; lat0 = fy + (cy2-fy)*t;
   } else {                                            // ACT THREE: descend
     const t = ease((ms-CONFIG.searchMs-CONFIG.foundMs)/CONFIG.descendMs);
     lon0 = cx2; lat0 = cy2;
@@ -243,6 +283,22 @@ let handedOff=false;
    the page itself instead of only in a log nobody reads. */
 const MONTH3 = ['Jan','Feb','Mar','Apr','May','Jun',
                 'Jul','Aug','Sep','Oct','Nov','Dec'];
+/* HOW OLD THE SKY ON SCREEN IS, as an opening sentence rather than a footnote.
+   Joe, 2026-09-14: the page should say "Here's what was happening XX minutes
+   (or hours) ago". It is the first thing said, because the cached sky is the
+   recent past and a piece that shows the past should admit it before it says
+   anything clever. Reuses the same age arithmetic as the signature. */
+function agedWords(){
+  if (!SHOW || !SHOW.t0) return 'Here is a recent sky.';
+  const mins = (Date.now() - SHOW.t0)/60000;
+  const when = mins < 1.5  ? 'a moment ago'
+             : mins < 90   ? Math.round(mins) + ' minutes ago'
+             : mins < 2880 ? Math.round(mins/60) + ' hour' + (Math.round(mins/60) === 1 ? '' : 's') + ' ago'
+             :               Math.round(mins/1440) + ' days ago';
+  return 'Here is what the sky over ' + (SHOW.where || 'this hemisphere')
+       + ' was doing ' + when + '.';
+}
+
 function recordedWords(){
   if (!SHOW || !SHOW.t0) return 'recording time unknown';
   const d = new Date(SHOW.t0);
@@ -257,7 +313,64 @@ function recordedWords(){
   return 'sky recorded ' + when + ago;
 }
 
-function showT(now){ return SHOW.t0 + (now - bootAt - OPEN_MS); }
+/* ---- THE HANDOFF, CALLED FROM OUTSIDE THE PAGE ---------------------------
+   glm_refresh.py captures the current hemisphere while this page is on screen
+   and then calls window.__glmNext() through cdp.py's Runtime.evaluate. The
+   page cannot fetch the capture itself: GLM ships NetCDF4, no browser reads
+   HDF5, and this page runs from file:// where fetch() is blocked anyway. So
+   the Pi does the work and hands the result in - which is also why this is a
+   plain global rather than anything cleverer. It has to be callable from a
+   one-line string evaluated in the page.
+
+   Returns a word rather than nothing so the caller can log what happened
+   instead of guessing; a capture handed in twice, or before the page is ready,
+   is ignored rather than allowed to restart the show mid-flight. */
+window.__glmNext = function(){
+  if (!window.GLM_NEXT) return 'no-data';
+  if (!SHOW)            return 'no-current';
+  if (phase !== 'play') return 'busy';
+  if (window.GLM_NEXT.t0 === SHOW.t0) return 'same-capture';
+  nextShow = window.GLM_NEXT;
+  fromBox  = SHOW.box.slice();
+  phase    = 'transition';
+  transAt  = performance.now();
+  /* Say it BEFORE the globe moves, so the words explain the movement rather
+     than chasing it. */
+  const mins = Math.max(0, Math.round((Date.now() - nextShow.t0)/60000));
+  Wall.lane('New sky, captured ' + (mins < 1 ? 'moments' : mins + ' minute' +
+            (mins === 1 ? '' : 's')) + ' ago over ' + nextShow.where +
+            '. Going there now.', {hold: 7000});
+  return 'accepted';
+};
+
+/* Swap the page onto the fresh capture. Called at the top of the globe's
+   descent, when nothing of either basemap is on screen. */
+function adoptNext(){
+  SHOW = nextShow; nextShow = null;
+  lo = hi = 0;
+  baseReady = false;
+  base = new Image();
+  base.onload = () => { baseReady = true; };
+  base.src = (SHOW.basemap || 'glm_basemap.jpg') + '?v=' + Date.now();
+  resize(); computeMap();
+  /* The stall budget has to grow with the show we actually ended up playing,
+     or the watchdog would still be holding us to the cached one's length. */
+  window.WALL_SECONDS_PER_RUN = Math.round((spanMs() + OPEN_MS)/1000 + 8);
+  /* RESTATE THE ATTRIBUTION HERE, not only in sayTheScience(). Measured on the
+     wall 2026-09-14: the page adopted the fresh sky correctly - 2,026 flashes,
+     new basemap - and went on claiming "sky recorded 22:21 (11 min ago)",
+     because the science guard had already been spent by the fallback timer and
+     the signature was written inside it. The line describes what is on screen,
+     so it belongs wherever what is on screen changes. */
+  Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble'
+                 + ' · ' + recordedWords());
+}
+
+/* playFrom is when the sky ON SCREEN started playing. It is not bootAt any
+   more, because the page may be on its second sky: bootAt still measures the
+   page's life (holdMin, the hand-off), playFrom measures this storm's. */
+let playFrom = bootAt;
+function showT(now){ return SHOW.t0 + (now - playFrom); }
 function spanMs(){ return SHOW.t1 - SHOW.t0; }
 
 /* Flashes are time-sorted, so the active window is a sliding pair of indices
@@ -278,10 +391,22 @@ function draw(){
   const ms = now - bootAt;
   const T = showT(now);
   ctx.fillStyle = '#04070d'; ctx.fillRect(0,0,W,H);
-  if (ms < OPEN_MS){
-    drawGlobe(ms);
-    requestAnimationFrame(draw);
-    return;
+  /* NO OPENING GLOBE. The page opens on lightning, because the cached sky is
+     already on disk and there is nothing to wait for. The globe now runs only
+     when there is somewhere to fly TO. */
+  if (phase === 'transition'){
+    const tms = now - transAt;
+    /* Adopt at the top of the descent - the globe is tiny there and neither
+       basemap is drawn, so the swap is invisible. */
+    if (nextShow && tms >= CONFIG.searchMs + CONFIG.foundMs) adoptNext();
+    if (tms >= OPEN_MS){
+      phase = 'play'; playFrom = now; lo = hi = 0; fromBox = null;
+      sayTheScience();
+    } else {
+      drawGlobe(tms);
+      requestAnimationFrame(draw);
+      return;
+    }
   }
   if (baseReady) ctx.drawImage(base, mapX, mapY,
       (SHOW.box[3]-SHOW.box[2])*cosLat*mapS, (SHOW.box[1]-SHOW.box[0])*mapS);
@@ -341,7 +466,7 @@ function draw(){
     /* A PINNED PAGE LOOPS instead of sitting on a spent sky. Without this the
        six minutes ran out and left an empty basemap for as long as anyone
        cared to watch (2026-09-13). Unpinned, the wall moves on as usual. */
-    if (PINNED) { bootAt = performance.now() - OPEN_MS; lo = hi = 0; }
+    if (PINNED) { playFrom = performance.now(); lo = hi = 0; }
     else if (!handedOff && CONFIG.nextPage !== '') handOff();
   } else if (!PINNED && !handedOff && CONFIG.nextPage !== '' &&
              (now-bootAt)/1000 > CONFIG.holdMin*60) handOff();
@@ -484,32 +609,70 @@ if (!SHOW){
   window.WALL_SECONDS_PER_RUN = Math.round((spanMs() + OPEN_MS)/1000 + 8);
   document.getElementById('pname').textContent = 'Lantern';
 
-  /* THE EXPLANATION, and it has to earn every word. Three beats: what a dot
-     is, why it stutters, and what the ring means. */
-  const s = SHOW.stats;
-  /* THE OVERTURE NARRATES ITSELF, then the storm speaks. Saying "2,814 flashes
-     over Mexico" over a globe that has not arrived yet gives the answer before
-     the question. */
-  Wall.lane('Somewhere in this hemisphere the sky is busier than anywhere else. '
-          + 'Two satellites watch all of it, twenty seconds at a time.');
-  Wall.after(CONFIG.searchMs - 600, () => Wall.lane(
-      `Found it — ${SHOW.where}. ${SHOW.flashes.length.toLocaleString()} flashes in six minutes, `
-    + `${(SHOW.stats.rate).toFixed(1)} every second.`));
-  Wall.after(OPEN_MS + 600, () => Wall.lane(
-      `A flash is not an instant: it stutters through ${s.medGroups} pulses in about `
-    + `${(s.medDur/1000).toFixed(1)} s, and every pulse here is drawn at its own recorded `
-    + `moment — slowed ten times so you can watch one happen.`));
-  Wall.after(OPEN_MS + 26000, () => Wall.lane(
-      `The ring is not the bolt. Cloud scatters the light sideways, so a channel a few kilometres `
-    + `long makes the whole thunderhead glow — a paper lantern lit from inside. Median ${s.medArea} km²; `
-    + `the biggest here lit ${s.maxArea.toLocaleString()}.`));
-  Wall.after(OPEN_MS + 50000, () => Wall.lane(
-      `The satellite caught a median of ${s.medE} femtojoules from each one. The flash that made it `
-    + `moved some 15 coulombs across a hundred million volts — of order a billion joules, through a `
-    + `channel at 30,000 K, five times the surface of the Sun.`));
+  /* WHAT THE FIRST TWENTY SECONDS ARE FOR.
+     They are not a wait. The fresh capture takes 17-21 s, and rather than
+     stand on a globe until it lands, the page plays the CACHED sky and spends
+     those seconds saying the two things a viewer needs: how old this is, and
+     what a dot means. The age line is first because it is the honest one -
+     this is the recent past, and the page should say so before it says
+     anything clever. */
+  /* ONLY THE WALL IS FETCHING ANYTHING. build_github.standalone() blanks
+     nextPage for the published copy, and there is no Pi behind that one - so
+     promising a viewer on the web that something newer is on its way would be
+     a straight lie. The published page says what it is instead: one captured
+     sky, dated. */
+  const LIVE = CONFIG.nextPage !== '';
+  Wall.lane(agedWords() + ' Two satellites watch this hemisphere, '
+          + 'twenty seconds of sky at a time'
+          + (LIVE ? ' — and the Pi is fetching the newest right now.' : '.'));
+  Wall.after(9000, () => Wall.lane(
+      `${SHOW.where}: ${SHOW.flashes.length.toLocaleString()} flashes in six minutes, `
+    + `${(SHOW.stats.rate).toFixed(1)} every second.`, {hold: 8000}));
+
+  /* The rest of the science waits for the sky it describes. sayTheScience()
+     runs when a fresh capture has landed and the globe has set down on it -
+     and, if none ever arrives, on a timer so a cached-only showing is not
+     left mute. */
+  /* THE FALLBACK IS LATE ON PURPOSE. A handoff normally lands 30-80 s in, and
+     the science beats quote the stats of the sky they are spoken over - so
+     firing them early would describe a storm the page is about to fly away
+     from, in numbers that then stop matching the screen. At 100 s this only
+     fires when no fresh sky is coming at all, which is exactly when a
+     cached-only showing would otherwise be left mute. */
+  Wall.after(100000, () => { if (phase === 'play' && !scienceSaid) sayTheScience(); });
+
   Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble'
                  + ' · ' + recordedWords());
   requestAnimationFrame(draw);
+}
+
+/* THE THREE SCIENCE BEATS, spoken over the sky they describe rather than on a
+   fixed schedule from boot. They used to be pinned to OPEN_MS + 600/26000/50000,
+   which assumed the page's one and only storm had started at a known moment;
+   now the storm on screen may be the second one, so they start whenever the
+   page settles on the sky it is going to keep. Guarded, because the trigger can
+   come either from the globe setting down or from the 24 s fallback. */
+let scienceSaid = false;
+function sayTheScience(){
+  if (scienceSaid || !SHOW) return;
+  scienceSaid = true;
+  const s = SHOW.stats;
+  Wall.after(600, () => Wall.lane(
+      `A flash is not an instant: it stutters through ${s.medGroups} pulses in about `
+    + `${(s.medDur/1000).toFixed(1)} s, and every pulse here is drawn at its own recorded `
+    + `moment — slowed ten times so you can watch one happen.`));
+  Wall.after(26000, () => Wall.lane(
+      `The ring is not the bolt. Cloud scatters the light sideways, so a channel a few kilometres `
+    + `long makes the whole thunderhead glow — a paper lantern lit from inside. Median ${s.medArea} km²; `
+    + `the biggest here lit ${s.maxArea.toLocaleString()}.`));
+  Wall.after(50000, () => Wall.lane(
+      `The satellite caught a median of ${s.medE} femtojoules from each one. The flash that made it `
+    + `moved some 15 coulombs across a hundred million volts — of order a billion joules, through a `
+    + `channel at 30,000 K, five times the surface of the Sun.`));
+  /* The signature carries the age of whatever sky is now on screen, so it is
+     re-stated here as well as at boot: after a handoff the old one is a lie. */
+  Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble'
+                 + ' · ' + recordedWords());
 }
 </script>
 </body>
