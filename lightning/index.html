@@ -38,7 +38,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v2.2 · 2026-09-14
+  lightning.html · v3.0 · 2026-09-14
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -74,6 +74,9 @@
 ==========================================================================
 
   CHANGED
+    v3.0  LIVE: the clock is now the wall clock minus 75 s and new granules
+          are appended as they publish, so the sky stays about a minute old
+          instead of ageing from 6 to 12 minutes while you watch it
     v2.2  age is measured from the NEWEST flash, not the oldest: a capture
           whose last flash was 40 s old was calling itself 7 minutes old
     v2.1  accepts a cache that declares either global, so a pipeline slip
@@ -106,6 +109,12 @@ const CONFIG = {
                           pulses now share one clock: a flash is finished one
                           pulse-fade after its last pulse fires. */
   holdMin:  9,
+  /* HOW FAR BEHIND LIVE THE PAGE SITS. The newest granule measured 42 s behind
+     now on 2026-09-14, and a granule covers 20 s, so 75 s leaves room for one
+     late publication without the sky going empty. Lower it and the feed
+     starves; raise it and the nerds get staler lightning. */
+  lagMs: 75000,
+  streamGapMs: 150000,   // no append for this long = say so, and fall back
   /* THE OVERTURE. Joe, 2026-09-13: "we can show a spinning globe, then zoom
      into the target location, then start the lightning show. I think it's
      worth the wait." Three acts before the storm: the globe turning while the
@@ -369,6 +378,47 @@ function recordedWords(){
    Returns a word rather than nothing so the caller can log what happened
    instead of guessing; a capture handed in twice, or before the page is ready,
    is ignored rather than allowed to restart the show mid-flight. */
+/* ---- THE LIVE FEED -------------------------------------------------------
+   glm_stream.py fetches whatever granules have published since it last looked
+   and calls this. Flashes arrive already sorted within a batch; the merge keeps
+   the whole list sorted, because everything downstream binary-searches it.
+
+   PRUNING MATTERS MORE THAN IT LOOKS. A showing can run nine minutes at three
+   to seven flashes a second, and nothing would ever leave the array - so the
+   page would grow a megabyte of sky it can no longer display. Anything older
+   than the window plus a margin goes. */
+let lastAppend = 0, appended = 0;
+window.__glmAppend = function(list){
+  lastAppend = Date.now();
+  if (!SHOW || !Array.isArray(list)) return 'no-show';
+  if (list.length){
+    /* Drop anything we already hold - a re-run of the fetcher overlaps. */
+    const newest = SHOW.flashes.length ? SHOW.flashes[SHOW.flashes.length-1].t : 0;
+    const fresh = list.filter(f => f && f.t > newest);
+    if (fresh.length){
+      SHOW.flashes = SHOW.flashes.concat(fresh);
+      SHOW.flashes.sort((a,b) => a.t - b.t);
+      SHOW.t1 = SHOW.flashes[SHOW.flashes.length-1].t;
+      appended += fresh.length;
+    }
+  }
+  const cut = (Date.now() - CONFIG.lagMs) - MAX_LIFE - 30000;
+  if (SHOW.flashes.length && SHOW.flashes[0].t < cut){
+    SHOW.flashes = SHOW.flashes.filter(f => f.t >= cut);
+    SHOW.t0 = SHOW.flashes.length ? SHOW.flashes[0].t : SHOW.t0;
+  }
+  /* The first append is what puts the page on the wall clock. Before that it
+     is replaying a capture, which is the right behaviour for the published
+     copy and for a wall whose feed has not started. */
+  if (!live){
+    live = true;
+    Wall.lane('Live now — this sky is about a minute old, and stays that way. '
+            + 'Each new twenty seconds of it arrives as the satellite sends it.',
+            {hold: 9000});
+  }
+  return 'ok:' + SHOW.flashes.length;
+};
+
 window.__glmNext = function(){
   if (!window.GLM_NEXT) return 'no-data';
   if (!SHOW)            return 'no-current';
@@ -417,16 +467,45 @@ function adoptNext(){
    more, because the page may be on its second sky: bootAt still measures the
    page's life (holdMin, the hand-off), playFrom measures this storm's. */
 let playFrom = bootAt;
-function showT(now){ return SHOW.t0 + (now - playFrom); }
+let live = false;          // true once the page is running on the wall clock
+
+/* THE SHOW CLOCK, AND WHY IT IS THE WALL CLOCK NOW.
+   Joe, 2026-09-14: "after the data are downloaded, we start watching 6 minute
+   old data, and after 6 minutes we are watching 12 minute old data ... why
+   start with old data that gets even older while we are watching it?"
+
+   Exactly right, and it was the REPLAY that did it, not the satellite. Measured
+   the same day: the newest granule on the bucket starts 42 s before now. So a
+   page can sit about seventy-five seconds behind live and never starve, with
+   glm_stream.py pushing each new twenty-second granule in as it appears.
+
+   In LIVE mode the clock is simply now minus that lag, so the sky on screen is
+   always about a minute old and stays that way. A capture that arrives without
+   a stream behind it still replays, which is what the published copy does and
+   what the wall falls back to if the feed stops. */
+function showT(now){
+  return live ? (Date.now() - CONFIG.lagMs) : SHOW.t0 + (now - playFrom);
+}
 function spanMs(){ return SHOW.t1 - SHOW.t0; }
 
-/* Flashes are time-sorted, so the active window is a sliding pair of indices
-   rather than a scan of three thousand every frame. */
+/* THE ACTIVE WINDOW, by binary search rather than by sliding indices.
+   Sliding lo/hi was right while the flash list was fixed for the life of the
+   page. It is not any more: __glmAppend() adds to the end and prunes from the
+   front, and an index into an array that has just had its head removed points
+   at the wrong flash - silently, because the array is still sorted and the
+   code still runs. Two searches per frame over a few thousand entries cost
+   nothing and cannot be invalidated by an append. */
 let lo=0, hi=0;
+const MAX_LIFE = 4000;     // longest a flash can stay lit: d*exagg + pulseMs
+function lowerBound(arr, t){
+  let a=0, b=arr.length;
+  while (a < b){ const m = (a+b) >> 1; if (arr[m].t < t) a = m+1; else b = m; }
+  return a;
+}
 function advance(T){
-  const tail = T - (SHOW.flashes[0] ? 0 : 0);
-  while (hi < SHOW.flashes.length && SHOW.flashes[hi].t <= T) hi++;
-  while (lo < hi && SHOW.flashes[lo].t + SHOW.flashes[lo].d*CONFIG.exagg + CONFIG.pulseMs < T) lo++;
+  const f = SHOW.flashes;
+  lo = lowerBound(f, T - MAX_LIFE);
+  hi = lowerBound(f, T + 1);
 }
 
 /* size = energy, through a log: 4 fJ to 4,000 fJ is a thousandfold, and on a
@@ -509,7 +588,17 @@ function draw(){
   drawKey();
   panel(live, lit, durs, areas);
 
-  if (T > SHOW.t1 + 4000) {
+  /* WHEN TO STOP.
+     A REPLAY ends when it runs off the end of its capture. A LIVE page never
+     does - "past the last flash" just means the sky is quiet, or that a granule
+     is a few seconds late, and handing off for either would end the show at the
+     first lull. So live mode ends on the dwell clock, or when the feed has been
+     silent long enough to call it dead rather than quiet. */
+  if (live){
+    const feedAge = Date.now() - lastAppend;
+    if (!PINNED && !handedOff && CONFIG.nextPage !== '' &&
+        ((now-bootAt)/1000 > CONFIG.holdMin*60 || feedAge > CONFIG.streamGapMs)) handOff();
+  } else if (T > SHOW.t1 + 4000) {
     /* A PINNED PAGE LOOPS instead of sitting on a spent sky. Without this the
        six minutes ran out and left an empty basemap for as long as anyone
        cared to watch (2026-09-13). Unpinned, the wall moves on as usual. */
@@ -523,15 +612,66 @@ function draw(){
 /* The four biggest towns in frame, spread out by the builder so they read as
    four bearings rather than one city and three of its boroughs. A Blue Marble
    basemap carries no labels of its own. */
+/* WHAT IS ALREADY OCCUPYING THE SCREEN.
+   The panel, the Lane and the signature are DOM, so they can be measured
+   rather than guessed; the key is drawn by drawKey() at a known place, so its
+   rectangle is repeated here. Everything is in canvas pixels. */
+function furniture(){
+  const r = [];
+  for (const sel of ['.instr', '.lane', '.signature']){
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    /* NOT offsetParent. Every one of these is position:fixed, and a fixed
+       element's offsetParent is null whether it is visible or not - so the
+       first version of this check skipped the panel entirely and cities went
+       on being drawn underneath it, which is the bug it was written to fix.
+       Measure the rectangle and ask the style instead. */
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) continue;
+    const b = el.getBoundingClientRect();
+    if (b.width < 2 || b.height < 2) continue;
+    r.push([b.left*DPR, b.top*DPR, b.right*DPR, b.bottom*DPR]);
+  }
+  const u = W/3840, kx = Math.round(76*u), ky = Math.round(120*u);
+  r.push([kx-Math.round(26*u), ky-Math.round(58*u),
+          kx-Math.round(26*u)+Math.round(980*u), ky-Math.round(58*u)+Math.round(300*u)]);
+  return r;
+}
+function hits(box, rects){
+  for (const q of rects)
+    if (box[0] < q[2] && box[2] > q[0] && box[1] < q[3] && box[3] > q[1]) return true;
+  return false;
+}
+
+/* FOUR NAMES THAT CAN ACTUALLY BE READ (Joe, 2026-09-14: "only three city
+   names are visible. Maybe the fourth city name is under the info box. We
+   should fix the rule so that at least 4 cities are visible, considering the
+   info box.").
+
+   glm_show.py now ships ten candidates in population order; this walks them and
+   keeps the first four whose LABEL clears the frame edges, the page's own
+   furniture, and the labels already placed. Only the page can do this: the
+   builder has no idea where the panel is, and the panel moves with the type
+   scale and the screen. */
+const CITY_CAP = 4;
 function drawCities(){
   const t = SHOW.towns || [];
   if (!t.length) return;
   const u = W/3840, tf = Math.round(30*1.167*u);
   ctx.font = `${tf}px ui-sans-serif, system-ui, sans-serif`;
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  const busy = furniture(), placed = [];
   for (const c of t){
+    if (placed.length >= CITY_CAP) break;
     const x = toX(c.lon), y = toY(c.lat);
     if (x < 0 || y < 0 || x > W || y > H) continue;
+    /* the dot, the gap and the name, with a little air around it */
+    const wpx = ctx.measureText(c.n).width, pad = 10*u;
+    const box = [x - 6*DPR - pad, y - tf*0.75 - pad,
+                 x + 12*u + wpx + pad, y + tf*0.75 + pad];
+    if (box[2] > W || box[1] < 0 || box[3] > H) continue;
+    if (hits(box, busy) || hits(box, placed)) continue;
+    placed.push(box);
     ctx.globalAlpha = 0.85;
     ctx.fillStyle = 'rgba(255,240,215,0.95)';
     ctx.beginPath(); ctx.arc(x, y, Math.max(2, 2.6*DPR), 0, 6.2832); ctx.fill();
