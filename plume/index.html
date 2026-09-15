@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Finding the Leak</title>
 <!-- ==========================================================================
-  plume.html · v1.2 · 2026-09-15
+  plume.html · v1.3 · 2026-09-15
   Finding the Leak: a mobile methane survey, drawn as belief over ground.
 
   Ring stop 7 of 20, two surveys per visit, loop:'inside'. The professional
@@ -44,6 +44,10 @@
 ==========================================================================
 
   CHANGED
+    v1.3  physics sub-stepped at 0.1 s so accuracy no longer depends on the
+          speed slider; analyser is 2 Hz and continuously fed (a reading is
+          the mean over the road since the last log); slider opens at 8x;
+          the rail caption is gone, which cost it its place-name foot
     v1.2  the speed slider is a real-time multiple and starts at 1x, the car
           drives 15 mph, and there is a pause; the rail drops the released
           total for a methane-concentration scale and a size-context line
@@ -597,7 +601,9 @@ const CONFIG = {
      meant sweeping the whole grid sixty times a second, which is what made
      the car stutter. At 4 Hz and 9 m/s this is a reading every ~2 m, which is
      finer than any real survey. */
-  sampleHz:     4.0,
+  /* 2 Hz, Joe's figure for the real instrument (2026-09-15). At 6.7 m/s that
+     is a logged reading every 3.35 m of kerb. */
+  sampleHz:     2.0,
   timeScale:    9.0,        // fallback; replaced per-map by timeScaleEff
   meanderTau:   45,         // s, how slowly wind direction wanders
 
@@ -839,6 +845,7 @@ let windDir=0, windMeanDir=0, windSpeed=0, windMeanSpeed=0;
 let windDir0=0, gustU=0, gustV=0;   // act's base direction; turbulent vector
 let samples=0, detections=0, passesDone=0, peakSeen=0;
 let simClock=0, nextSampleAt=0, actWallStart=0;
+let ppmIntegral=0, ppmIntegralT=0;   // the analyser's continuous intake, between logs
 let routeLenM=0, timeScaleEff=9, passSecEst=0, inPlumeSamples=0;
 
 /* HOW FAST THE SURVEY RUNS, as a multiplier on the pace the map already chose.
@@ -1282,7 +1289,7 @@ function newAct(){
   cleanLooks.fill(0); travBest.fill(0); travSeen.fill(-1); travId=0; lastWaySeen=-1;
   puffs=[];
   samples=0; detections=0; passesDone=0; peakSeen=0; finishedAt=0; inPlumeSamples=0;
-  simClock=0; nextSampleAt=0; actWallStart=performance.now();
+  simClock=0; nextSampleAt=0; ppmIntegral=0; ppmIntegralT=0; actWallStart=performance.now();
   /* Leaks go where leaks actually are: on the main under the street, or at
      the service that taps it to feed a building. Picking a BUILDING and then
      the nearest point of road puts the leak on that service line - and it
@@ -1796,13 +1803,24 @@ function stepCar(dt){
      analyser's logging rate. */
   const ppm=ppmAt(car.x,car.y);
   if(ppm>peakSeen) peakSeen=ppm;
+  /* THE INLET IS CONTINUOUS, THE LOG IS NOT (Joe, 2026-09-15: the car "pulls in
+     methane continuously" but reports at 2 Hz). So a reading is the MEAN over
+     the road travelled since the last one, not the concentration at the instant
+     the clock struck. It matters at the edge of a plume: a point sample every
+     3.35 m can pass clean through a narrow filament that a continuously-fed
+     analyser would have caught, and narrow filaments are most of what a real
+     survey meets crosswind. Sub-stepping is what makes the average meaningful -
+     without it the "integral" would be one sample per rendered frame. */
+  ppmIntegral += ppm*dt; ppmIntegralT += dt;   // dt here is ONE SUB-STEP
   if(simClock>=nextSampleAt){
     nextSampleAt=simClock+1/CONFIG.sampleHz;
     samples++;
-    const det=ppm>CONFIG.detectPpm;
+    const reading = ppmIntegralT>0 ? ppmIntegral/ppmIntegralT : ppm;
+    ppmIntegral=0; ppmIntegralT=0;
+    const det=reading>CONFIG.detectPpm;
     if(det){ detections++; inPlumeSamples++; }
-    trackEncounter(ppm,det,car.x,car.y);
-    for(const src of sources) if(ppm>src.peakPpm && Math.hypot(car.x-src.x,car.y-src.y)*mPerPx<=60) src.peakPpm=ppm;   // the strongest reading near each leak
+    trackEncounter(reading,det,car.x,car.y);
+    for(const src of sources) if(reading>src.peakPpm && Math.hypot(car.x-src.x,car.y-src.y)*mPerPx<=60) src.peakPpm=reading;   // the strongest reading near each leak
     /* whose gas was this? For each leak: samples its own gas alone would have
        tripped (ownDet), detections its gas was part of (inDet), and of those
        how many it dominated (domDet) or was outweighed in by another leak
@@ -1813,7 +1831,7 @@ function stepCar(dt){
       if(c>src.ownPeak) src.ownPeak=c;
       if(c>0.05*CONFIG.detectPpm){ src.touch++; if(det){ src.inDet++; if(top===src.i) src.domDet++; else src.sharedDet++; } }
       if(c>CONFIG.detectPpm) src.ownDet++; }
-    deposit(car.x,car.y,ppm,det);
+    deposit(car.x,car.y,reading,det);
   }
 }
 
@@ -2193,9 +2211,13 @@ function drawLegend(){
        page and the least useful one: a survey never knows the total, and the
        question a reader actually has - how big is big? - is answered by the
        leak table and the scale below it. Its space goes to the concentration
-       ramp, which is the one encoding on the map that had no key. */
-    cap: 'Most leaks are under 10 SCFH. A few hundred is a large main — and a '
-       + 'handful of those dominate what a system emits.',
+       ramp, which is the one encoding on the map that had no key.
+
+       AND NO CAPTION HERE. A sentence about leak sizes lived in this slot for
+       one revision and cost the rail its own foot: #rail ends with .foot, which
+       names the neighbourhood and city, and an instrument caption above it
+       pushed that off the bottom of the panel. The place is worth more than the
+       prose - a viewer needs to know WHERE this is. */
     keys: keys,
     /* Two ramps, keying the map's two encodings - Joe's design. CLEAN
        PASSES is the ruled-out ground (hue = how many clean traverses);
@@ -2260,16 +2282,17 @@ function buildControls(){
   if (!band) return;
   controlsEl = document.createElement('div');
   controlsEl.id = 'controls';
-  /* The track is log2 from 1x to 32x and STARTS AT 1 - real time. A viewer who
-     touches nothing sees the survey at the speed it actually happens, which is
-     the whole point of the rescale; the slider is there for anyone who would
-     rather not wait out a real drive. */
+  /* The track is log2 from 1x to 32x and OPENS AT 8x (Joe, 2026-09-15). Real
+     time is now honestly available at the left end - which was the point of the
+     rescale - but a real drive is 7.5 minutes a pass, and a visitor who lands
+     on a crawling car leaves before the verdict. Eight is about the old pace
+     and reaches a verdict in a couple of minutes. */
   controlsEl.innerHTML =
     '<button id="pausebtn" type="button" aria-label="Pause">PAUSE</button>' +
     '<label for="speed">SPEED</label>' +
-    '<input id="speed" type="range" min="0" max="5" step="0.05" value="0" ' +
+    '<input id="speed" type="range" min="0" max="5" step="0.05" value="3" ' +
            'aria-label="Speed, as a multiple of real time">' +
-    '<span id="speedv">1&times; real</span>' +
+    '<span id="speedv">8&times; real</span>' +
     '<button id="restart" type="button">RESTART</button>';
   band.appendChild(controlsEl);
   const sl = controlsEl.querySelector('#speed'), out = controlsEl.querySelector('#speedv');
@@ -2489,17 +2512,37 @@ function frame(now){
     if(!PINNED && actIndex+1>=Wall.repeats(CONFIG.actsPerTurn)){ handOff(); return; }
     newAct(); return;
   }
-  simClock+=dt;
-  stepWind(dt);
+  /* SUB-STEPPED, so the physics does not get coarser when the viewer speeds up.
+     Joe, 2026-09-15: "the rate of car data gathering should not scale with
+     speed of the simulation."
+
+     The sampling never did - nextSampleAt runs on simClock, so readings have
+     always been evenly spaced in SIMULATED time and therefore in metres of
+     kerb. But everything else was stepped once per rendered frame, and at 32x
+     a single frame is 1.6 s of weather: the car jumps eleven metres, the wind
+     turns in one lurch, and the 2 Hz analyser gets at most one reading per
+     frame no matter how many it is owed. Speed was quietly buying accuracy.
+
+     Capping the internal step at a tenth of a simulated second fixes all of it
+     at once - the car, the wind, the puffs and the analyser all advance the
+     same way at 1x and at 32x, and the only thing that changes with the slider
+     is how many sub-steps a frame runs. */
+  const MAX_SUBSTEP = 0.10;
+  for (let left = dt; left > 1e-6; ){
+    const h = Math.min(MAX_SUBSTEP, left);
+    left -= h;
+    simClock+=h;
+    stepWind(h);
   /* how much of the survey each leak spent UPWIND of its own bit of road,
      i.e. blowing toward the street the car drives (the wind blows toward
      (cos, sin) of windDir, as the puffs do) */
   if(!finishedAt){ const cw=Math.cos(windDir), sw=Math.sin(windDir);
-    for(const src of sources){ if(src.road && (src.road[0]-src.x)*cw+(src.road[1]-src.y)*sw>0) src.upwindSec+=dt; } }
-  releaseAndAdvect(dt);
+    for(const src of sources){ if(src.road && (src.road[0]-src.x)*cw+(src.road[1]-src.y)*sw>0) src.upwindSec+=h; } }
+  releaseAndAdvect(h);
   /* The car waits a beat at the kerb so the viewer sees the plumes
      establish - what the survey is up against - before mapping starts. */
-  if(!finishedAt && now-actWallStart>=CONFIG.warmupMs) stepCar(dt);
+  if(!finishedAt && now-actWallStart>=CONFIG.warmupMs) stepCar(h);
+  }
   computeField();
   draw();
   if(document.body.classList.contains('showinfo')) updateInfo();
