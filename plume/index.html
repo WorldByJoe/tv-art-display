@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Finding the Leak</title>
 <!-- ==========================================================================
-  plume.html · v1.3 · 2026-09-15
+  plume.html · v1.4 · 2026-09-15
   Finding the Leak: a mobile methane survey, drawn as belief over ground.
 
   Ring stop 7 of 20, two surveys per visit, loop:'inside'. The professional
@@ -44,6 +44,8 @@
 ==========================================================================
 
   CHANGED
+    v1.4  leak rates halved - median 10.6 SCFH, 95th 202, which is what a
+          survey actually meets; the old median ran at twice that
     v1.3  physics sub-stepped at 0.1 s so accuracy no longer depends on the
           speed slider; analyser is 2 Hz and continuously fed (a reading is
           the mean over the road since the last log); slider opens at 8x;
@@ -664,7 +666,18 @@ const PINNED=/[?&]pin\b/.test(location.search);
    ruptured main, and one of those would swamp the colour scale and make every
    other leak on the map invisible. */
 const SLPM_TO_GS = 0.656/60;      // methane density 0.656 g/L
-const RATE = { median:10, gsd:6, trunc:2.5 };
+/* HALVED 2026-09-15 (Joe). The median was 10 SLPM, which is 21 SCFH - about
+   twice what a survey really meets - so every run read high. Five SLPM puts the
+   median at 10.6 SCFH and the 95th at 202, which is where he wanted them.
+
+   The spread is unchanged, so the low tail comes down with everything else and
+   the 5th percentile lands near 0.6 SCFH rather than his nominal 1.5. He took
+   that deliberately: "that gives us some more tiny leaks that we will miss, but
+   a lot of those actually do get 'found' as tiny bubbles on meter set
+   assemblies." Leaks that small are not missed by the industry, they are just
+   not found by DRIVING - which is a fair thing for a mobile-survey simulator to
+   show itself failing at. */
+const RATE = { median:5, gsd:6, trunc:2.5 };
 
 function gaussian(){                      // Box-Muller, one value
   let u=0, v=0;
