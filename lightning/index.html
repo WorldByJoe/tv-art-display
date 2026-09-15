@@ -38,7 +38,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v3.0 · 2026-09-14
+  lightning.html · v3.2 · 2026-09-14
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -74,6 +74,10 @@
 ==========================================================================
 
   CHANGED
+    v3.2  the arrow keys actually work: this page bound only 'i' while its own
+          diagnostics promised the arrows changed page
+    v3.1  a feed gap has to last five minutes to end a showing, not two and a
+          half - a cron boundary was enough to qualify
     v3.0  LIVE: the clock is now the wall clock minus 75 s and new granules
           are appended as they publish, so the sky stays about a minute old
           instead of ageing from 6 to 12 minutes while you watch it
@@ -114,7 +118,11 @@ const CONFIG = {
      late publication without the sky going empty. Lower it and the feed
      starves; raise it and the nerds get staler lightning. */
   lagMs: 75000,
-  streamGapMs: 150000,   // no append for this long = say so, and fall back
+  /* NO APPEND FOR THIS LONG AND THE FEED IS DEAD, NOT QUIET. Generous on
+     purpose: glm_feed.sh pushes about every 22 s, but it runs in one-minute
+     cron bursts, so a boundary can leave a gap approaching a minute. At 150 s
+     an ordinary gap could end a showing the viewer had just walked up to. */
+  streamGapMs: 300000,
   /* THE OVERTURE. Joe, 2026-09-13: "we can show a spinning globe, then zoom
      into the target location, then start the lightning show. I think it's
      worth the wait." Three acts before the storm: the globe turning while the
@@ -780,10 +788,29 @@ function updateInfo(live, lit){
     SHOW.where + '  ' + SHOW.flashes.length + ' flashes, ' + SHOW.stats.groups + ' groups\n'
     + 'box ' + SHOW.box.map(b=>b.toFixed(1)).join(', ') + '\n'
     + 'active ' + live + '  pulses lit ' + lit + '  window ' + lo + '..' + hi + '\n'
-    + 'keys: i info · arrows change page';
+    + 'keys: i info · n new sky · arrows change page';
 }
-addEventListener('keydown', e => { if(e.key==='i'||e.key==='I'){
-  document.body.classList.toggle('showinfo'); Wall.hideLane && Wall.hideLane(); }});
+/* THE REMOTE. This page bound only 'i' and then told the viewer "arrows change
+   page" in its own diagnostics - so the arrows did nothing here while working
+   on every other stop in the ring (Joe, 2026-09-14: "it did not respond well to
+   the remote"). nav.js does NOT bind keys; it only builds on-screen arrows for
+   a pointer, so each page wires its own, and this one never did.
+   rotateTo() goes through Wall.step(), so the arrows skip pieces that are
+   switched off, exactly as they do elsewhere. */
+addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'i': case 'I':
+      document.body.classList.toggle('showinfo');
+      if (Wall.hideLane) Wall.hideLane();
+      break;
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    /* A pinned page cannot hand on, so 'n' reloads instead: that re-primes
+       from the cache and restarts the live feed, which is the nearest thing
+       this piece has to "another one please". */
+    case 'n': case 'N': location.reload(); break;
+  }
+});
 
 /* ---- go ----------------------------------------------------------------- */
 if (!SHOW){
