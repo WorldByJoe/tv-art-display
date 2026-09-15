@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Finding the Leak</title>
 <!-- ==========================================================================
-  plume.html · v1.0 · 2026-09-13
+  plume.html · v1.1 · 2026-09-15
   Finding the Leak: a mobile methane survey, drawn as belief over ground.
 
   Ring stop 7 of 20, two surveys per visit, loop:'inside'. The professional
@@ -44,6 +44,9 @@
 ==========================================================================
 
   CHANGED
+    v1.1  release rates read in SCFH at two figures, not SLPM at three; the
+          published copy gains a speed slider and a restart in the band, and
+          loses the ring arrows it had nowhere to walk to
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -76,6 +79,31 @@
      border lands 45 px left of where the projection, the band and the
      call-out guard all believe the map ends. Measured, not guessed. */
   #rail, #band { box-sizing:border-box; }
+
+  /* THE STANDALONE CONTROLS. Sized off the same --wu the rest of the wall
+     uses, so they scale with the window instead of shrinking to nothing on a
+     4K panel; the type sits at the band's own rung rather than at a browser
+     default. They are only ever created on the published copy. */
+  #controls { display:flex; align-items:center; gap:calc(14 * var(--wu));
+    margin-left:auto; padding-right:calc(20 * var(--wu));
+    font:400 var(--t5)/1 ui-monospace, Menlo, monospace;
+    color:rgba(210,224,242,.80); letter-spacing:.08em; }
+  #controls label { white-space:nowrap; }
+  #controls #speedv { min-width:calc(72 * var(--wu)); text-align:right;
+    color:rgba(240,246,253,.95); font-variant-numeric:tabular-nums; }
+  #controls input[type=range] { width:calc(240 * var(--wu)); accent-color:#2e9e68;
+    cursor:pointer; }
+  #controls button { font:inherit; letter-spacing:.10em;
+    color:rgba(240,246,253,.95); background:rgba(20,26,38,.86);
+    border:1px solid rgba(255,255,255,.22); border-radius:calc(6 * var(--wu));
+    padding:calc(8 * var(--wu)) calc(18 * var(--wu)); cursor:pointer; }
+  #controls button:hover { background:rgba(40,52,74,.92); }
+
+  /* THE SIDE ARROWS GO ON THE STANDALONE. nav.js draws prev/next for the
+     wall's ring; this page is the only page in its repository, so they would
+     offer to walk to nowhere. Restart replaces them, in the band. The gear
+     and the info dot are already suppressed by nav.js off-wall. */
+  body.standalone .navArrow.prev, body.standalone .navArrow.next { display:none !important; }
   #rail { position:fixed; top:0; right:0; bottom:0; width:var(--railW);
     z-index:5; background:#0A0E15; border-left:1px solid rgba(255,255,255,.14);
     display:flex; flex-direction:column;
@@ -686,6 +714,24 @@ function sigmas(x,cls){
    toPrecision switches to exponent form at 1000, which would put "1.23e+3" on
    the wall, so above that this rounds to whole units - by then three digits are
    already all that is shown. */
+/* SCFH, BECAUSE THAT IS WHAT THE INDUSTRY SAYS (Joe, 2026-09-15). The model
+   works in standard litres per minute throughout - nothing about the physics
+   changes here - and only the DISPLAY converts. One litre is 0.0353147 cubic
+   feet and there are sixty minutes in an hour, so a standard litre per minute
+   is 2.11888 standard cubic feet per hour. Two significant figures, also his
+   call: three implied a precision a dispersion model does not have. */
+const SCFH_PER_SLPM = 0.0353147 * 60;
+function scfh(slpm){ return slpm * SCFH_PER_SLPM; }
+function sig2(x){
+  if (!isFinite(x)) return '-';
+  if (x === 0) return '0';
+  const a = Math.abs(x);
+  /* Whole numbers above 100 - "1200 SCFH", not "1.2e+3" - and never a
+     trailing ".0" on a two-figure value that happens to be round. */
+  if (a >= 100) return String(Math.round(x / 10) * 10);
+  return String(+x.toPrecision(2));
+}
+
 function sig3(x){
   if (!isFinite(x)) return '-';
   if (x === 0) return '0.00';
@@ -787,6 +833,14 @@ let windDir0=0, gustU=0, gustV=0;   // act's base direction; turbulent vector
 let samples=0, detections=0, passesDone=0, peakSeen=0;
 let simClock=0, nextSampleAt=0, actWallStart=0;
 let routeLenM=0, timeScaleEff=9, passSecEst=0, inPlumeSamples=0;
+
+/* HOW FAST THE SURVEY RUNS, as a multiplier on the pace the map already chose.
+   timeScaleEff is set per neighbourhood so that one pass takes about the same
+   wall time wherever the survey is; this rides on top of it, so the viewer
+   speeds up or slows down THEIR OWN map rather than overriding the balancing.
+   Sim time only - the wind, the puffs and the analyser all run off dt, so
+   nothing about the physics changes shape, it simply happens sooner. */
+let speedMul = 1;
 let fps=0,lastFrame=performance.now(),paused=false,handingOff=false;
 
 function resize(){
@@ -2103,7 +2157,7 @@ function drawLegend(){
          notes with no colour beside them, on a table whose whole point is
          that the swatch IS the cross out on the map. */
       c: 'rgb(' + leakColour(e.s.slpm).join(',') + ')',
-      v: sig3(e.s.slpm) + ' SLPM',
+      v: sig2(scfh(e.s.slpm)) + ' SCFH',
       n: e.r.found ? (e.r.via==='crew' ? 'found · crew, beside neighbour'
                        : 'found · ' + Math.round(e.r.dist) + ' m off')
                    : 'not found',
@@ -2115,7 +2169,7 @@ function drawLegend(){
      line. Neither sits on the map. */
   Wall.instrument({
     id: 'rail', mount: '#rail',
-    hero: { v: sig3(act._slpmTotal || 0), u: 'SLPM released' },
+    hero: { v: sig2(scfh(act._slpmTotal || 0)), u: 'SCFH released' },
     keys: keys,
     /* Two ramps, keying the map's two encodings - Joe's design. CLEAN
        PASSES is the ruled-out ground (hue = how many clean traverses);
@@ -2141,6 +2195,46 @@ function drawLegend(){
     ],
   });
   Wall.instrument({ id: 'band', mount: '#band', rows: rows, flow: true });
+  buildControls();
+}
+
+/* ---- THE CONTROLS -------------------------------------------------------
+   A speed slider and a restart, in the band to the right of the counters
+   (Joe, 2026-09-15). Both exist ONLY on the standalone copy: the wall is
+   driven by a remote from a sofa, has nowhere to restart to, and hands on by
+   itself, so a mouse control there would be furniture nobody can reach.
+   CONFIG.nextPage is blank exactly on the published build, which is the same
+   test the rest of this page already uses to tell the two apart.
+
+   The slider is logarithmic - a quarter speed to four times - because the
+   interesting range is multiplicative and a linear track spends most of its
+   length between 2x and 4x. Restart reloads: an episode is a fresh draw of
+   neighbourhood, weather and leaks, so reloading IS "give me another one",
+   and it is the same path the page takes when an episode ends on its own. */
+let controlsEl = null;
+function buildControls(){
+  if (CONFIG.nextPage === '') document.body.classList.add('standalone');
+  if (controlsEl || CONFIG.nextPage !== '') return;
+  const band = document.getElementById('band');
+  if (!band) return;
+  controlsEl = document.createElement('div');
+  controlsEl.id = 'controls';
+  controlsEl.innerHTML =
+    '<label for="speed">SPEED</label>' +
+    '<input id="speed" type="range" min="-2" max="2" step="0.05" value="0" ' +
+           'aria-label="Simulation speed">' +
+    '<span id="speedv">1.0&times;</span>' +
+    '<button id="restart" type="button">RESTART</button>';
+  band.appendChild(controlsEl);
+  const sl = controlsEl.querySelector('#speed'), out = controlsEl.querySelector('#speedv');
+  const show = () => {
+    speedMul = Math.pow(2, parseFloat(sl.value) || 0);
+    out.textContent = (speedMul < 1 ? speedMul.toFixed(2) : speedMul.toFixed(1)) + '\u00d7';
+  };
+  sl.addEventListener('input', show);
+  show();
+  controlsEl.querySelector('#restart')
+            .addEventListener('click', () => location.reload());
 }
 
 function draw(){
@@ -2297,9 +2391,9 @@ function updateInfo(){
     `condition ${act.name}\n`+
     `place     ${hood?hood.name+', '+hood.city:'-'}\n`+
     `roads     ${roads.length} ways, ${(routeLenM/1000).toFixed(2)} km driven\n`+
-    `pace      ${timeScaleEff.toFixed(1)}x, ~${Math.round(passSecEst)} s/pass\n`+
+    `pace      ${timeScaleEff.toFixed(1)}x x${speedMul.toFixed(2)} viewer, ~${Math.round(passSecEst/speedMul)} s/pass\n`+
     `in plume  ${samples?(100*inPlumeSamples/samples).toFixed(1):'0.0'}% of samples\n`+
-    `leaks     ${sources.length}  (${sources.map(s=>sig3(s.slpm)).join(', ')} SLPM)\n`+
+    `leaks     ${sources.length}  (${sources.map(s=>sig2(scfh(s.slpm))).join(', ')} SCFH)\n`+
     `puffs     ${puffs.length} / ${CONFIG.puffBudget}\n`+
     `wind      ${windSpeed.toFixed(2)} m/s, dir ${(windDir*180/Math.PI).toFixed(0)}deg\n`+
     `meander   sd ${act.meanderSd}deg, tau ${CONFIG.meanderTau}s\n`+
@@ -2327,7 +2421,7 @@ function frame(now){
   /* max(0,...) matters: requestAnimationFrame's timestamp can precede a
      performance.now() taken just before it, and a negative delta poisons the
      wind integrator with NaN. */
-  const dt=Math.max(0, Math.min(0.05, dtms/1000))*timeScaleEff;
+  const dt=Math.max(0, Math.min(0.05, dtms/1000))*timeScaleEff*speedMul;
   fps=fps?fps*0.9+(1000/Math.max(dtms,1))*0.1:60;
   if(paused||handingOff) return;
 
