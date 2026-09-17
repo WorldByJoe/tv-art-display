@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v1.6 · 2026-09-16 — in the ring as of 2026-09-16.
+/* mobile.html · v1.8 · 2026-09-16 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,11 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v1.8  each boat's SAIL AREA is set free of her weight - the reason a
+           regular fleet could not be turned by any wind at all
+     v1.7  tried making the boards drag their rods round (Newton's third law
+           at each thread) - real, but 1 part in 287 here, and unscaled it wound
+           the rods to 1,180 revolutions; removed again in v1.8
      v1.6  a tighter puff blows harder, the way pursed lips do
      v1.5  the cone is set by what it should cover - tightest is one boat wide
      v1.4  the fleet gets 50% more wind and 50% more puffs
@@ -311,7 +316,23 @@ function makeBoat(){
               levers come from measuring their own lopsided silhouettes and run
               to about a tenth of their width; a boat's is two and a half times
               that, and signed at random so the fleet does not turn as one. */
-           cx: (rnd() < 0.5 ? -1 : 1) * (0.18 + rnd() * 0.12) };
+           cx: (rnd() < 0.5 ? -1 : 1) * (0.18 + rnd() * 0.12),
+           /* HOW BIG HER RIG IS, and it has nothing to do with what she weighs.
+              This is the thing that was missing. A mobile balances MASS times
+              distance; the wind pushes on AREA times distance. Those are the
+              same sum only when area follows mass - and I had built the fleet
+              exactly that way, near-equal hulls carrying identical sails, so
+              both moments vanished together and no puff could ever turn a rod.
+              Measured: wind moment 0.0 as built, 308 once the rig is set free.
+
+              The animals never had this problem: their arms differ by thirty to
+              one while every silhouette carries the same ink, so their area
+              moments never cancelled. It is a defect a perfectly regular fleet
+              has and a ragged cascade does not.
+
+              Real mobiles are full of this - a big light shape on one arm
+              against a small dense one on the other is the whole Calder idiom. */
+           sail: 0.55 + rnd() * 1.10 };
 }
 
 /* A ROD OF FIXED LENGTH WITH A MOVING PIVOT, which is the other way to build a
@@ -860,7 +881,7 @@ function locate(node, x, y, z){
 }
 
 function boardsUnder(node, out, ox, oz, face){
-  if (node.leaf){ out.push({ x:ox, z:oz, face }); return out; }
+  if (node.leaf){ out.push({ x:ox, z:oz, face, area: node.sail || 1 }); return out; }
   const c = Math.cos(node.th), s = Math.sin(node.th);
   boardsUnder(node.a, out, ox - node.da * c, oz - node.da * s, node.th);
   boardsUnder(node.b, out, ox + node.db * c, oz + node.db * s, node.th);
@@ -878,7 +899,7 @@ function windTorque(node){
        the boats are: eight near-identical hulls that a uniform wind could
        never turn, because it pushed both sides the same. */
     const w = windAt(node.wx + b.x, node.wy, node.wz + b.z);
-    T += w * Math.abs(Math.sin(wind.dir - b.face)) * (b.x * sw - b.z * cw);
+    T += w * b.area * Math.abs(Math.sin(wind.dir - b.face)) * (b.x * sw - b.z * cw);
   }
   return T;
 }
@@ -918,6 +939,13 @@ function stepNode(node, dt, omParent, aIn, thParent){
     node.swept = (node.swept || 0) + Math.abs(node.twV) * dt;   // diagnostic
     return;
   }
+  /* A THREAD'S REACTION WAS NOT THE ANSWER. A weathervaning board does pull
+     its rod round - Newton's third law at the hanger - but scaled honestly it
+     is nothing here: a board's moment of inertia about its own thread is about
+     w^2/12, some 645, against a rod's 185,000. One part in 287. My first pass
+     left it unscaled and the rods wound up to 1,180 revolutions in two minutes,
+     which is a pump, not a mobile. Removed. The real answer is below. */
+
   const alpha = windTorque(node) * WIND_GAIN / Math.max(1, node.I / 20000)
               - DRAG * node.om
               + COUPLE * (omParent - node.om);
@@ -1282,7 +1310,10 @@ function paintBoat(it){
   const a = depthAlpha(z, s), near = nearness(z, s), k = persp(z, s);
   const c = Math.abs(turn), flip = turn < 0 ? -1 : 1;
   const beam = Math.max(0.05, c);                  // how broadside she lies
-  const Hm = MAST_H * s * k, L = HULL_L * s * k, D = HULL_D * s * k;
+  /* Rig scales as the square root of her sail area, hull as the cube root of
+     her weight - so an over-canvassed little boat looks like one. */
+  const rig = Math.sqrt(node.sail || 1), bulk = Math.cbrt((node.kg || 1) / 1.0);
+  const Hm = MAST_H * s * k * rig, L = HULL_L * s * k * bulk, D = HULL_D * s * k * bulk;
   const col = node.hull || (node.hull = nextBoatColour());
 
   ctx.save();
