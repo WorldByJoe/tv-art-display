@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v1.9 · 2026-09-16 — in the ring as of 2026-09-16.
+/* mobile.html · v2.0 · 2026-09-16 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,9 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v2.0  a third cast - 22 birds - and boats that differ in LENGTH, so mass
+           goes as its cube and sail as its square and the fleet has a real
+           spread of sail-per-tonne
      v1.9  one weather for both mobiles - the fleet's wind now blows on the
            animals too
      v1.8  each boat's SAIL AREA is set free of her weight - the reason a
@@ -185,7 +188,9 @@ function rnd(){                                    // mulberry32
 }
 
 /* ---- the stable --------------------------------------------------------
-   Twenty-eight mammals, eight orders of magnitude apart, each with an adult mass
+   TWO STABLES now. Twenty-eight mammals over eight orders of magnitude
+   (2 g shrew to 150 t blue whale) and twenty-two birds over four and a half
+   (2 g bee hummingbird to a 110 kg ostrich) - each animal with an adult mass
    and a public-domain silhouette. The masses are round numbers on purpose -
    the mass a person pictures when they picture the animal, not a species mean -
    and the mobile only ever claims RATIOS between kinds.
@@ -197,36 +202,62 @@ function rnd(){                                    // mulberry32
    refetches the lot; credits.json holds every licence, artist, ink area and
    centroid. w/h/ink/cx are measured offline because a canvas holding a file://
    image is tainted and cannot be read back. */
-const STABLE = [
-  { name:'blue whale',         kg:150000,     file:'mobile_art/blue_whale.png', w:1536, h:465, ink:314040, cx:-0.0561 },
-  { name:'sperm whale',        kg:40000,      file:'mobile_art/sperm_whale.png', w:1536, h:659, ink:426556, cx:+0.0631 },
-  { name:'African elephant',   kg:6000,       file:'mobile_art/African_elephant.png', w:3485, h:2446, ink:3741360, cx:+0.0968 },
-  { name:'orca',               kg:4000,       file:'mobile_art/orca.png',      w:1536, h:911, ink:473140, cx:-0.0590 },
-  { name:'white rhinoceros',   kg:2300,       file:'mobile_art/white_rhinoceros.png', w:1536, h:656, ink:613896, cx:-0.0367 },
-  { name:'bison',              kg:800,        file:'mobile_art/bison.png',     w:1536, h:1174, ink:1193812, cx:-0.0169 },
-  { name:'moose',              kg:500,        file:'mobile_art/moose.png',     w:1536, h:1006, ink:527460, cx:-0.0367 },
-  { name:'horse',              kg:500,        file:'mobile_art/horse.png',     w:1536, h:1320, ink:842328, cx:+0.0201 },
-  { name:'polar bear',         kg:450,        file:'mobile_art/polar_bear.png', w:1536, h:718, ink:656468, cx:-0.0307 },
-  { name:'grizzly bear',       kg:300,        file:'mobile_art/grizzly_bear.png', w:1536, h:1071, ink:1094256, cx:-0.0157 },
-  { name:'tiger',              kg:220,        file:'mobile_art/tiger.png',     w:1536, h:688, ink:570532, cx:+0.0490 },
-  { name:'red deer',           kg:200,        file:'mobile_art/red_deer.png',  w:1509, h:1536, ink:740832, cx:+0.0200 },
-  { name:'lion',               kg:190,        file:'mobile_art/lion.png',      w:1536, h:767, ink:503632, cx:+0.0439 },
-  { name:'gorilla',            kg:160,        file:'mobile_art/gorilla.png',   w:1396, h:1536, ink:1106920, cx:-0.0450 },
-  { name:'human',              kg:70,         file:'mobile_art/human.png',     w:817, h:1536, ink:445520, cx:-0.0638 },
-  { name:'cheetah',            kg:50,         file:'mobile_art/cheetah.png',   w:1296, h:1536, ink:737368, cx:-0.1617 },
-  { name:'wolf',               kg:40,         file:'mobile_art/wolf.png',      w:1536, h:833, ink:558452, cx:-0.0003 },
-  { name:'Labrador',           kg:30,         file:'mobile_art/Labrador.png',  w:1281, h:1536, ink:1076392, cx:+0.0619 },
-  { name:'badger',             kg:12,         file:'mobile_art/badger.png',    w:1536, h:756, ink:683544, cx:+0.0503 },
-  { name:'red fox',            kg:6,          file:'mobile_art/red_fox.png',   w:1536, h:1329, ink:892864, cx:+0.0460 },
-  { name:'domestic cat',       kg:4,          file:'mobile_art/domestic_cat.png', w:1536, h:1307, ink:711768, cx:-0.0335 },
-  { name:'rabbit',             kg:2,          file:'mobile_art/rabbit.png',    w:1536, h:1310, ink:845044, cx:-0.0430 },
-  { name:'grey squirrel',      kg:0.5,        file:'mobile_art/grey_squirrel.png', w:1578, h:1318, ink:1025468, cx:-0.0182 },
-  { name:'brown rat',          kg:0.3,        file:'mobile_art/brown_rat.png', w:1536, h:775, ink:493412, cx:+0.0489 },
-  { name:'gerbil',             kg:0.06,       file:'mobile_art/gerbil.png',    w:1536, h:898, ink:610180, cx:+0.1025 },
-  { name:'house mouse',        kg:0.02,       file:'mobile_art/house_mouse.png', w:1536, h:796, ink:540020, cx:+0.0982 },
-  { name:'little brown bat',   kg:0.008,      file:'mobile_art/little_brown_bat.png', w:1536, h:1253, ink:575384, cx:-0.0356 },
-  { name:'Etruscan shrew',     kg:0.002,      file:'mobile_art/Etruscan_shrew.png', w:1141, h:1536, ink:665192, cx:+0.0486 }
-];
+const STABLES = {
+  mammals: [
+  { name:'blue whale',               kg:150000,     file:'mobile_art/blue_whale.png',      w:1536, h:465, ink:314040, cx:-0.0561 },
+  { name:'sperm whale',              kg:40000,      file:'mobile_art/sperm_whale.png',     w:1536, h:659, ink:426556, cx:+0.0631 },
+  { name:'African elephant',         kg:6000,       file:'mobile_art/African_elephant.png', w:3485, h:2446, ink:3741360, cx:+0.0968 },
+  { name:'orca',                     kg:4000,       file:'mobile_art/orca.png',            w:1536, h:911, ink:473140, cx:-0.0590 },
+  { name:'white rhinoceros',         kg:2300,       file:'mobile_art/white_rhinoceros.png', w:1536, h:656, ink:613896, cx:-0.0367 },
+  { name:'bison',                    kg:800,        file:'mobile_art/bison.png',           w:1536, h:1174, ink:1193812, cx:-0.0169 },
+  { name:'moose',                    kg:500,        file:'mobile_art/moose.png',           w:1536, h:1006, ink:527460, cx:-0.0367 },
+  { name:'horse',                    kg:500,        file:'mobile_art/horse.png',           w:1536, h:1320, ink:842328, cx:+0.0201 },
+  { name:'polar bear',               kg:450,        file:'mobile_art/polar_bear.png',      w:1536, h:718, ink:656468, cx:-0.0307 },
+  { name:'grizzly bear',             kg:300,        file:'mobile_art/grizzly_bear.png',    w:1536, h:1071, ink:1094256, cx:-0.0157 },
+  { name:'tiger',                    kg:220,        file:'mobile_art/tiger.png',           w:1536, h:688, ink:570532, cx:+0.0490 },
+  { name:'red deer',                 kg:200,        file:'mobile_art/red_deer.png',        w:1509, h:1536, ink:740832, cx:+0.0200 },
+  { name:'lion',                     kg:190,        file:'mobile_art/lion.png',            w:1536, h:767, ink:503632, cx:+0.0439 },
+  { name:'gorilla',                  kg:160,        file:'mobile_art/gorilla.png',         w:1396, h:1536, ink:1106920, cx:-0.0450 },
+  { name:'human',                    kg:70,         file:'mobile_art/human.png',           w:817, h:1536, ink:445520, cx:-0.0638 },
+  { name:'cheetah',                  kg:50,         file:'mobile_art/cheetah.png',         w:1296, h:1536, ink:737368, cx:-0.1617 },
+  { name:'wolf',                     kg:40,         file:'mobile_art/wolf.png',            w:1536, h:833, ink:558452, cx:-0.0003 },
+  { name:'Labrador',                 kg:30,         file:'mobile_art/Labrador.png',        w:1281, h:1536, ink:1076392, cx:+0.0619 },
+  { name:'badger',                   kg:12,         file:'mobile_art/badger.png',          w:1536, h:756, ink:683544, cx:+0.0503 },
+  { name:'red fox',                  kg:6,          file:'mobile_art/red_fox.png',         w:1536, h:1329, ink:892864, cx:+0.0460 },
+  { name:'domestic cat',             kg:4,          file:'mobile_art/domestic_cat.png',    w:1536, h:1307, ink:711768, cx:-0.0335 },
+  { name:'rabbit',                   kg:2,          file:'mobile_art/rabbit.png',          w:1536, h:1310, ink:845044, cx:-0.0430 },
+  { name:'grey squirrel',            kg:0.5,        file:'mobile_art/grey_squirrel.png',   w:1578, h:1318, ink:1025468, cx:-0.0182 },
+  { name:'brown rat',                kg:0.3,        file:'mobile_art/brown_rat.png',       w:1536, h:775, ink:493412, cx:+0.0489 },
+  { name:'gerbil',                   kg:0.06,       file:'mobile_art/gerbil.png',          w:1536, h:898, ink:610180, cx:+0.1025 },
+  { name:'house mouse',              kg:0.02,       file:'mobile_art/house_mouse.png',     w:1536, h:796, ink:540020, cx:+0.0982 },
+  { name:'little brown bat',         kg:0.008,      file:'mobile_art/little_brown_bat.png', w:1536, h:1253, ink:575384, cx:-0.0356 },
+  { name:'Etruscan shrew',           kg:0.002,      file:'mobile_art/Etruscan_shrew.png',  w:1141, h:1536, ink:665192, cx:+0.0486 }
+  ],
+  birds: [
+  { name:'ostrich',                  kg:110,        file:'mobile_art/ostrich.png',         w:1166, h:1536, ink:438420, cx:-0.0717 },
+  { name:'emu',                      kg:40,         file:'mobile_art/emu.png',             w:1536, h:1429, ink:912072, cx:-0.0019 },
+  { name:'wandering albatross',      kg:8.5,        file:'mobile_art/wandering_albatross.png', w:1285, h:1536, ink:527708, cx:-0.0299 },
+  { name:'wild turkey',              kg:7,          file:'mobile_art/wild_turkey.png',     w:1536, h:857, ink:436532, cx:-0.0166 },
+  { name:'white pelican',            kg:6.5,        file:'mobile_art/white_pelican.png',   w:1536, h:686, ink:322252, cx:-0.0004 },
+  { name:'bald eagle',               kg:4.8,        file:'mobile_art/bald_eagle.png',      w:1536, h:655, ink:443708, cx:+0.0152 },
+  { name:'Canada goose',             kg:4.5,        file:'mobile_art/Canada_goose.png',    w:1430, h:1536, ink:1039064, cx:-0.0145 },
+  { name:'greater flamingo',         kg:3,          file:'mobile_art/greater_flamingo.png', w:889, h:1536, ink:363612, cx:-0.0505 },
+  { name:'brown kiwi',               kg:2.2,        file:'mobile_art/brown_kiwi.png',      w:1536, h:1380, ink:1092324, cx:+0.1070 },
+  { name:'common raven',             kg:1.2,        file:'mobile_art/common_raven.png',    w:1247, h:1451, ink:757132, cx:+0.0373 },
+  { name:'mallard',                  kg:1.1,        file:'mobile_art/mallard.png',         w:1536, h:694, ink:608020, cx:+0.0028 },
+  { name:'herring gull',             kg:1.1,        file:'mobile_art/herring_gull.png',    w:1536, h:1411, ink:727960, cx:-0.0858 },
+  { name:'peregrine falcon',         kg:0.9,        file:'mobile_art/peregrine_falcon.png', w:889, h:1536, ink:451012, cx:-0.1084 },
+  { name:'barn owl',                 kg:0.5,        file:'mobile_art/barn_owl.png',        w:1324, h:1536, ink:965216, cx:+0.0781 },
+  { name:'rock pigeon',              kg:0.35,       file:'mobile_art/rock_pigeon.png',     w:1536, h:1054, ink:601184, cx:-0.0798 },
+  { name:'blue jay',                 kg:0.085,      file:'mobile_art/blue_jay.png',        w:1536, h:1530, ink:896484, cx:+0.1508 },
+  { name:'American robin',           kg:0.077,      file:'mobile_art/American_robin.png',  w:1536, h:1194, ink:550324, cx:+0.1423 },
+  { name:'northern cardinal',        kg:0.045,      file:'mobile_art/northern_cardinal.png', w:1536, h:962, ink:516352, cx:-0.1703 },
+  { name:'house sparrow',            kg:0.028,      file:'mobile_art/house_sparrow.png',   w:1536, h:1027, ink:583156, cx:-0.0011 },
+  { name:'barn swallow',             kg:0.019,      file:'mobile_art/barn_swallow.png',    w:1536, h:932, ink:402968, cx:-0.0003 },
+  { name:'ruby-throated hummingbird', kg:0.0032,     file:'mobile_art/ruby-throated_hummingbird.png', w:1536, h:934, ink:429632, cx:-0.0375 },
+  { name:'bee hummingbird',          kg:0.002,      file:'mobile_art/bee_hummingbird.png', w:1536, h:1506, ink:750676, cx:+0.0421 }
+  ],
+};
 
 /* ---- which seven hang tonight ------------------------------------------
    NOT seven at random. A mobile is built lightest-first and each animal hangs
@@ -291,6 +322,10 @@ window.WALL_SECONDS_ONCE = 2;
    thing cascades down the screen. That shape comes from the data - masses eight
    orders of magnitude apart cannot be paired any other way.
 
+   THE BIRDS hang exactly as the mammals do - same caterpillar, same rules, a
+   different cast. Their span is smaller (55,000 to 1 against 75 million) which
+   makes for gentler joints and a more even-looking mobile.
+
    THE BOATS hang on a PERFECT BINARY tree - two children at every joint, all
    the way down - so 2^n of them end at the same level and lie in one plane.
    With nothing to encode they can afford to be regular, which is what a Calder
@@ -299,42 +334,50 @@ window.WALL_SECONDS_ONCE = 2;
    and, more importantly, gives the wind something to push against. A perfectly
    symmetric rod has equal sail either side of its axis and therefore no turning
    moment at all - it would hang there, dead, while the animals danced. */
-const MODE = /[?&]mode=boats/.test(location.search) ? 'boats'
+const MODE = /[?&]mode=boats/.test(location.search)   ? 'boats'
+           : /[?&]mode=birds/.test(location.search)   ? 'birds'
            : /[?&]mode=animals/.test(location.search) ? 'animals'
-           : (rnd() < 0.5 ? 'animals' : 'boats');
+           : ['animals', 'birds', 'boats'][Math.floor(rnd() * 3)];
+
+/* which stable is on tonight - AFTER MODE, which is the fourth time a
+   derived constant has been written above the thing it derives from */
+const STABLE = STABLES[MODE === 'birds' ? 'birds' : 'mammals'];
 
 const BOAT_LEVELS = 2 + (rnd() < 0.45 ? 1 : 0);        // 4 boats, or 8
 
+/* BOATS OF DIFFERENT SIZES, and that one decision does all the work.
+
+   Draw her LENGTH and everything follows the way it does on the water: she
+   displaces as the cube of it and she carries sail as the square. So a big boat
+   is heavier AND has more canvas - but LESS canvas per tonne, because the
+   square grows slower than the cube. That is the density contrast this piece
+   needed: the wind's moment on a rod goes as area x distance while the balance
+   goes as mass x distance, and those two only diverge when sail-per-tonne
+   differs between the ends. Two boats of length L1 and L2 give a wind moment
+   proportional to L1^2 L2^2 (L2 - L1) - zero only if they are the same size.
+
+   Set them all the same length and the fleet goes dead still again, which is
+   how the first version was built and why no puff could turn it.
+
+   Length runs 0.55 to 1.60, so the biggest displaces about twenty-five times
+   the smallest and carries roughly three times the sail per tonne of the
+   smallest - enough contrast to move, not so much that a pivot ends up jammed
+   against one end of its rod (worst case it sits 3.9% along).
+
+   Tying sail to length COSTS some contrast, and that is worth knowing: drawing
+   mass and sail independently gave a four-fold spread in sail-per-tonne, where
+   length-driven gives about three. It is the physically honest version and the
+   one that looks like a fleet, so the range is widened rather than the coupling
+   broken. */
 function makeBoat(){
-  return { leaf:true, boat:true, name:'boat',
-           kg: 0.72 + rnd() * 0.56,                     // near equal, never equal
+  const L = 0.55 + rnd() * 1.05;
+  return { leaf:true, boat:true, name:'boat', len:L,
+           kg:   L * L * L,                            // displacement
+           sail: L * L,                                // sail area
            n:1, I:0, depth:0,
            sx:0, sz:0, vx:0, vz:0, ax_:0, az_:0,
            tw: rnd() * Math.PI * 2, twV: 0,
-           /* A BOAT IS A WEATHERVANE AND A CUT-OUT ANIMAL IS NOT. Its sail
-              is a big surface whose centre of effort sits well aft of the mast
-              it hangs from, so the wind has real leverage to swing her round -
-              which is what a boat on a thread does, every time. The animals'
-              levers come from measuring their own lopsided silhouettes and run
-              to about a tenth of their width; a boat's is two and a half times
-              that, and signed at random so the fleet does not turn as one. */
-           cx: (rnd() < 0.5 ? -1 : 1) * (0.18 + rnd() * 0.12),
-           /* HOW BIG HER RIG IS, and it has nothing to do with what she weighs.
-              This is the thing that was missing. A mobile balances MASS times
-              distance; the wind pushes on AREA times distance. Those are the
-              same sum only when area follows mass - and I had built the fleet
-              exactly that way, near-equal hulls carrying identical sails, so
-              both moments vanished together and no puff could ever turn a rod.
-              Measured: wind moment 0.0 as built, 308 once the rig is set free.
-
-              The animals never had this problem: their arms differ by thirty to
-              one while every silhouette carries the same ink, so their area
-              moments never cancelled. It is a defect a perfectly regular fleet
-              has and a ragged cascade does not.
-
-              Real mobiles are full of this - a big light shape on one arm
-              against a small dense one on the other is the whole Calder idiom. */
-           sail: 0.55 + rnd() * 1.10 };
+           cx: (rnd() < 0.5 ? -1 : 1) * (0.18 + rnd() * 0.12) };
 }
 
 /* A ROD OF FIXED LENGTH WITH A MOVING PIVOT, which is the other way to build a
@@ -1315,9 +1358,10 @@ function paintBoat(it){
   const a = depthAlpha(z, s), near = nearness(z, s), k = persp(z, s);
   const c = Math.abs(turn), flip = turn < 0 ? -1 : 1;
   const beam = Math.max(0.05, c);                  // how broadside she lies
-  /* Rig scales as the square root of her sail area, hull as the cube root of
-     her weight - so an over-canvassed little boat looks like one. */
-  const rig = Math.sqrt(node.sail || 1), bulk = Math.cbrt((node.kg || 1) / 1.0);
+  /* Rig is the square root of her sail area and hull the cube root of her
+     displacement, which for a boat drawn from a single length both come back
+     to that length - so she simply scales, as a bigger boat does. */
+  const rig = Math.sqrt(node.sail || 1), bulk = Math.cbrt(node.kg || 1);
   const Hm = MAST_H * s * k * rig, L = HULL_L * s * k * bulk, D = HULL_D * s * k * bulk;
   const col = node.hull || (node.hull = nextBoatColour());
 
