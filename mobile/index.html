@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v1.3 · 2026-09-16 — in the ring as of 2026-09-16.
+/* mobile.html · v1.4 · 2026-09-16 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,7 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v1.4  the fleet gets 50% more wind and 50% more puffs
      v1.3  the wind is a PUFF, not a weather system: it leaves a mouth, spreads
            in a cone of 14 to 55 degrees, and only moves what it happens to
            hit; the boats' rigging is almost invisible
@@ -365,7 +366,13 @@ const BOAT_SPAN_SHRINK = 0.72;                          // each level narrower
 const BOAT_SPAN  = ROD_LONG * 1.55;                     // ... but starting wider
 const BOAT_GAP   = 96;                                  // shorter wires
 const BOAT_LIMP  = 1 / 0.75;                            // rods 25% less stiff
-const BOAT_GUST_GAP = [1.8, 3.2];                       // a puff every 2-5 s, not 5-14
+/* THE FLEET GETS HALF AGAIN AS MUCH WEATHER (Joe, 2026-09-16), in both senses:
+   puffs half again as often, and half again as strong. Strength, not energy,
+   the same reading as last time - energy would be a factor of root 1.5, about
+   22%, and the ask reads as wanting the bigger of the two. Mean gap 3.4 s ->
+   2.3 s, mean strength 2.6 -> 3.9. */
+const BOAT_GUST_GAP = [1.2, 2.13];                      // a puff every 1-3 s
+const BOAT_GUST_MUL = 1.5;                              // ... and harder
 /* HOW MUCH RIGGING YOU ARE MEANT TO SEE. On the animals the rods ARE the
    measurement - where a pivot sits is the whole claim - so they stay at full
    strength. A fleet claims nothing, and the wires only stand between you and
@@ -700,7 +707,7 @@ function stepWind(dt, t){
     // DOUBLED 2026-09-16 (Joe): mean strength 1.3 -> 2.6, same relative spread.
     // Strength, not energy - energy would be a factor of root two - and the ask
     // was to see what happens, which wants the bigger of the two.
-    wind.gust    = 1.0 + rnd() * 3.2;
+    wind.gust    = (1.0 + rnd() * 3.2) * (MODE === 'boats' ? BOAT_GUST_MUL : 1);
     wind.gustT   = 0;
     wind.gustLen = 1.6 + rnd() * 2.4;
     /* WIND COMES FROM ABOVE AND BELOW AS WELL (Joe, 2026-09-16), and whichever
