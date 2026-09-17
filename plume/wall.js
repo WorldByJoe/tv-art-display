@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v1.1 · 2026-09-14
+   wall.js · v1.2 · 2026-09-14
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -542,6 +542,11 @@
        2026-09-13). One storm per visit; the run length is the capture's
        own length, so the page sets WALL_SECONDS_PER_RUN itself. */
     { file:'lightning.html',     name:'Lantern',          kind:'runs', unit:'storms',     def:1,  loop:'reload' },
+    /* A hanging balance, and what it balances changes with the evening: seven
+       mammals drawn from a stable of twenty-eight, or a fleet of small boats
+       on a perfect binary tree. It never finishes, so it takes minutes
+       (Joe, 2026-09-16). */
+    { file:'mobile.html',        name:'The Balance',      kind:'time', unit:'minutes',    def:5,  loop:'time'   },
   ];
   /* Pages that are not stops but doorways: they decide whether today is worth
      a word and then pass the viewer along to whatever ?next= says. The ring

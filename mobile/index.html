@@ -1,0 +1,1444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Weight of Mammals</title>
+<link rel="stylesheet" href="wall.css">
+<!-- wall.js must load in the HEAD: the setup below runs at the end of an INLINE
+     script, which executes before any deferred bottom tag. -->
+<script src="wall.js"></script>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#07080a; overflow:hidden; }
+  canvas { display:block; width:100vw; height:100vh; }
+  /* THE POINTER HIDES ITSELF WHEN IT IS NOT BEING USED. A television has no
+     mouse, so a cursor there is an artifact; on a laptop, hiding it outright
+     makes the page feel broken - which is exactly how it felt. Idle for three
+     seconds and it goes; move it and it is back, so the wall gets a clean
+     screen without anyone having to pass it a flag. */
+  body.idle, body.idle * { cursor:none; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<script>
+(function(){
+  let t = setTimeout(() => document.body.classList.add('idle'), 3000);
+  addEventListener('mousemove', () => {
+    document.body.classList.remove('idle');
+    clearTimeout(t); t = setTimeout(() => document.body.classList.add('idle'), 3000);
+  });
+})();
+</script>
+<script>
+/* mobile.html · v1.1 · 2026-09-16 — in the ring as of 2026-09-16.
+
+   A Calder mobile hung with real animals. Every animal is cut the same size, so
+   the picture tells you nothing about how heavy it is; the only place mass
+   lives is the geometry. Each rod balances - mass x distance, the real lever
+   law - so the pivot sits where the masses put it, and a heavy animal is pinned
+   hard against the pivot while a light one rides far out on a long arm.
+
+   Seven mammals span two and a half million to one. A single beam at that ratio
+   would want its pivot 0.00004% along the rod; a TREE does not, because pairing
+   neighbours in sorted order leaves every joint between 2.2:1 and 33:1.
+
+   TWO KINDS OF MASS LIVE ON THIS PAGE, and keeping them apart is the trick.
+   The ARM LENGTHS encode the animals' masses - that is the data, and it is
+   exact. The MOTION treats every cutout as the same piece of wood, because that
+   is what they are: same area, same thickness, same weight. Swaying them with
+   the animals' masses instead would be a different claim and a dead one - the
+   rod carrying the whale would have some hundred thousand times the inertia of
+   the rod carrying the gerbil, so five of the six rods would never move at all.
+   Wood sways; the geometry is the measurement.
+
+   CHANGED
+     v1.1  the fleet: wider rods, shorter wires, its plane on the centre line,
+           rods a quarter less stiff, sails cambered to leeward and hulls that
+           keep their beam when they come bow-on
+     v1.0  joins the ring: wall.css/wall.js/nav.js, a rotation list, minutes
+           from the setup screen, and a pointer that hides itself when idle
+     v0.20 a second thing to hang: 2^n little sailboats on a perfect binary
+           tree, all ending in one plane, each hung from its masthead
+     v0.19 cat and bat found under the names PhyloPic actually uses; the cull
+           now lives in the fetcher so a refetch cannot undo it; the pointer is
+           only hidden with ?kiosk
+     v0.18 a stable of 26 mammals; seven drawn each time, built the way the
+           mobile is so every joint stays buildable; colour follows position
+     v0.17 human and Labrador colours swapped
+     v0.16 one colour per animal, from the validated dark categorical palette;
+           each board's edge and lit face are that colour darker and lighter
+     v0.15 the ratio numbers are gone - the pivot positions say it already;
+           labels sit on an opaque plate; near surfaces are lit, the sawn edge
+           of a board included
+     v0.14 TRIAL: a viewer 22,000 units back, and true perspective applied to
+           everything including the animals - about 1.14x near to 0.89x far
+     v0.13 haze instead of blackness for depth; nothing scales with distance
+           any more, rods included; and each animal twists on its own thread,
+           with the lever taken from how lopsided its own silhouette is
+     v0.12 the view pans to follow the mobile - rotation mirrors the cascade,
+           so the resting pose's bounding box could not hold it
+     v0.11 one seeded generator for the angles and the weather, so a series of
+           ?at captures is one run sampled at different times rather than a
+           different mobile each frame
+     v0.10 ?demo - a controlled puff straight from the viewer into a mobile
+           started square-on with every derived branch to the left; and the
+           simulation now keeps its own clock, so a slow frame cannot step over
+           a gust instead of delivering it
+     v0.9  wind summed board by board, each at its own facing and position, so
+           a rod no longer weathervanes into the wind and stops
+     v0.8  the swivels were braked, not free - rotation damping cut about 5x,
+           measured against how far a rod actually turns while somebody watches
+     v0.7  SWING. Every hanging thing is a pendulum on its own thread, so a
+           gust sends the whole piece sideways and each sub-assembly after it;
+           threads lean, and a swung pendulum hangs higher, which feeds the
+           horizontal motion back into the vertical one
+     v0.6  no title; gusts twice as strong on average, and the arm-flex hard
+           clamp replaced with a soft limit it can no longer hit audibly
+     v0.5  wind. Gusts arrive from a random bearing every few seconds and the
+           mobile answers: each rod is a torsional oscillator driven by the
+           DIFFERENCE in wind moment between its two arms, with each board's
+           pull set by how much of its area faces the wind. The whole piece
+           rides a vertical bob, and a bob bends every arm as it passes, so it
+           dances up and down as well as around. Rods are one gauge now, shaded
+           ACROSS their section instead of along it, and a thread comes down
+           from the ceiling.
+     v0.4  round rods with perspective thickness (gauge by load - dropped in
+           v0.5 at Joe's request; stiffness carries the load instead)
+     v0.3  rods bend by beam theory; animals are boards and show their edges
+     v0.2  PhyloPic silhouettes, public domain; equal AREA OF INK per animal;
+           near white / far grey; labels placed last, nearest first
+     v0.1  first build: balance tree, foreshortened rotation, fit-to-screen
+*/
+
+/* A PAGE THAT DIES SILENTLY IS THE WORST KIND. On the wall a thrown exception
+   leaves a black rectangle indistinguishable from a page that has not started;
+   in headless capture it looks exactly like a bug in the physics. Say what
+   happened, on the glass. (Restored 2026-09-16 after a block replacement ate
+   this, the seed and the demo switch in one go - the third time on this project
+   that a multi-line edit has taken the declaration after it. Parse-checking
+   caught nothing, because the result was still valid JavaScript.) */
+window.onerror = function(msg, src, line, col){
+  try {
+    const c = document.getElementById('cv').getContext('2d');
+    c.setTransform(1,0,0,1,0,0);
+    c.fillStyle = '#07080a'; c.fillRect(0, 0, innerWidth, innerHeight);
+    c.fillStyle = '#ff9a9a'; c.font = '26px Menlo, monospace'; c.textAlign = 'left';
+    c.fillText('mobile.html stopped', 48, 90);
+    c.fillStyle = '#e9e4d8'; c.font = '22px Menlo, monospace';
+    c.fillText(String(msg), 48, 130);
+    c.fillText('at line ' + line + ', column ' + col, 48, 162);
+  } catch(e){}
+};
+
+/* ---- controlled experiment (mobile.html?demo) --------------------------
+   Start the mobile in a KNOWN pose - every derived branch to the left, every
+   board flat-on to the viewer, nothing moving - then blow one puff straight
+   into it from where the viewer stands. With every board facing the viewer the
+   torque on a rod reduces to the SUM OF ITS BOARDS' x OFFSETS, so hanging every
+   derived branch to the left should turn every rod the SAME WAY, together. */
+const DEMO = location.search.indexOf('demo') >= 0;
+const DEMO_PUFF_AT = 2.0, DEMO_PUFF_FOR = 2.5, DEMO_PUFF = 3.0;
+
+/* THE SEED, AND WHO GETS A FRESH ONE.
+
+   A viewer opening this page should meet a different seven every time - that is
+   the whole point of a stable. A CAPTURE has the opposite need: ?at=2 and ?at=8
+   are only the same mobile six seconds apart if the animals, the starting
+   angles and the weather all come from the same number.
+
+   So: ?seed=N is that seed. ?at without a seed takes a fixed one, because
+   anything asking for a specific moment wants a repeatable one. Everything
+   else - a person just opening the page - gets a new evening each refresh.
+
+   (For a while the fixed seed was the DEFAULT, left over from building the
+   capture path, so Joe refreshed in Safari and met the same animals every time.
+   A reproducibility aid that reaches the audience has stopped being an aid.) */
+const SEED = (function(){
+  const m = location.search.match(/[?&]seed=(\d+)/);
+  if (m) return parseInt(m[1], 10);
+  if (/[?&]at=/.test(location.search)) return 20260916;   // captures repeat
+  return (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
+})();
+let rndState = SEED >>> 0;
+function rnd(){                                    // mulberry32
+  rndState = (rndState + 0x6D2B79F5) >>> 0;
+  let x = rndState;
+  x = Math.imul(x ^ (x >>> 15), 1 | x);
+  x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+  return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+}
+
+/* ---- the stable --------------------------------------------------------
+   Twenty-eight mammals, eight orders of magnitude apart, each with an adult mass
+   and a public-domain silhouette. The masses are round numbers on purpose -
+   the mass a person pictures when they picture the animal, not a species mean -
+   and the mobile only ever claims RATIOS between kinds.
+
+   Four candidates were fetched and then cut BY LOOKING AT THEM: the giraffe
+   (the one image not in the public domain), the hippopotamus and chimpanzee
+   (art too small to hold up on a 4K panel) and the hedgehog (drawn from above,
+   so it reads as a blob rather than a hedgehog). mobile_art/fetch_phylopic.py
+   refetches the lot; credits.json holds every licence, artist, ink area and
+   centroid. w/h/ink/cx are measured offline because a canvas holding a file://
+   image is tainted and cannot be read back. */
+const STABLE = [
+  { name:'blue whale',         kg:150000,     file:'mobile_art/blue_whale.png', w:1536, h:465, ink:314040, cx:-0.0561 },
+  { name:'sperm whale',        kg:40000,      file:'mobile_art/sperm_whale.png', w:1536, h:659, ink:426556, cx:+0.0631 },
+  { name:'African elephant',   kg:6000,       file:'mobile_art/African_elephant.png', w:3485, h:2446, ink:3741360, cx:+0.0968 },
+  { name:'orca',               kg:4000,       file:'mobile_art/orca.png',      w:1536, h:911, ink:473140, cx:-0.0590 },
+  { name:'white rhinoceros',   kg:2300,       file:'mobile_art/white_rhinoceros.png', w:1536, h:656, ink:613896, cx:-0.0367 },
+  { name:'bison',              kg:800,        file:'mobile_art/bison.png',     w:1536, h:1174, ink:1193812, cx:-0.0169 },
+  { name:'moose',              kg:500,        file:'mobile_art/moose.png',     w:1536, h:1006, ink:527460, cx:-0.0367 },
+  { name:'horse',              kg:500,        file:'mobile_art/horse.png',     w:1536, h:1320, ink:842328, cx:+0.0201 },
+  { name:'polar bear',         kg:450,        file:'mobile_art/polar_bear.png', w:1536, h:718, ink:656468, cx:-0.0307 },
+  { name:'grizzly bear',       kg:300,        file:'mobile_art/grizzly_bear.png', w:1536, h:1071, ink:1094256, cx:-0.0157 },
+  { name:'tiger',              kg:220,        file:'mobile_art/tiger.png',     w:1536, h:688, ink:570532, cx:+0.0490 },
+  { name:'red deer',           kg:200,        file:'mobile_art/red_deer.png',  w:1509, h:1536, ink:740832, cx:+0.0200 },
+  { name:'lion',               kg:190,        file:'mobile_art/lion.png',      w:1536, h:767, ink:503632, cx:+0.0439 },
+  { name:'gorilla',            kg:160,        file:'mobile_art/gorilla.png',   w:1396, h:1536, ink:1106920, cx:-0.0450 },
+  { name:'human',              kg:70,         file:'mobile_art/human.png',     w:817, h:1536, ink:445520, cx:-0.0638 },
+  { name:'cheetah',            kg:50,         file:'mobile_art/cheetah.png',   w:1296, h:1536, ink:737368, cx:-0.1617 },
+  { name:'wolf',               kg:40,         file:'mobile_art/wolf.png',      w:1536, h:833, ink:558452, cx:-0.0003 },
+  { name:'Labrador',           kg:30,         file:'mobile_art/Labrador.png',  w:1281, h:1536, ink:1076392, cx:+0.0619 },
+  { name:'badger',             kg:12,         file:'mobile_art/badger.png',    w:1536, h:756, ink:683544, cx:+0.0503 },
+  { name:'red fox',            kg:6,          file:'mobile_art/red_fox.png',   w:1536, h:1329, ink:892864, cx:+0.0460 },
+  { name:'domestic cat',       kg:4,          file:'mobile_art/domestic_cat.png', w:1536, h:1307, ink:711768, cx:-0.0335 },
+  { name:'rabbit',             kg:2,          file:'mobile_art/rabbit.png',    w:1536, h:1310, ink:845044, cx:-0.0430 },
+  { name:'grey squirrel',      kg:0.5,        file:'mobile_art/grey_squirrel.png', w:1578, h:1318, ink:1025468, cx:-0.0182 },
+  { name:'brown rat',          kg:0.3,        file:'mobile_art/brown_rat.png', w:1536, h:775, ink:493412, cx:+0.0489 },
+  { name:'gerbil',             kg:0.06,       file:'mobile_art/gerbil.png',    w:1536, h:898, ink:610180, cx:+0.1025 },
+  { name:'house mouse',        kg:0.02,       file:'mobile_art/house_mouse.png', w:1536, h:796, ink:540020, cx:+0.0982 },
+  { name:'little brown bat',   kg:0.008,      file:'mobile_art/little_brown_bat.png', w:1536, h:1253, ink:575384, cx:-0.0356 },
+  { name:'Etruscan shrew',     kg:0.002,      file:'mobile_art/Etruscan_shrew.png', w:1141, h:1536, ink:665192, cx:+0.0486 }
+];
+
+/* ---- which seven hang tonight ------------------------------------------
+   NOT seven at random. A mobile is built lightest-first and each animal hangs
+   against the SUM of everything already on it, so a draw is buildable only if
+   every animal is a sane multiple of that running total. Seven picked blindly
+   from this stable give a median worst joint of 100:1 and, one draw in ten,
+   something past 1500:1 - a blue whale among mice asks for a lever of 52,000
+   to 1, which is not a rod, it is a rumour. Measured over 20,000 draws.
+
+   So the draw is built the way the mobile is. Start light; each time choose at
+   random among the animals that would hang between 1.2 and JOINT_CAP times the
+   current total. That failed zero times in 4,000 attempts, still reaches every
+   animal in the stable, and still spans around 80,000 to 1 inside one mobile -
+   the drama is in the span, and it survives being buildable. */
+const JOINT_CAP = 30;
+function drawSeven(){
+  const light = [...STABLE].sort((a, b) => a.kg - b.kg).slice(0, Math.ceil(STABLE.length / 2));
+  for (let attempt = 0; attempt < 400; attempt++){
+    const chosen = [light[Math.floor(rnd() * light.length)]];
+    let total = chosen[0].kg;
+    while (chosen.length < 7){
+      const room = STABLE.filter(c => !chosen.includes(c) &&
+                                 c.kg / total >= 1.2 && c.kg / total <= JOINT_CAP);
+      if (!room.length) break;
+      const pick = room[Math.floor(rnd() * room.length)];
+      chosen.push(pick); total += pick.kg;
+    }
+    if (chosen.length === 7) return chosen;
+  }
+  return [...STABLE].sort((a, b) => b.kg - a.kg).slice(0, 7);   // never reached in testing
+}
+/* ---- rotation navigation (remote D-pad) --------------------------------
+   Right steps to the next piece in the wall's rotation, left to the previous.
+   Wall.step() walks the ring honouring the setup screen's switches; the list
+   below is only the fallback for a page opened outside the wall, where there
+   are no settings to read. */
+const ROTATION = ['index.html'];   // standalone: nowhere else to go
+function rotateTo(step){
+  const want = (window.Wall && Wall.step) ? Wall.step(step) : null;
+  if (want) { location.href = want; return; }
+  const here = (location.pathname.split('/').pop() || 'kiosk.html');
+  let i = ROTATION.indexOf(here);
+  if (i < 0) i = 0;
+  location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
+}
+
+/* A mobile never finishes, so the wall gives it MINUTES rather than a count of
+   anything, and the setup screen can offer "leave it on". */
+const CONFIG = { minutes: 5, nextPage: '' /* standalone: nowhere to hand on to; start again */ };
+const PINNED = /[?&]pin\b/.test(location.search);
+
+/* WHAT THE WATCHDOG SHOULD EXPECT: seven small PNGs and nothing computed before
+   the first frame, so the once-per-visit cost is a second at most. */
+window.WALL_SECONDS_ONCE = 2;
+
+/* ---- what hangs tonight: animals, or boats -----------------------------
+   Two quite different mobiles out of one machine, chosen at random the way the
+   cast and the palette are. ?mode=boats or ?mode=animals forces it.
+
+   THE ANIMALS hang on a CATERPILLAR: each rod carries one animal against
+   everything lighter than it, so every leaf is at its own depth and the whole
+   thing cascades down the screen. That shape comes from the data - masses eight
+   orders of magnitude apart cannot be paired any other way.
+
+   THE BOATS hang on a PERFECT BINARY tree - two children at every joint, all
+   the way down - so 2^n of them end at the same level and lie in one plane.
+   With nothing to encode they can afford to be regular, which is what a Calder
+   actually looks like. They are not all identical: each is drawn a little
+   heavier or lighter than its neighbour, which nudges every pivot off centre
+   and, more importantly, gives the wind something to push against. A perfectly
+   symmetric rod has equal sail either side of its axis and therefore no turning
+   moment at all - it would hang there, dead, while the animals danced. */
+const MODE = /[?&]mode=boats/.test(location.search) ? 'boats'
+           : /[?&]mode=animals/.test(location.search) ? 'animals'
+           : (rnd() < 0.5 ? 'animals' : 'boats');
+
+const BOAT_LEVELS = 2 + (rnd() < 0.45 ? 1 : 0);        // 4 boats, or 8
+
+function makeBoat(){
+  return { leaf:true, boat:true, name:'boat',
+           kg: 0.72 + rnd() * 0.56,                     // near equal, never equal
+           n:1, I:0, depth:0,
+           sx:0, sz:0, vx:0, vz:0, ax_:0, az_:0,
+           tw: rnd() * Math.PI * 2, twV: 0,
+           cx: (rnd() - 0.5) * 0.10 };                  // each hull hung a touch off centre
+}
+
+/* A ROD OF FIXED LENGTH WITH A MOVING PIVOT, which is the other way to build a
+   balance and the right one here. The animals' rods grow their long arm to
+   honour ratios of 30:1; boats sit within a whisker of each other, so a fixed
+   span with the pivot placed by the masses is both simpler and more like the
+   real thing - a wire cut to length, balanced by where you hang it. */
+function buildBoats(levels){
+  function node(level){
+    if (level === 0) return makeBoat();
+    const a = node(level - 1), b = node(level - 1);
+    const span = BOAT_SPAN * Math.pow(BOAT_SPAN_SHRINK, levels - level);
+    const da = span * b.kg / (a.kg + b.kg);             // heavier side, shorter arm
+    const db = span * a.kg / (a.kg + b.kg);
+    return {
+      leaf:false, a, b, da, db,
+      kg: a.kg + b.kg,
+      ratio: Math.max(a.kg, b.kg) / Math.min(a.kg, b.kg),
+      n: a.n + b.n,
+      I: a.I + a.n*da*da + b.I + b.n*db*db,
+      th: rnd() * Math.PI * 2, om: 0,
+      flex: 1, flexV: 0, flexW: 4.2 + rnd() * 2.2,
+      depth: 1 + a.depth,
+      sx:0, sz:0, vx:0, vz:0, ax_:0, az_:0,
+    };
+  }
+  const root = node(levels);
+  swingLengths(root, CEILING);
+  return root;
+}
+
+const MAMMALS = drawSeven();
+
+
+const ROD_LONG   = 430;    // the LIGHT side of every rod, layout px
+const MIN_SHORT  = 16;     // ... so the heavy side's thread never sits ON the pivot
+const GAP_ANIMALS = 168;   // thread from a rod down to whatever hangs off it
+const CARD_R     = 74;     // fallback size before the art loads
+const LABEL_DROP = 96;     // room under a board for its name and its mass
+const LABEL_PAD  = 7;      // how far the plate is drawn beyond its words
+const CEILING    = 170;    // how far above the top rod the ceiling thread starts
+
+/* DERIVED CONSTANTS GO AFTER THE ONES THEY DERIVE FROM, which sounds too
+   obvious to write down until a block move puts BOAT_SPAN - which is a
+   multiple of ROD_LONG - fourteen lines above it. The page threw before it
+   drew anything, twice, and the on-screen error handler is the only reason
+   that cost two looks instead of twenty. */
+/* A FLEET WANTS DIFFERENT PROPORTIONS FROM A CASCADE OF ANIMALS (Joe,
+   2026-09-16): wide rods and short wires, so the thing reads as one broad
+   horizontal object rather than a tall chain. The animals keep their own. */
+const SAG_ANIMALS = 0.07;                  // the long arm's tip drop, per its length
+const BOAT_SPAN_SHRINK = 0.72;                          // each level narrower
+const BOAT_SPAN  = ROD_LONG * 1.55;                     // ... but starting wider
+const BOAT_GAP   = 96;                                  // shorter wires
+const BOAT_LIMP  = 1 / 0.75;                            // rods 25% less stiff
+
+const GAP      = MODE === 'boats' ? BOAT_GAP : GAP_ANIMALS;
+const SAG_FRAC = MODE === 'boats' ? SAG_ANIMALS * BOAT_LIMP : SAG_ANIMALS;
+
+/* ---- the silhouettes ---------------------------------------------------
+   PhyloPic ships black-on-transparent PNGs, invisible on this ground, so each
+   is re-inked once at load into two canvases: the sawn FACE and the darker
+   EDGE grain you see when a board turns. All seven are public domain (CC0 or
+   PD Mark); mobile_art/credits.json holds licence and artist for each. */
+/* ---- one colour per animal ---------------------------------------------
+   These are the dataviz reference palette's DARK steps, the eight-hue
+   categorical set with its green dropped. They are not a matter of taste:
+   validated against this page's own ground (#080a0e) they clear every hard
+   gate on the adjacent pairlist - worst CVD separation 8.4 (target 8), worst
+   normal-vision separation 19.3 (floor 15), all seven at or above 3:1 contrast.
+
+   I TRIED TO BE TASTEFUL FIRST AND IT FAILED THE MEASUREMENT. A set of muted
+   sages, terracottas and dusty roses - exactly what "painted wood" suggests -
+   came back with five of its seven colours BELOW THE CHROMA FLOOR, which is the
+   validator's way of saying they read as grey, plus CVD separations around 2
+   where 8 is the target. Eyeballing would never have caught it. On this near
+   black ground the saturated steps do not read as loud; the haze and the
+   lighting soften them in place.
+
+   HONEST LIMIT: under the ALL-PAIRS test - which is the right test here, since
+   any two animals can end up side by side - seven hues cannot clear the floors,
+   and the palette's own documentation says no ordering of eight can. Magenta
+   against aqua comes out at 1.6 for a deuteranope. That is acceptable ONLY
+   because colour carries no information on this page: every animal is a
+   distinct silhouette with its name printed under it, so colour is decoration
+   over an identity that is already unambiguous twice over. If colour ever
+   becomes the encoding here, this palette has to shrink to three. */
+/* With the cast changing every night, a colour cannot belong to a species -
+   there are twenty-six of them and seven validated hues. It belongs to a
+   POSITION instead: heaviest animal takes the first hue, lightest the last.
+   That is also the arrangement the validation is about. The palette clears its
+   gates on the ADJACENT pairlist, and in a mobile the animals that hang next to
+   each other are the ones next to each other in mass - so mapping the hue order
+   onto the mass order puts the validated adjacencies exactly where the eye
+   makes its comparisons. */
+/* TWO PALETTES, AND THE EVENING PICKS ONE.
+
+   CATEGORICAL is the dataviz reference set's dark steps (green dropped),
+   validated against this ground: worst colour-blind separation 8.4 against a
+   target of 8, worst normal-vision 19.3 against a floor of 15, everything at
+   or above 3:1 contrast. Seven things that look like seven things.
+
+   MOSAIC is the palette from mosaic_maker.html - eight HSL families sampled
+   from one painting, with its near-black `dark` family dropped and the rest
+   lifted to sit on this ground. It FAILS the same validator, and not by a
+   little: six of its seven are warm hues within delta-E 6 to 7 of each other.
+   That is not a defect, it is what a harmonic palette IS - everything sampled
+   from a single painting belongs to a single light. It is only a defect when
+   colour has to carry information, and here it carries none: every animal is a
+   distinct silhouette with its name and mass printed underneath.
+
+   So the page keeps both and draws one, the way it draws the cast. If colour
+   ever becomes the encoding on this page, the mosaic set has to go and the
+   categorical one has to shrink to three. */
+const PALETTES = {
+  categorical: ['#3987e5', '#9085e9', '#d95926', '#c98500',
+                '#e66767', '#d55181', '#199e70'],
+  mosaic:      ['#7ec2ca', '#e08a4b', '#e7dbab', '#d9a53f',
+                '#b2b46c', '#c79a63', '#dcc072'],
+};
+const PALETTE_NAME = /[?&]palette=mosaic/.test(location.search) ? 'mosaic'
+                   : /[?&]palette=categorical/.test(location.search) ? 'categorical'
+                   : (rnd() < 0.5 ? 'categorical' : 'mosaic');
+const PALETTE = PALETTES[PALETTE_NAME]; // aqua
+const ANIMAL_COLOUR = Object.fromEntries(
+  [...MAMMALS].sort((a, b) => b.kg - a.kg).map((c, i) => [c.name, PALETTE[i]]));
+
+/* every boat gets a hull colour from the same evening's palette, walked round
+   so that neighbours in the fleet differ */
+let boatHue = 0;
+function nextBoatColour(){ return PALETTE[(boatHue++) % PALETTE.length]; }
+const FALLBACK = '#e6dcc6';
+
+/* a board is one piece of painted stock, so its sawn edge and its lit face are
+   the same colour taken darker and lighter - not a separate wood underneath */
+function shade(hex, f){
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, Math.round((n >> 16 & 255) * f));
+  const g = Math.min(255, Math.round((n >> 8 & 255) * f));
+  const b = Math.min(255, Math.round((n & 255) * f));
+  return 'rgb(' + r + ',' + g + ',' + b + ')';
+}
+function toward(hex, to, f){
+  const n = parseInt(hex.slice(1), 16), m = parseInt(to.slice(1), 16);
+  const mix = (a, b) => Math.round(a + (b - a) * f);
+  return 'rgb(' + mix(n >> 16 & 255, m >> 16 & 255) + ',' +
+                  mix(n >> 8 & 255, m >> 8 & 255) + ',' +
+                  mix(n & 255, m & 255) + ')';
+}
+const THICK = 15;                          // board thickness, layout px
+// only the seven drawn are ever loaded, and none at all for boats
+const ART = MODE === 'boats' ? {} : Object.fromEntries(MAMMALS.map(c => [c.name, c.file]));
+const INK_ART = {};
+let artPending = Object.keys(ART).length;
+for (const [name, src] of Object.entries(ART)){
+  const img = new Image();
+  img.onload = () => {
+    const c = ANIMAL_COLOUR[name] || FALLBACK;
+    INK_ART[name] = { face:    tint(img, c),
+                      edge:    tint(img, shade(c, 0.42)),
+                      lit:     tint(img, toward(c, '#ffffff', 0.55)),
+                      edgeLit: tint(img, toward(c, '#ffffff', 0.22)),
+                      haze:    tint(img, 'rgb(' + HAZE.join(',') + ')') };
+    if (--artPending === 0) resize();      // extents change once the art is real
+  };
+  img.onerror = () => { artPending--; console.warn('missing silhouette', src); };
+  img.src = src;
+}
+function tint(img, colour){
+  const o = document.createElement('canvas');
+  o.width = img.naturalWidth; o.height = img.naturalHeight;
+  const oc = o.getContext('2d');
+  oc.drawImage(img, 0, 0);
+  oc.globalCompositeOperation = 'source-in';
+  oc.fillStyle = colour; oc.fillRect(0, 0, o.width, o.height);
+  return o;
+}
+
+/* HOW MUCH ANIMAL IS IN EACH PICTURE, counted once, offline.
+
+   "The same size" cannot mean the same bounding box when a whale is three times
+   longer than it is tall and a human is the reverse: the box gave the whale a
+   third of the ink of the dog, so the largest animal alive read as one of the
+   smallest things on the page. Each silhouette is scaled to the same AREA OF
+   INK instead - which also makes the wind fair, since equal area means equal
+   pull, and the only thing left to vary is how square-on each board is.
+
+   The page cannot count this itself: a canvas with a file:// image drawn into
+   it is tainted, so getImageData throws, and the wall serves from file://.
+   mobile_art/fetch_phylopic.py counts the pixels and writes credits.json. */
+const INK = Object.fromEntries(STABLE.map(c => [c.name, c]));
+const INK_TARGET = 7700;                   // px^2 of ink per animal at scale 1
+function cardBox(name){
+  const a = INK[name];
+  if (!a) return { w: 2*CARD_R, h: 2*CARD_R };
+  const k = Math.sqrt(INK_TARGET / a.ink);
+  return { w: a.w * k, h: a.h * k };
+}
+
+/* ---- build the balance tree -------------------------------------------
+   Fold the animals in lightest-first, so each new joint hangs everything so far
+   against the next animal up. Each node also carries what the wind needs: how
+   many boards hang on each side, how far out they are, and the subtree's moment
+   of inertia about this rod's own vertical axis (parallel axis, every board
+   weighing the same - see the note at the top of the file). */
+function build(){
+  const sorted = [...MAMMALS].sort((a,b) => a.kg - b.kg);
+  const board = (m) => ({ leaf:true, name:m.name, kg:m.kg, n:1, I:0, depth:0,
+                          sx:0, sz:0, vx:0, vz:0, ax_:0, az_:0,
+                          tw: rnd() * Math.PI * 2, twV: 0,
+                          cx: (INK[m.name] || { cx:0 }).cx });
+  let node = board(sorted[0]);
+  for (let i = 1; i < sorted.length; i++){
+    const leaf = board(sorted[i]);
+    const heavy = leaf.kg >= node.kg ? leaf : node;
+    const light = heavy === leaf ? node : leaf;
+    const ratio = heavy.kg / light.kg;
+    /* The light side gets the long arm; the heavy side is pulled in to the
+       pivot by the same ratio. That is the whole physics of the page - so the
+       arms are derived FROM the ratio, never clipped to fit.
+
+       THIS WAS QUIETLY WRONG BEFORE. The long arm was fixed at ROD_LONG and the
+       short one was floored at MIN_SHORT, which silently breaks the balance as
+       soon as the ratio passes ROD_LONG/MIN_SHORT - about 27:1. The old fixed
+       cast had a 33:1 joint, so the steepest rod on the page was drawn at 27:1
+       and did not balance at all. With a cast drawn at random it would have
+       happened constantly. Now the SHORT arm is floored and the long arm is
+       whatever the ratio demands, so every rod balances exactly and steep ones
+       simply reach further. */
+    const dHeavy = Math.max(MIN_SHORT, ROD_LONG / ratio);
+    const dLight = dHeavy * ratio;
+    // Alternate which way the heavy animal hangs, so the mobile zig-zags down
+    // the screen instead of walking off one side of it.
+    // Normally the heavy animal alternates sides so the mobile zig-zags down
+    // the screen. In the experiment the DERIVED branch - everything built so
+    // far - always hangs to the left, so every rod is loaded the same way.
+    const heavyLeft = DEMO ? (heavy === node) : (i % 2 === 0);
+    const a = heavyLeft ? heavy : light, b = heavyLeft ? light : heavy;
+    const da = heavyLeft ? dHeavy : dLight, db = heavyLeft ? dLight : dHeavy;
+    node = {
+      leaf:false, kg: heavy.kg + light.kg, ratio, a, b, da, db,
+      n: a.n + b.n,
+      I: a.I + a.n*da*da + b.I + b.n*db*db,   // parallel axis, equal-mass boards
+      th: DEMO ? 0 : rnd() * Math.PI * 2,           // where this rod is facing
+      om: 0,                                  // and how fast it is turning
+      flex: 1, flexV: 0,                      // how bent its arms are, 1 = at rest
+      flexW: 4.2 + rnd() * 2.2,               // its own springiness, rad/s
+      depth: 1 + Math.max(a.depth || 0, b.depth || 0),
+      sx:0, sz:0, vx:0, vz:0, ax_:0, az_:0,    // how far it leans, and where that puts it
+    };
+  }
+  swingLengths(node, CEILING);
+  return node;
+}
+
+/* ---- swing -------------------------------------------------------------
+   WHAT WAS MISSING (Joe, 2026-09-16): the rods turned, the piece bobbed, the
+   arms flexed - and nothing SWUNG. A gust that hits a real mobile does not
+   only spin it; the whole assembly sets off sideways on its thread, and every
+   sub-assembly sets off on its own. That is most of the horizontal movement a
+   person expects to see, and none of it was here.
+
+   Each hanging thing is now a pendulum on its own thread. A compound pendulum
+   does not swing at the period its string length suggests - it swings at the
+   period the distance to its CENTRE OF MASS suggests - so a rod with three
+   levels of mobile hanging under it is slow and heavy, while a single board on
+   the end of a thread is quick. Approximating that centre as some way down the
+   subtree gives exactly that ordering, for free.
+
+   The drop shortens as a pendulum swings out, which is why the piece lifts as
+   it goes and drops as it comes back: pendulum rise, and it couples the new
+   horizontal motion into the vertical dance that was already there. */
+function swingLengths(n, thread){
+  n.Leff = thread + 0.62 * (n.depth || 0) * GAP;      // thread + reach to the mass
+  n.thread = thread;
+  if (!n.leaf){ swingLengths(n.a, GAP); swingLengths(n.b, GAP); }
+}
+
+/* ---- how far a loaded rod bends ---------------------------------------
+   Euler-Bernoulli, tip-loaded cantilever: each arm is clamped at the pivot and
+   carries its load at the far end, so its tip drops by
+
+       delta = P L^3 / (3 E I)
+
+   and the curve between is delta * (3u^2 - u^3) / 2 along the arm. That shape
+   leaves the pivot HORIZONTAL, which is what being clamped means, and is why a
+   real rod looks nothing like an arc.
+
+   THE ASYMMETRY IS FREE, AND IT IS THE POINT. The rod balances, so P*L is the
+   same on both arms. Put P = T/L into the formula and delta = T L^2 / (3 E I):
+   the drop goes as the SQUARE of the arm. On the 33:1 joint the long arm bends
+   about eleven hundred times as far as the stubby one. The gerbil's arm droops
+   and the rabbit's barely moves, for exactly the reason the page is about.
+
+   EVERY ROD IS THE SAME GAUGE (Joe, 2026-09-16), so stiffness carries the load
+   instead: E*I is chosen per rod, which is what a maker does when he picks
+   spring steel for the top and brass wire for the bottom. Normalising each rod
+   so its LONG arm drops a set fraction of its own length is that choice, and it
+   leaves the L^2 ratio - the part that is physics - untouched. */
+// SAG_ANIMALS is declared with the other constants above, because the boats'
+// stiffness is derived from it and a derivation must come after its input.
+function tipDrop(node, d){
+  const dLong = Math.max(node.da, node.db);
+  return SAG_FRAC * dLong * (d / dLong) * (d / dLong);
+}
+
+/* ---- wind --------------------------------------------------------------
+   A puff arrives from a random bearing every few seconds, rises and dies away.
+   Between puffs a faint breeze keeps everything alive, because a mobile in a
+   real room is never quite still.
+
+   WHAT A PUFF DOES TO ONE ROD. The wind pushes on both ends at once, so what
+   TURNS the rod is the difference between the two moments, not their sum:
+
+       torque = W * drag(phi - theta) * (nB * dB  -  nA * dA)
+
+   A board side-on to the wind catches nothing, so drag goes as sin|sin| of the
+   angle between the wind and the board's face. That is where cross-sectional
+   area enters, and it is also why the mobile keeps turning rather than
+   settling: a rod that swings square to the wind is a rod about to be pushed
+   hardest.
+
+   The threads have almost no twist in them, so there is no restoring spring to
+   speak of; what stops a rod is drag. Each rod is also dragged a little by its
+   parent's turning, which is what carries a disturbance DOWN the mobile
+   instead of leaving every rod in a world of its own. */
+const wind = { dir:0, mag:0, next:2, gust:0, gustDir:0, gustT:0, gustLen:0 };
+const WIND_GAIN = 0.0016;    // torque per unit (boards x lever) per unit wind
+/* A SWIVEL HAS ALMOST NO FRICTION IN IT, and these two numbers had forgotten
+   that. At 0.55 and 0.45 the effective damping on a rod's spin was about 1 per
+   second - a brake, not a bearing - and the measured result was that a rod
+   turned five to twenty degrees in the best ten seconds of ten minutes, which
+   is no rotation at all to anyone watching. What actually slows a hanging rod
+   is air, and air is weak. At 0.12 and 0.10 the same gusts turn the rods
+   through one and a half to seven revolutions in ten minutes, and a board's
+   foreshortening covers 38-115% of its full range inside any ten seconds -
+   which is the turning-on-its-swivel that was missing. */
+const DRAG      = 0.12;      // air on a turning rod, and nothing else
+const COUPLE    = 0.10;      // a swivel passes on very little of its parent's turn
+const FLEX_Z    = 0.16;      // damping on the arm-bending oscillation
+const BOB_W     = 3.1, BOB_Z = 0.13;       // the whole piece riding up and down
+
+let bob = 0, bobV = 0, bobA = 0;
+
+function stepWind(dt, t){
+  if (DEMO){
+    // one puff, blown from where the viewer stands straight into the mobile:
+    // bearing pi/2 is the +z direction, which is away from the eye
+    const u = (t - DEMO_PUFF_AT) / DEMO_PUFF_FOR;
+    wind.dir = Math.PI / 2;
+    wind.mag = (u < 0 || u > 1) ? 0 : DEMO_PUFF * Math.sin(Math.PI * u);
+    return wind.mag / DEMO_PUFF;
+  }
+  if (t >= wind.next){                      // time for another puff
+    wind.gustDir = rnd() * Math.PI * 2;
+    // DOUBLED 2026-09-16 (Joe): mean strength 1.3 -> 2.6, same relative spread.
+    // Strength, not energy - energy would be a factor of root two - and the ask
+    // was to see what happens, which wants the bigger of the two.
+    wind.gust    = 1.0 + rnd() * 3.2;
+    wind.gustT   = 0;
+    wind.gustLen = 1.6 + rnd() * 2.4;
+    wind.next    = t + 5 + rnd() * 9;
+  }
+  wind.gustT += dt;
+  // a puff: quick to arrive, slower to leave
+  const u = Math.min(1, wind.gustT / wind.gustLen);
+  const env = wind.gustT > wind.gustLen ? 0 : Math.sin(Math.PI * u) * (1 - u * 0.45);
+  const breeze = 0.10 + 0.05 * Math.sin(t * 0.21) * Math.sin(t * 0.13);
+  wind.mag = breeze + wind.gust * env;
+  wind.dir = wind.gustDir + 0.35 * Math.sin(t * 0.17);
+  return env * wind.gust;                   // how hard the puff is pushing right now
+}
+
+/* the whole piece rides up and down on the springiness of its own rods */
+function stepBob(dt, push){
+  const a = -BOB_W*BOB_W*bob - 2*BOB_Z*BOB_W*bobV + push * 85;
+  bobV += a * dt; bob += bobV * dt;
+  bobA = a;
+}
+
+/* one rod: turn it, and let its arms flap. aIn is the vertical acceleration
+   arriving from above, which is what makes a bob travel DOWN the mobile. */
+/* THE STATE IS AN ANGLE, NOT A DISPLACEMENT, and getting that wrong cost a
+   measurement to find. The first version integrated the sideways displacement
+   directly, taking its period from the distance to the centre of mass (right)
+   and its limit from the thread length (also right) - but those are two
+   different lengths, so a deep rod, swinging slowly on a long effective
+   pendulum, ran straight past the end of its own short thread. Measured over
+   ten minutes: the rods pinned against that limit 42,174 times.
+
+   In angle, the two lengths do their own jobs and stop fighting. The period
+   comes from Leff, the displacement is thread * sin(angle) and so can never
+   exceed the thread, and the steady angle under a given wind works out
+   independent of length - so every part of the mobile leans about as far, and
+   only the SPEED differs: quick little boards, slow heavy assemblies. */
+const SWING_G = 1420;       // how hard gravity pulls a swung thing back
+const SWING_K = 140;        // wind push per unit wind
+const SWING_Z = 0.14;       // damping. Gusts land right on the boards' own
+                            // period, so this is what keeps resonance in hand
+
+function stepSwing(node, dt){
+  const w2 = SWING_G / node.Leff, w = Math.sqrt(w2), c = 2 * SWING_Z * w;
+  const ax = (SWING_K * wind.mag * Math.cos(wind.dir)) / node.Leff;
+  const az = (SWING_K * wind.mag * Math.sin(wind.dir)) / node.Leff;
+  node.vx += (ax - w2 * node.ax_ - c * node.vx) * dt; node.ax_ += node.vx * dt;
+  node.vz += (az - w2 * node.az_ - c * node.vz) * dt; node.az_ += node.vz * dt;
+  // a soft ceiling on how far anything leans, so nothing ever hits a stop
+  const lean = (a) => 0.80 * Math.tanh(a / 0.80);
+  node.sx = node.thread * Math.sin(lean(node.ax_));
+  node.sz = node.thread * Math.sin(lean(node.az_));
+}
+
+/* THE WIND IS SUMMED BOARD BY BOARD (Joe, 2026-09-16).
+
+   It used to be counted as (number of boards x arm length) with ONE facing
+   assumed for a whole subtree. That got the headline right - on the rod with
+   the human against the Labrador, rabbit and gerbil, those three carry 88% of
+   the wind moment and the human 12% - but it was up to 40% out on other rods,
+   and it had a worse habit: with a single facing, the torque went to zero the
+   moment a rod lined up with the wind. Every rod weathervaned into alignment
+   and sat there, which is precisely the not-turning that prompted this.
+
+   Now every board contributes at its OWN facing, set by the rod it hangs from,
+   and at its own true position relative to this rod's axis:
+
+       torque = SUM over boards of  A |sin(phi - face)| * (r x wind)_z
+
+   Boards deep in a subtree face all sorts of ways, so the sum does not vanish
+   when the rod happens to line up, and the assembly keeps being driven. */
+function boardsUnder(node, out, ox, oz, face){
+  if (node.leaf){ out.push({ x:ox, z:oz, face }); return out; }
+  const c = Math.cos(node.th), s = Math.sin(node.th);
+  boardsUnder(node.a, out, ox - node.da * c, oz - node.da * s, node.th);
+  boardsUnder(node.b, out, ox + node.db * c, oz + node.db * s, node.th);
+  return out;
+}
+function windTorque(node){
+  const bs = boardsUnder(node, [], 0, 0, node.th);
+  const cw = Math.cos(wind.dir), sw = Math.sin(wind.dir);
+  let T = 0;
+  for (const b of bs){
+    // every board is the same area, so area drops out and only its facing and
+    // its position matter
+    T += Math.abs(Math.sin(wind.dir - b.face)) * (b.x * sw - b.z * cw);
+  }
+  return T;
+}
+
+/* ---- a board twists on its own thread ----------------------------------
+   Until now an animal faced wherever its rod faced, as if it were welded on.
+   It is not: it hangs on a thread and is free to turn, and it turns for a
+   reason - no cut-out is balanced about the point it is hung from. The ink
+   centroid of each silhouette was measured off the art (mobile_art/credits.json):
+   the gerbil is 10% of its width lopsided and the elephant 10% the other way,
+   while the horse is nearly true at 2%. That offset is the lever the wind has
+   on it, so each animal has its own appetite for twisting.
+
+   A twisted thread pulls back, so there is a real spring here toward whatever
+   its rod is doing - unlike the rods themselves, which hang on swivels and have
+   almost none. That is why boards wander a few tens of degrees and return,
+   while a rod will turn round and round. */
+const TWIST_GAIN = 0.0065, TWIST_DRAG = 0.55, TWIST_SPRING = 0.42;
+
+function stepNode(node, dt, omParent, aIn, thParent){
+  stepSwing(node, dt);
+  if (node.leaf){
+    const rel = wind.dir - node.tw;
+    const drag = Math.sin(rel) * Math.abs(Math.sin(rel));
+    const lever = node.cx * cardBox(node.name).w;      // signed, layout px
+    const a = wind.mag * drag * lever * TWIST_GAIN
+            - TWIST_DRAG * node.twV
+            + TWIST_SPRING * Math.sin(thParent - node.tw);
+    node.twV += a * dt; node.tw += node.twV * dt;
+    return;
+  }
+  const alpha = wind.mag * windTorque(node) * WIND_GAIN / Math.max(1, node.I / 20000)
+              - DRAG * node.om
+              + COUPLE * (omParent - node.om);
+  node.om += alpha * dt;
+  node.th += node.om * dt;
+
+  // the arms bend more when the piece is accelerating downward, less when up
+  const w = node.flexW;
+  const fa = -w*w*(node.flex - 1) - 2*FLEX_Z*w*node.flexV - aIn * 0.0042 * w;
+  node.flexV += fa * dt; node.flex += node.flexV * dt;
+
+  // what the tips of THIS rod hand down to whatever hangs off them
+  const aOut = aIn + fa * tipDrop(node, Math.max(node.da, node.db)) * 0.5;
+  stepNode(node.a, dt, node.om, aOut, node.th);
+  stepNode(node.b, dt, node.om, aOut, node.th);
+}
+
+/* ---- measure, so the whole mobile fits the glass ------------------------ */
+function extent(node, x, y, box){
+  const bx = !node.leaf ? { w: 2*CARD_R, h: 0 }
+           : node.boat ? { w: HULL_L, h: MAST_H + HULL_D + 20 }
+           : cardBox(node.name);
+  box.x0 = Math.min(box.x0, x - bx.w/2); box.x1 = Math.max(box.x1, x + bx.w/2);
+  box.y0 = Math.min(box.y0, y - 46);
+  if (node.leaf) box.leafY = Math.max(box.leafY, y);   // where the boats hang
+  box.y1 = Math.max(box.y1, y + (node.leaf ? bx.h + LABEL_DROP : 0));
+  if (node.leaf) return box;
+  extent(node.a, x - node.da, y + tipDrop(node, node.da) + GAP, box);
+  extent(node.b, x + node.db, y + tipDrop(node, node.db) + GAP, box);
+  return box;
+}
+
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+let W = 0, H = 0, root = MODE === 'boats' ? buildBoats(BOAT_LEVELS) : build(), fit = { s:1, x:0, y:0 };
+
+function resize(){
+  W = cv.width = innerWidth; H = cv.height = innerHeight;
+  const b = extent(root, 0, 0, { x0:1e9, x1:-1e9, y0:1e9, y1:-1e9, leafY:-1e9 });
+  const margin = 90, top = 86 + CEILING * 0.5;   // no title to clear any more
+  const s = Math.min((W - margin*2) / (b.x1 - b.x0), (H - top - margin) / (b.y1 - b.y0));
+  /* The cap stops a small mobile being blown up past the point where its own
+     line weights look right. A four-boat fleet is small enough to hit it, and
+     sat in the middle of the screen looking lost, so it is no longer 1.15. */
+  fit.s = Math.min(s, 2.1);
+  fit.x = W/2 - ((b.x0 + b.x1)/2) * fit.s;
+  fit.y = top - b.y0 * fit.s;
+  /* THE FLEET HANGS AT MID-HEIGHT (Joe, 2026-09-16). Every boat is at the same
+     level, so that level is the piece's horizon and belongs on the centre line
+     rather than wherever the bounding box happened to put it. Never so far up
+     that the ceiling thread leaves the screen. */
+  if (MODE === 'boats')
+    fit.y = Math.max(top - b.y0 * fit.s, H / 2 - b.leafY * fit.s);
+}
+addEventListener('resize', resize);
+
+/* ---- collect, then paint back to front ---------------------------------
+   Drawing straight down the tree put whichever animal came later on top, so a
+   rod turned edge-on had its two boards fighting for the same pixels. Each rod
+   carries its children in DEPTH by d*sin(theta), so there is a real z to sort
+   on and near boards overlap far ones. */
+function collect(node, x, y, z, s, out, turn, turnSin){
+  if (node.leaf){
+    // its own twist, not the rod's - it hangs on a thread, not a bracket
+    out.push({ kind:'card', node, x, y, z,
+               turn: Math.cos(node.tw), turnSin: Math.sin(node.tw) });
+    return;
+  }
+  const c = Math.cos(node.th), sn = Math.sin(node.th);
+  const xa = x - node.da * c * s, xb = x + node.db * c * s;
+  const za = z - node.da * sn * s, zb = z + node.db * sn * s;
+  // the tips are where the BENT rod ends, and how bent it is right now is
+  // node.flex, which the wind keeps shaking
+  const fd = flexDrawn(node.flex);
+  const ya = y + tipDrop(node, node.da) * fd * s;
+  const yb = y + tipDrop(node, node.db) * fd * s;
+  // where each child has swung to, and how far the thread therefore reaches
+  // DOWN - a pendulum swung out hangs higher than one at rest
+  const ka = hang(node.a, xa, ya, za, s), kb = hang(node.b, xb, yb, zb, s);
+  out.push({ kind:'rod', node, x, y, z, xa, xb, za, zb, ya, yb, s, ka, kb });
+  collect(node.a, ka.x, ka.y, ka.z, s, out, c, sn);
+  collect(node.b, kb.x, kb.y, kb.z, s, out, c, sn);
+}
+
+function hang(child, tipX, tipY, tipZ, s){
+  const r2 = child.sx*child.sx + child.sz*child.sz;
+  const drop = Math.sqrt(Math.max(0, child.thread*child.thread - r2));
+  return { x: tipX + child.sx * s, y: tipY + drop * s, z: tipZ + child.sz * s };
+}
+
+/* HOW BENT AN ARM IS ALLOWED TO LOOK.
+
+   The flex oscillator ran into a hard clamp once the gusts were doubled - 241
+   times in ten minutes on the lightest rod, which on screen is an arm that
+   springs and then stops dead against nothing. So the state is left alone and
+   the SATURATION happens at drawing time: small excursions pass through
+   untouched, large ones bend over and asymptote, and there is no stop to see.
+   Values below 1 are a real elastic response, not an error - an arm flexes
+   upward when the piece is thrown downward. */
+function flexDrawn(f){ return 1 + 1.2 * Math.tanh((f - 1) / 1.2); }
+
+/* THE AIR HAS SOMETHING IN IT. Aerial perspective, which is the oldest depth
+   cue there is: distance does not simply darken a thing, it washes it toward
+   the colour of the air between. A cool slate reads as depth on this ground in
+   a way that fading to black does not - black just looks like less light. */
+const HAZE = [30, 37, 47];
+/* THE PLATE HAS TO BE THE GROUND AT THAT HEIGHT, not a flat approximation to
+   it. One colour for the whole screen read as a row of faint rectangles, which
+   is worse than the overlap it was hiding: a box you can see is a box. These
+   are the same stops the background gradient is painted from, sampled at the
+   label's own height, so the plate is invisible and only its effect shows. */
+const AIR_STOPS = [[0, [10, 13, 18]], [0.62, [8, 10, 14]], [1, [6, 7, 10]]];
+function groundAt(yScreen){
+  const u = Math.max(0, Math.min(1, yScreen / H));
+  for (let i = 1; i < AIR_STOPS.length; i++){
+    const [u1, c1] = AIR_STOPS[i], [u0, c0] = AIR_STOPS[i - 1];
+    if (u <= u1){
+      const f = (u - u0) / (u1 - u0);
+      return 'rgb(' + c0.map((v, j) => Math.round(v + (c1[j] - v) * f)).join(',') + ')';
+    }
+  }
+  return 'rgb(6,7,10)';
+}
+
+/* NEAR IS WHITE, FAR IS HAZED. z is positive going away from the viewer. */
+function depthAlpha(z, s){
+  const span = ROD_LONG * s * 1.6;
+  const zn = Math.max(-1, Math.min(1, z / span));
+  return 1 - 0.58 * (zn + 1) / 2;
+}
+
+/* HOW FAR IN FRONT OF THE SIGHT LINE A THING IS, 0 to 1. Fading the far things
+   into haze only ever worked downward - everything at the front sat at the same
+   ceiling. This is the other half of the cue: the nearest things are lit, and
+   that includes the sawn EDGE of a board, which is the surface that tells you
+   it is a solid object at all. */
+function nearness(z, s){
+  const span = ROD_LONG * s * 1.6;
+  return Math.max(0, Math.min(1, -z / span));
+}
+/* A VIEWER STANDING PROPERLY FAR BACK (Joe, 2026-09-16 - trial).
+
+   VIEW_DIST is the eye's distance from the mobile, in the same layout units the
+   arms are measured in, so a thing at depth z is drawn at DIST/(DIST+z) of its
+   true size. Written this way the factor is scale-independent: it depends on
+   how deep the mobile is, not on how big the window is.
+
+   22,000 layout units is about 12,000 screen px at the usual fit, roughly fifty
+   times the mobile's own half-depth. That is a person across a room rather than
+   a person with their nose in it, and it yields about 1.14x at the near edge
+   and 0.89x at the far - a 1.28 : 1 range across everything on the page.
+
+   EVERYTHING takes it: rods, threads, beads AND animals. That was the condition
+   - one rule for the whole picture or none - and it costs a size wobble on the
+   animals, which is the one thing this page otherwise promises never varies.
+   Set VIEW_DIST to Infinity to go back to a flat projection.
+
+   HOW THE FIRST ATTEMPT FAILED, so it is not repeated: the distance was 633 px
+   while the mobile reached 1,500 px either side of the sight line - the camera
+   was inside the sculpture - and sizes ran over a 13.6 : 1 range. */
+const VIEW_DIST = 22000;
+function persp(z, s){
+  const d = VIEW_DIST * s;
+  return d / Math.max(d * 0.25, d + z);
+}
+
+/* (kept for the record - what this replaced)
+   NOTHING CHANGES SIZE WITH DEPTH (the state before this trial).
+
+   The rods used to swell as they came toward the viewer, and Joe's objection
+   was the right one: whatever rule governs the rods has to govern the animals
+   too, or the picture is telling two stories about the same space. Measured
+   over ten minutes, the mobile reaches 1,573 px in front of the sight line and
+   1,513 px behind it, while the perspective distance was only 633 px - the
+   camera was INSIDE the mobile. The size factor that produced ran from 4.00x
+   near to 0.29x far: a 13.6 to 1 range. On the rods that merely looked odd; on
+   the animals it would have made one animal look thirteen times another, on a
+   page whose single promise is that they are all drawn the same size.
+
+   So depth is now carried entirely by AIR - haze and tone and overlap - and
+   nothing is scaled by it. The other way out would be to put the viewer far
+   enough back for perspective to be honest (about 12,000 px, giving a 1.3 : 1
+   range) and apply it to everything; that is a real option, and it would still
+   put a 30% size wobble on the one thing the page says never changes. */
+
+function paint(it){
+  if (it.kind === 'rod')   return paintRod(it);
+  if (it.kind === 'label') return paintLabel(it);
+  if (it.node.boat)        return paintBoat(it);
+  paintCard(it);
+}
+
+/* ---- the rods ----------------------------------------------------------
+   THESE ARE ROUND BARS AND THE SHADING HAS TO SAY SO ACROSS THE SECTION, not
+   along the length. The first attempt filled each arm with one gradient running
+   pivot-to-tip and laid a highlight stripe over it; that reads as a flat ribbon
+   with a line on it, which is what it was. A cylinder lit from the upper left
+   is dark at both silhouette edges and bright on a band about a third of the
+   way across, so each short segment of the bar is filled with a gradient
+   PERPENDICULAR to its own axis carrying exactly that, and segments overlap so
+   no seam shows. Thickness still carries perspective: a bar swells as it comes
+   toward you. */
+const ROD_R = 5.2;                         // one gauge throughout, layout px
+const GROUND = HAZE;                       // distance fades into the air
+function fade(r, g, b, a, near){           // toward the air = further away
+  const k = 1 + 0.38 * (near || 0);        // ... and toward the light = nearer
+  r = Math.min(255, r * k); g = Math.min(255, g * k); b = Math.min(255, b * k);
+  return 'rgb(' + Math.round(r*a + GROUND[0]*(1-a)) + ',' +
+                  Math.round(g*a + GROUND[1]*(1-a)) + ',' +
+                  Math.round(b*a + GROUND[2]*(1-a)) + ')';
+}
+
+function armSamples(x, y, xTip, drop, z, zTip, N){
+  const p = [];
+  for (let i = 0; i <= N; i++){
+    const u = i / N;
+    p.push({ x: x + (xTip - x) * u,
+             y: y + drop * (3*u*u - u*u*u) / 2,
+             z: z + (zTip - z) * u });
+  }
+  return p;
+}
+
+function paintArm(p, s){
+  for (let i = 0; i < p.length - 1; i++){
+    const q0 = p[i], q1 = p[i + 1];
+    const dx = q1.x - q0.x, dy = q1.y - q0.y, L = Math.hypot(dx, dy) || 1;
+    const nx = -dy / L, ny = dx / L;                       // unit normal
+    const r = Math.max(0.7, ROD_R * s * persp((q0.z + q1.z) / 2, s));
+    const a = (depthAlpha(q0.z, s) + depthAlpha(q1.z, s)) / 2;
+    const mx = (q0.x + q1.x) / 2, my = (q0.y + q1.y) / 2;
+
+    /* DEPTH IS MIXED INTO THE COLOUR, NOT INTO THE ALPHA. Segments overlap by
+       a fraction of a pixel so their joins do not show; with a translucent
+       fill each overlap composites twice and the bar grows a row of dark ticks
+       down its length - exactly the seam the overlap was meant to hide. Fading
+       toward the ground colour instead leaves every fill opaque, so an overlap
+       paints the same colour twice and nothing shows. */
+    const nr = (nearness(q0.z, s) + nearness(q1.z, s)) / 2;
+    const g = ctx.createLinearGradient(mx + nx*r, my + ny*r, mx - nx*r, my - ny*r);
+    g.addColorStop(0.00, fade(66, 62, 55, a, nr));
+    g.addColorStop(0.28, fade(255, 252, 244, a, nr));
+    g.addColorStop(0.58, fade(184, 177, 163, a, nr));
+    g.addColorStop(1.00, fade(52, 49, 44, a, nr));
+
+    // one segment, run a little long each way so the joins do not show
+    const ex = dx / L * 0.9, ey = dy / L * 0.9;
+    ctx.beginPath();
+    ctx.moveTo(q0.x + nx*r - ex, q0.y + ny*r - ey);
+    ctx.lineTo(q1.x + nx*r + ex, q1.y + ny*r + ey);
+    ctx.lineTo(q1.x - nx*r + ex, q1.y - ny*r + ey);
+    ctx.lineTo(q0.x - nx*r - ex, q0.y - ny*r - ey);
+    ctx.closePath();
+    ctx.fillStyle = g; ctx.fill();
+  }
+}
+
+function paintRod(it){
+  const { node, x, y, xa, xb, ya, yb, za, zb, z, s } = it;
+  ctx.globalAlpha = 1;
+  for (const [xTip, yTip, zTip] of [[xa, ya, za], [xb, yb, zb]]){
+    paintArm(armSamples(x, y, xTip, yTip - y, z, zTip, 18), s);
+  }
+
+  // the pivot bead, where the two arms meet
+  ctx.globalAlpha = depthAlpha(z, s);
+  ctx.fillStyle = nearness(z, s) > 0.35 ? '#ffffff' : '#fffdf6';
+  ctx.beginPath(); ctx.arc(x, y, Math.max(2.5, 4.4 * s * persp(z, s)), 0, 7); ctx.fill();
+
+  /* NO RATIO PRINTED HERE ANY MORE (Joe, 2026-09-16). Where the pivot sits IS
+     the ratio - a number beside it only says the same thing again, in a second
+     language, and six of them turned a sculpture into a diagram. The masses
+     under the animals give the reader everything needed to check it. */
+
+  // the threads run from the BENT tips to wherever the thing below has swung
+  for (const [cx, cy, cz, k] of [[xa, ya, za, it.ka], [xb, yb, zb, it.kb]]){
+    ctx.lineWidth = Math.max(0.8, 1.7 * s * persp(cz, s));
+    ctx.globalAlpha = 0.72 * depthAlpha(cz, s);
+    ctx.strokeStyle = '#ffffff';
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(k.x, k.y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ---- the boards --------------------------------------------------------
+   Each animal is cut from stock and hung, so it faces where its rod faces: the
+   sawn face foreshortens by cos(theta) while the THICKNESS opens up by
+   sin(theta), and edge-on you see end grain rather than nothing. The edge is
+   faked the honest cheap way - the same silhouette redrawn in the darker grain
+   colour, stepped across the projected thickness, face on top. */
+function paintCard(it){
+  const { node, x, y, z, turn, turnSin } = it, s = fit.s;
+  const a = INK_ART[node.name];
+  const alpha = depthAlpha(z, s);
+  const squash = Math.max(0.06, Math.abs(turn));
+  const flip = turn < 0 ? -1 : 1;
+  const edgeW = THICK * s * Math.abs(turnSin);
+  const side = (turn * turnSin >= 0) ? -1 : 1;
+  const bx = cardBox(node.name);
+  const k = persp(z, s);                     // the animals take it too, or nobody does
+  const w = bx.w * s * k, h = bx.h * s * k;
+
+  ctx.globalAlpha = alpha;
+  if (a){
+    ctx.save();
+    ctx.translate(x, y + h/2);
+    const near = nearness(z, s);
+    const steps = Math.max(1, Math.round(edgeW));
+    for (let i = steps; i >= 1; i--){          // back of the board first
+      ctx.save();
+      ctx.translate(side * edgeW * i / steps, 0);
+      ctx.scale(squash * flip, 1);
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(a.edge, -w/2, -h/2, w, h);
+      if (near > 0){                           // the cut surface, lit
+        ctx.globalAlpha = alpha * near * 0.85;
+        ctx.drawImage(a.edgeLit, -w/2, -h/2, w, h);
+      }
+      ctx.restore();
+    }
+    ctx.scale(squash * flip, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(a.face, -w/2, -h/2, w, h);
+    if (near > 0){                             // and the face
+      ctx.globalAlpha = alpha * near * 0.45;
+      ctx.drawImage(a.lit, -w/2, -h/2, w, h);
+    }
+    // then the air in front of it, thicker the further away it is
+    ctx.globalAlpha = (1 - alpha) * 0.85;
+    ctx.drawImage(a.haze, -w/2, -h/2, w, h);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* the drawn height of a board, which its label needs BEFORE anything is
+   painted - it used to be a side effect of painting, which is why the labels
+   had to come afterwards */
+function measureCard(it){
+  it.h = it.node.boat ? (MAST_H + HULL_D) * fit.s * persp(it.z, fit.s)
+                      : cardBox(it.node.name).h * fit.s * persp(it.z, fit.s);
+}
+
+/* ---- a boat ------------------------------------------------------------
+   NOT A CUTOUT. The animals are flat boards and look it - they show their sawn
+   edge as they turn. A boat is a small solid thing hung from the top of its
+   mast, so what turns is the whole hull: the mast stays put and vertical, the
+   hull and the sails swing round it and foreshorten to nothing when the boat
+   comes bow-on. That is also why a boat needs no lit edge - there is no cut
+   face to catch the light, only a hull that turns away.
+
+   The order of drawing is the order of the object: sails behind the mast, mast,
+   then hull in front, so a boat turning through end-on reads as a solid rather
+   than a collapsing shape. */
+const MAST_H = 104, HULL_L = 88, HULL_D = 20, BOOM_UP = 14;
+const HULL_BEAM = 30;      // across the boat - what you still see when she is bow-on
+const CAMBER    = 0.30;    // how full the sails stand
+
+function paintBoat(it){
+  const { node, x, y, z, turn, turnSin } = it, s = fit.s;
+  const a = depthAlpha(z, s), near = nearness(z, s), k = persp(z, s);
+  const c = Math.abs(turn), flip = turn < 0 ? -1 : 1;
+  const beam = Math.max(0.05, c);                  // how broadside she lies
+  const Hm = MAST_H * s * k, L = HULL_L * s * k, D = HULL_D * s * k;
+  const col = node.hull || (node.hull = nextBoatColour());
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(flip, 1);
+
+  /* THE SAILS STAND FULL, AND THEY BELLY TO LEEWARD. A flat triangle is a sail
+     that is not working; a real one takes a curve, and the curve is always on
+     the side the wind is pushing. So the camber's SIGN comes from where the
+     wind is relative to this boat - the whole fleet leans the same way, and
+     when the breeze shifts they all fill on the other tack together. */
+  const rel = wind.dir - node.tw;
+  const belly = Math.sin(rel) >= 0 ? 1 : -1;
+  const cam = CAMBER * beam * (0.45 + 0.55 * Math.abs(Math.sin(rel)));
+
+  const sailTop = 6 * s * k, boomY = Hm - BOOM_UP * s * k;
+  ctx.globalAlpha = 1;
+
+  // mainsail: luff on the mast, leech curving away, foot along the boom
+  ctx.fillStyle = fade(246, 242, 232, a, near);
+  ctx.beginPath();
+  ctx.moveTo(0, sailTop);
+  ctx.bezierCurveTo(-L * (0.16 + cam) , Hm * 0.30,
+                    -L * (0.40 + cam) , Hm * 0.60,
+                    -L * 0.50 * beam,   boomY);
+  ctx.quadraticCurveTo(-L * 0.24 * beam, boomY + HULL_D * s * k * belly * 0.22, 0, boomY);
+  ctx.closePath(); ctx.fill();
+
+  // jib: smaller, fuller, set forward
+  ctx.fillStyle = fade(230, 224, 210, a, near);
+  ctx.beginPath();
+  ctx.moveTo(0, sailTop + Hm * 0.10);
+  ctx.bezierCurveTo(L * (0.12 + cam * 0.8), Hm * 0.38,
+                    L * (0.26 + cam * 0.8), Hm * 0.62,
+                    L * 0.34 * beam,        boomY);
+  ctx.quadraticCurveTo(L * 0.16 * beam, boomY + HULL_D * s * k * belly * 0.16, 0, boomY);
+  ctx.closePath(); ctx.fill();
+
+  // mast and boom
+  ctx.strokeStyle = fade(214, 206, 188, a, near);
+  ctx.lineWidth = Math.max(0.9, 2.2 * s * k);
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, Hm); ctx.stroke();
+  ctx.lineWidth = Math.max(0.7, 1.7 * s * k);
+  ctx.beginPath(); ctx.moveTo(-L * 0.50 * beam, boomY); ctx.lineTo(L * 0.06 * beam, boomY); ctx.stroke();
+
+  /* THE HULL KEEPS ITS BEAM. Foreshortening the hull by cos alone sent it to
+     nothing when the boat came bow-on, which is what a sheet of paper does, not
+     a boat: end-on you see her beam. Her projected half-width is therefore the
+     length and the beam combined, and never reaches zero. */
+  const halfL = Math.hypot(L * 0.50 * turn, HULL_BEAM * 0.5 * s * k * turnSin);
+  const n = parseInt(col.slice(1), 16);
+  const hr = n >> 16 & 255, hg = n >> 8 & 255, hb = n & 255;
+  ctx.fillStyle = fade(hr, hg, hb, a, near);
+  ctx.beginPath();
+  ctx.moveTo(-halfL, Hm);
+  ctx.quadraticCurveTo(0, Hm + D * 1.35, halfL * 0.92, Hm);
+  ctx.quadraticCurveTo(0, Hm - D * 0.18, -halfL, Hm);
+  ctx.closePath(); ctx.fill();
+
+  // a waterline highlight along the near side of the deck
+  if (near > 0){
+    ctx.globalAlpha = near * 0.5 * a;
+    ctx.strokeStyle = 'rgb(255,252,244)';
+    ctx.lineWidth = Math.max(0.8, 1.6 * s * k);
+    ctx.beginPath();
+    ctx.moveTo(-halfL, Hm); ctx.lineTo(halfL * 0.92, Hm);
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+  it.h = Hm + D;
+}
+
+/* ---- labels, placed nearest-first but DRAWN AT THEIR OWN DEPTH ----------
+   Two jobs that pull apart, and for a while only the first was done.
+
+   PLACEMENT has to happen all at once: the boards move every frame, so no fixed
+   layout keeps names apart, and they must be tested against each other at the
+   moment they are drawn. Nearest animal first, because that is the one the eye
+   is on; a label with nowhere clear is DROPPED rather than printed across
+   another animal.
+
+   DRAWING has to happen in the depth queue. It did not - every label went down
+   in one pass at the end, so a FAR animal's name, and the opaque plate under
+   it, punched a hole through a NEARER animal (Joe spotted this). A label
+   belongs at its own animal's distance: behind everything closer than it, in
+   front of everything further. So placement returns a list, and each label goes
+   back into the same z-sorted stream as the boards and the rods. */
+function placeLabels(cards, s, yOff){
+  /* DESIGN_STANDARDS: nothing meant to be read from the sofa goes below 32 px.
+     At the wall's own fit these came out at 29, so the size has a floor. */
+  const fs = Math.max(32, 26 * s), lh = fs * 1.3;
+  ctx.font = fs.toFixed(0) + 'px Helvetica Neue, Helvetica, Arial, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const placed = [], out = [];
+  for (const it of [...cards].sort((p, q) => p.z - q.z)){       // nearest first
+    const name = it.node.name, mass = fmtKg(it.node.kg);
+    const w = Math.max(ctx.measureText(name).width, ctx.measureText(mass).width) + 10 * s;
+    const top = it.y + (it.h || 2*CARD_R*s) + 14 * s;
+    const box = [it.x - w/2, it.x + w/2, top, top + 2 * lh];
+    /* TEST THE PLATE, NOT THE TEXT. The opaque plate is drawn padded out beyond
+       the words, so two labels whose TEXT clears can still have one plate lying
+       across the other's last line - which is what raising the type to the
+       32 px sofa floor made visible. The test now uses what is actually drawn. */
+    const pad = LABEL_PAD * s;
+    const plate = [box[0] - pad, box[1] + pad, box[2] - pad * 0.7, box[3] + pad * 0.5];
+    if (placed.some(q => plate[0] < q[1] && q[0] < plate[1] &&
+                         plate[2] < q[3] && q[2] < plate[3])) continue;
+    placed.push(plate);
+    out.push({ kind:'label', z: it.z, x: it.x, top, box, lh, name, mass, yOff, s });
+  }
+  return out;
+}
+
+function paintLabel(it){
+  const { x, top, box, lh, name, mass, yOff, s, z } = it;
+  ctx.font = Math.max(32, 26 * s).toFixed(0) + 'px Helvetica Neue, Helvetica, Arial, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+
+  /* AN OPAQUE PLATE UNDER EVERY LABEL. A name laid straight over a rod or
+     another animal was legible only by luck, and the mobile moves, so the luck
+     changed every second. The plate is the ground colour at full opacity - it
+     hides what is behind it rather than tinting it, and because it IS the
+     ground colour it does not read as a box, only as a place where the mobile
+     happens not to be. It now hides only what is further away than its own
+     animal, which is the whole point of the fix. */
+  const pad = LABEL_PAD * s;
+  ctx.globalAlpha = 1; ctx.fillStyle = groundAt(top + yOff);
+  ctx.fillRect(box[0] - pad, box[2] - pad * 0.7,
+               box[1] - box[0] + pad * 2, box[3] - box[2] + pad * 1.2);
+
+  // it dims with distance like everything else, but stops short of full haze:
+  // an unreadable label is not a depth cue, it is a missing label
+  const a = depthAlpha(z, s);
+  ctx.globalAlpha = 0.45 + 0.55 * a; ctx.fillStyle = '#ffffff';
+  ctx.fillText(name, x, top);
+  ctx.globalAlpha = (0.45 + 0.55 * a) * 0.7;
+  ctx.fillText(mass, x, top + lh);
+  ctx.globalAlpha = 1;
+}
+
+function fmtKg(kg){
+  if (kg >= 1000) return (kg / 1000).toLocaleString() + ' t';
+  if (kg >= 1) return kg + ' kg';
+  return (kg * 1000) + ' g';
+}
+function fmtRatio(r){ return r >= 10 ? Math.round(r) : r.toFixed(1); }
+
+/* THE SIMULATION KEEPS ITS OWN CLOCK, and it took a controlled experiment to
+   notice that it did not. The wind was scheduled against the animation's
+   timestamp while the physics advanced on a clamped step, so the two clocks
+   drifted apart whenever frames were slow - and anything that happens in a
+   NARROW window of wind time, like the single puff in ?demo, could be stepped
+   clean over. That is exactly what happened: the numbers said every rod should
+   turn 75 degrees in nine seconds and the screen showed nothing at all, because
+   the frame that should have delivered the puff jumped from before it to after.
+   Now the wind is asked what it is doing at the simulation's own time, which is
+   the only clock the mobile actually lives on. */
+let last = 0, simT = 0, pan = 0, panReady = false;
+function rootRX(){ return root.sx * fit.s; }
+function rootRY(){
+  const drop = Math.sqrt(Math.max(0,
+        root.thread*root.thread - root.sx*root.sx - root.sz*root.sz));
+  return (drop - root.thread) * fit.s;
+}
+function frame(ms){
+  const t = ms / 1000;
+  // CLAMPED AT BOTH ENDS. It used to be clamped only from above, so anything
+  // that made the timestamp go backwards produced a NEGATIVE step - which ran
+  // the physics in reverse and, once the view could pan, threw the mobile clean
+  // off the screen. A step is never less than nothing.
+  const dt = Math.max(0, Math.min(0.05, last ? t - last : 0.016)); last = t;
+
+  // physics in fixed sub-steps: a dropped frame must not launch the mobile
+  for (let left = dt; left > 1e-6; ){
+    const h = Math.min(0.008, left); left -= h;
+    simT += h;
+    const push = stepWind(h, simT);
+    stepBob(h, push);
+    stepNode(root, h, 0, bobA, 0);
+  }
+
+  const air = ctx.createLinearGradient(0, 0, 0, H);
+  for (const [u, c] of AIR_STOPS) air.addColorStop(u, 'rgb(' + c.join(',') + ')');
+  ctx.fillStyle = air; ctx.fillRect(0, 0, W, H);
+  // NO TITLE (Joe, 2026-09-16). The credit stays - it is an attribution, not a
+  // heading. The line that went with the title said what the piece is doing
+  // ("every animal cut the same size, every rod balanced by real mass"); if it
+  // is wanted back it belongs in an episode beat, not printed in the corner.
+  // the credit belongs to the animals; a fleet of boats borrows nothing
+  if (MODE !== 'boats'){
+    ctx.fillStyle = '#5c5952'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.font = '26px Helvetica Neue, Helvetica, Arial, sans-serif';
+    ctx.fillText('silhouettes: PhyloPic, public domain', 72, H - 44);
+  }
+
+  if (DEMO){            // the page saying what it thinks it is doing
+    ctx.fillStyle = '#9ad1ff'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.font = '22px Menlo, monospace';
+    const rs = [];
+    (function walk(n){ if(!n.leaf){ rs.push(n); walk(n.a); walk(n.b); } })(root);
+    ctx.fillText('simT ' + simT.toFixed(2) + '   frameT ' + t.toFixed(2) +
+                 '   wind.mag ' + wind.mag.toFixed(3) +
+                 '   dir ' + (wind.dir*180/Math.PI).toFixed(0), 72, 180);
+    ctx.fillText('th  ' + rs.map(n => (n.th*180/Math.PI).toFixed(0)).join('  '), 72, 208);
+    ctx.fillText('om  ' + rs.map(n => n.om.toFixed(3)).join('  '), 72, 236);
+    ctx.fillText('sz  ' + rs.map(n => n.sz.toFixed(0)).join('  '), 72, 264);
+  }
+
+  /* KEEP IT ON THE GLASS. The scale comes from the mobile's resting pose, in
+     which each rod's first child hangs to the LEFT. Turn every rod half a
+     revolution and the whole cascade mirrors, reaching as far right as it used
+     to reach left - so the fitted box is simply the wrong box, and by a hundred
+     seconds the bottom of the mobile had walked off the right-hand edge.
+     Rather than shrink everything to the worst case the mobile can ever reach
+     (which is nearly twice as wide, and would cost 40% of its size for a pose
+     it is rarely in), the view PANS to follow it: the scale never changes, so
+     nothing about the drawing lies, and the framing drifts on a five-second
+     time constant, slower than the mobile moves and far slower than the eye. */
+  const items0 = [];
+  collect(root, rootRX(), rootRY(), root.sz * fit.s, fit.s, items0, 1, 0);
+  let bx0 = 1e9, bx1 = -1e9;
+  for (const it of items0){
+    const half = it.kind === 'card' ? cardBox(it.node.name).w * fit.s / 2 : 0;
+    bx0 = Math.min(bx0, it.x - half); bx1 = Math.max(bx1, it.x + half);
+  }
+  const want = (bx0 + bx1) / 2;
+  // the first frame SNAPS - easing from zero would slide the mobile across the
+  // screen on every load, and after a ?at jump it would still be sliding
+  if (!panReady){ pan = want; panReady = true; }
+  else pan += (want - pan) * (1 - Math.exp(-dt / 5));
+
+  if (location.search.indexOf('probe') >= 0){
+    ctx.fillStyle = '#9ad1ff'; ctx.font = '20px Menlo, monospace';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText('cast: ' + MAMMALS.map(m => m.name).join(', '), 40, 40);
+    ctx.fillText('fit.s ' + fit.s.toFixed(4) + '  fit.x ' + fit.x.toFixed(0) +
+                 '  fit.y ' + fit.y.toFixed(0) + '  pan ' + pan.toFixed(0), 40, 68);
+    ctx.fillText('items ' + items0.length + '  artPending ' + artPending +
+                 '  bx ' + bx0.toFixed(0) + '..' + bx1.toFixed(0), 40, 96);
+    ctx.fillText('arms ' + (function f(n){ return n.leaf ? '' :
+        (' ' + n.da.toFixed(0) + '/' + n.db.toFixed(0) + f(n.a) + f(n.b)); })(root), 40, 124);
+  }
+
+  const bobPx = bob * fit.s;
+  ctx.save(); ctx.translate(fit.x - pan, fit.y + bobPx);
+
+  // the thread down from the ceiling. Its top is fixed up there, so it grows
+  // and shortens as the piece rides - which is the bob made visible.
+  ctx.strokeStyle = '#ffffff'; ctx.globalAlpha = 0.72;
+  ctx.lineWidth = Math.max(0.8, 1.7 * fit.s);
+  // the ceiling anchor is FIXED; the mobile is what moves, so this thread
+  // leans over as the piece swings and shortens as it rides up
+  const rx = rootRX(), ry = rootRY();
+  ctx.beginPath();
+  ctx.moveTo(0, -(CEILING * fit.s + bobPx)); ctx.lineTo(rx, ry); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  const items = items0;
+  // cards must be painted once to learn their drawn height before their labels
+  // can be placed under them, so the pass runs: measure, place, then sort the
+  // whole lot - boards, rods and labels together - and paint back to front
+  for (const it of items) if (it.kind === 'card') measureCard(it);
+  if (MODE !== 'boats')
+    items.push(...placeLabels(items.filter(i => i.kind === 'card'), fit.s, fit.y + bobPx));
+  items.sort((p, q) => q.z - p.z);          // far first
+  for (const it of items) paint(it);
+  ctx.restore();
+
+  /* Hand on when the ring's minutes are up - unless the viewer has pinned the
+     page, in which case it stays until they say otherwise. */
+  if (!PINNED && window.Wall && Wall.holdMs &&
+      performance.now() - startedAt > Wall.holdMs(CONFIG.minutes)) {
+    location.href = Wall.nextPage(CONFIG.nextPage);
+    return;
+  }
+
+  requestAnimationFrame(frame);
+}
+const startedAt = performance.now();
+
+/* ---- deterministic capture (mobile.html?at=9) --------------------------
+   Headless Chrome will not run this page forward. Every screenshot, at any
+   --virtual-time-budget from three seconds to five minutes, came back at
+   simT ~0.6 s: the frames I was comparing differed only because each page load
+   starts its rods at random angles, not because time had passed. So the page
+   can be asked to advance its own physics, in the same fixed steps it uses
+   normally, before it draws anything. ?at=9 means "show me nine seconds in",
+   and it means it exactly - same answer every time, which a rAF-driven capture
+   could never give. */
+const AT = parseFloat((location.search.match(/[?&]at=([\d.]+)/) || [])[1]);
+resize();
+if (isFinite(AT) && AT > 0){
+  for (let n = Math.round(AT / 0.008); n > 0; n--){
+    simT += 0.008;
+    const push = stepWind(0.008, simT);
+    stepBob(0.008, push);
+    stepNode(root, 0.008, 0, bobA, 0);
+  }
+  // last stays 0: it belongs to the ANIMATION clock, and simT is the
+  // simulation's. Setting one from the other made the first frame's step
+  // t - last come out at minus fifteen seconds.
+}
+requestAnimationFrame(frame);
+</script>
+<script src="nav.js"></script>
+</body>
+</html>
