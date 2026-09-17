@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v2.2 · 2026-09-17 — in the ring as of 2026-09-16.
+/* mobile.html · v2.3 · 2026-09-17 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,9 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v2.3  the thickness is smeared by DOUBLING (six passes, not nineteen) and
+           the sliver is only made solid while it is thin enough to need it -
+           the boards were the most expensive thing on the page at 4K
      v2.2  the SAWN EDGE of a thin limb is solid too: the squashed sliver is
            made solid BEFORE it is smeared across the thickness, not after.
            Near edge-on, 39% of a board's rows never reached solid; now 0.6%
@@ -1384,12 +1387,30 @@ function paintCard(it){
        alpha 0.09. Three passes lift that to 0.53, which still reads as a hole
        across the neck; six lift it to 0.998. The sliver is a few pixels wide,
        so the extra passes cost nothing worth measuring. */
-    for (let q = 0; q < 6; q++)
-      sliverCtx.drawImage(sliver, 0, 0, sw, bh, 0, 0, sw, bh);
+    /* ...but only while the sliver is THIN ENOUGH TO NEED IT, which is also
+       when it is cheap. Past about a third of a turn each destination pixel
+       samples barely more than one source pixel, so the squash comes back solid
+       on its own - and that is exactly the case where the sliver is nearly a
+       whole card wide and the passes would cost the most. */
+    if (squash < 0.35)
+      for (let q = 0; q < 6; q++)
+        sliverCtx.drawImage(sliver, 0, 0, sw, bh, 0, 0, sw, bh);
+
+    /* SMEAR BY DOUBLING, not one column at a time. The thickness needs a band
+       `steps` pixels wide; laying it down a pixel at a time costs `steps` draws
+       of the sliver, and at 4K on the Pi the boards were the most expensive
+       thing on the page. Draw the sliver once, then keep drawing the BAND back
+       over itself one band-width along: 1, 2, 4, 8... so the width doubles each
+       pass and six passes cover what nineteen used to. The last shift is capped
+       so the band lands on exactly `steps`. */
     const steps = Math.max(1, Math.round(edgeW));
     const sx0 = Math.round(ox - sw / 2);
-    for (let i = steps; i >= 1; i--)          // back of the board first
-      slabCtx.drawImage(sliver, 0, 0, sw, bh, sx0 + side * i, 0, sw, bh);
+    slabCtx.drawImage(sliver, 0, 0, sw, bh, sx0 + side, 0, sw, bh);
+    for (let covered = 1; covered < steps; ){
+      const shift = Math.min(covered, steps - covered);
+      slabCtx.drawImage(slab, 0, 0, bw, bh, side * shift, 0, bw, bh);
+      covered += shift;
+    }
     if (near > 0){                            // the cut surface, lit
       slabCtx.globalCompositeOperation = 'source-atop';
       slabCtx.globalAlpha = near * 0.85;
