@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v2.1 · 2026-09-17 — in the ring as of 2026-09-16.
+/* mobile.html · v2.2 · 2026-09-17 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,9 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v2.2  the SAWN EDGE of a thin limb is solid too: the squashed sliver is
+           made solid BEFORE it is smeared across the thickness, not after.
+           Near edge-on, 39% of a board's rows never reached solid; now 0.6%
      v2.1  a board is OPAQUE: assembled solid in its own buffer, with distance
            applied to the finished thing as colour. It used to let the air
            through the wood, which only showed when a board turned edge-on.
@@ -1311,6 +1314,8 @@ function paintRod(it){
    An edge-on one is now as solid as it always should have been. */
 const slab = document.createElement('canvas');
 const slabCtx = slab.getContext('2d');
+const sliver = document.createElement('canvas');
+const sliverCtx = sliver.getContext('2d');
 
 function paintCard(it){
   const { node, x, y, z, turn, turnSin } = it, s = fit.s;
@@ -1346,22 +1351,45 @@ function paintCard(it){
   const dx = Math.round(x - ox0 + T.e) - T.e, dy = Math.round(cy - oy0 + T.f) - T.f;
   const ox = ox0 + (x - ox0 - dx), oy = oy0 + (cy - oy0 - dy);
 
-  if (edgeW >= 0.5){                         // the sawn edge
+  if (edgeW >= 0.5){
+    /* THE SLIVER IS MADE SOLID BEFORE IT IS SMEARED, NOT AFTER (Joe, 2026-09-17:
+       "the transparency issue is more common when seeing thinner structures
+       on-edge"). Smearing first cannot work for a thin part. A leg two pixels
+       wide, squashed to a tenth, lands as a sliver far narrower than the ONE
+       PIXEL between copies - so consecutive copies never touch, and the sawn
+       edge of that leg comes out as a picket fence of faint stripes with the
+       air between them. Self-drawing the result squares what is missing, which
+       fixes a weak pixel and does nothing whatever to an empty one.
+       So: squash the silhouette once, make THAT solid - after rasterising it
+       occupies whole pixels, however thin the limb was - and only then step it
+       across the thickness at whole-pixel offsets, where each copy touches the
+       next. Whole-pixel offsets also matter: a fractional one resamples the
+       sliver and hands back the soft edges this is here to remove. */
+    const sw = Math.ceil(fw) + 4;
+    if (sliver.width  < sw) sliver.width  = sw;
+    if (sliver.height < bh) sliver.height = bh;
+    sliverCtx.setTransform(1, 0, 0, 1, 0, 0);
+    sliverCtx.globalCompositeOperation = 'source-over';
+    sliverCtx.globalAlpha = 1;
+    sliverCtx.clearRect(0, 0, sw, bh);
+    sliverCtx.save();
+    sliverCtx.translate(sw / 2, oy);
+    sliverCtx.scale(squash * flip, 1);
+    sliverCtx.drawImage(a.edge, -w/2, -h/2, w, h);
+    sliverCtx.restore();
+    /* SIX, not three. Each self-draw SQUARES what is missing and moves nothing
+       sideways, so the count is set by the thinnest limb the cast contains. The
+       ostrich's narrowest inked row is 1.4% of its width - about three quarters
+       of a pixel on the card, a twelfth of one once squashed - so it arrives at
+       alpha 0.09. Three passes lift that to 0.53, which still reads as a hole
+       across the neck; six lift it to 0.998. The sliver is a few pixels wide,
+       so the extra passes cost nothing worth measuring. */
+    for (let q = 0; q < 6; q++)
+      sliverCtx.drawImage(sliver, 0, 0, sw, bh, 0, 0, sw, bh);
     const steps = Math.max(1, Math.round(edgeW));
-    for (let i = steps; i >= 1; i--){         // back of the board first
-      slabCtx.save();
-      slabCtx.translate(ox + side * edgeW * i / steps, oy);
-      slabCtx.scale(squash * flip, 1);
-      slabCtx.drawImage(a.edge, -w/2, -h/2, w, h);
-      slabCtx.restore();
-    }
-    /* A stack of part-covered slivers is not yet wood. Each self-draw squares
-       what is missing, so three take a 0.6 to 0.9995. I tried running them only
-       near edge-on to save the work, and measured: the saving is smaller than
-       the noise (two modes disagreed on its SIGN), so they always run. Whole
-       buffer, small buffer - this is cheaper than what it replaced. */
-    for (let q = 0; q < 3; q++)
-      slabCtx.drawImage(slab, 0, 0, bw, bh, 0, 0, bw, bh);
+    const sx0 = Math.round(ox - sw / 2);
+    for (let i = steps; i >= 1; i--)          // back of the board first
+      slabCtx.drawImage(sliver, 0, 0, sw, bh, sx0 + side * i, 0, sw, bh);
     if (near > 0){                            // the cut surface, lit
       slabCtx.globalCompositeOperation = 'source-atop';
       slabCtx.globalAlpha = near * 0.85;
