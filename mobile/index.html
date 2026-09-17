@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v2.3 · 2026-09-17 — in the ring as of 2026-09-16.
+/* mobile.html · v2.4 · 2026-09-17 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,9 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v2.4  every board is drawn into ONE atlas and only then blitted. Writing to
+           a canvas and then using it as a source costs the Pi ~5 ms of pipeline
+           stall each time the two interleave; this leaves a single round trip
      v2.3  the thickness is smeared by DOUBLING (six passes, not nineteen) and
            the sliver is only made solid while it is thin enough to need it -
            the boards were the most expensive thing on the page at 4K
@@ -1294,167 +1297,155 @@ function paintRod(it){
 /* ---- the boards --------------------------------------------------------
    Each animal is cut from stock and hung, so it faces where its rod faces: the
    sawn face foreshortens by cos(theta) while the THICKNESS opens up by
-   sin(theta), and edge-on you see end grain rather than nothing. The edge is
-   faked the honest cheap way - the same silhouette redrawn in the darker grain
-   colour, stepped across the projected thickness, face on top.
+   sin(theta), and edge-on you see end grain rather than nothing.
 
-   A BOARD IS OPAQUE (Joe, 2026-09-17: "parts of the solid material becomes
-   transparent showing the black background"). It was not, and edge-on was where
-   it showed. A far board is drawn at alpha 0.42 and then given haze at 0.85 of
-   what is missing, which leaves 29% of the AIR BEHIND IT coming through the
-   wood - invisible on a square-on board, because the leak is even, and glaring
-   on a sawn edge, because there it is not. The edge was thirty squashed copies
-   stepped across the thickness, each one both faded by depth AND part-covered
-   (drawImage AVERAGES what it samples, so a row that is a quarter ink comes
-   back a quarter alpha). Nine of those overlap in the middle of the slab and
-   one at each end, so the edge faded out at its own edges.
+   A BOARD IS OPAQUE, AND SO IS ITS THINNEST LIMB. Two bugs, both of which only
+   showed edge-on. (1) A far board was drawn at alpha 0.42 and then given haze
+   at 0.85 of what was missing, leaving the air coming through the wood - even,
+   so invisible, until a board turned and the leak was all you could see.
+   (2) The sawn edge is the squashed silhouette smeared across the thickness,
+   and a leg two pixels wide, squashed to a tenth, lands as a sliver NARROWER
+   THAN THE ONE-PIXEL STEP, so consecutive copies never touched and the limb
+   came out as a picket fence. Self-drawing the stack squares what is missing,
+   which repairs a weak pixel and does nothing at all to an empty one.
+   So: squash once, make THAT sliver solid (after rasterising it occupies whole
+   pixels however thin the limb was), smear it by DOUBLING (1, 2, 4, 8... six
+   passes cover what nineteen did), lay the face over it, and apply distance to
+   the finished board as COLOUR. Measured, rows of a board whose peak alpha
+   never reaches solid: at turn 0.06, 39.3% before, 0.6% after.
 
-   Wood does not do that. Each board is now assembled in its own buffer at full
-   opacity - edge first, solidified with three self-draws, then the painted face
-   over it - and distance is applied to the finished board as COLOUR: washed
-   toward the air behind it, then toward the haze, by exactly the fractions the
-   two old strokes worked out to. A square-on board looks the same as it did.
-   An edge-on one is now as solid as it always should have been. */
-const slab = document.createElement('canvas');
-const slabCtx = slab.getContext('2d');
+   AND IT IS BUILT FOR EVERY BOARD FIRST, THEN BLITTED (Joe, 2026-09-17: it "runs
+   much more slowly on the Pi"). That was mine. Writing to a canvas and then
+   using it as a source for the screen costs the Pi about 5 ms of pipeline stall
+   EACH TIME the two are interleaved - one such round trip is free, seven cost
+   36 ms, fourteen cost 90. Doing every board's drawing into one atlas and only
+   then blitting the seven rectangles out of it leaves a single round trip, and
+   measured 27 fps against 13 for a board-buffer-per-board. (An atlas that
+   self-draws is worse than either, 9 fps: a self-draw snapshots the WHOLE
+   surface, so the sliver has to stay a small canvas of its own.) */
+const atlas = document.createElement('canvas');
+const atlasCtx = atlas.getContext('2d');
 const sliver = document.createElement('canvas');
 const sliverCtx = sliver.getContext('2d');
 
-function paintCard(it){
+function cardGeom(it){
   const { node, x, y, z, turn, turnSin } = it, s = fit.s;
-  const a = INK_ART[node.name];
-  if (!a){ ctx.globalAlpha = 1; return; }
-  const alpha = depthAlpha(z, s);
-  const squash = Math.max(0.06, Math.abs(turn));
-  const flip = turn < 0 ? -1 : 1;
-  const edgeW = THICK * s * Math.abs(turnSin);
-  const side = (turn * turnSin >= 0) ? -1 : 1;
   const bx = cardBox(node.name);
   const k = persp(z, s);                     // the animals take it too, or nobody does
   const w = bx.w * s * k, h = bx.h * s * k;
-  const near = nearness(z, s);
-  const cy = y + h / 2;
-
+  const squash = Math.max(0.06, Math.abs(turn));
+  const edgeW = THICK * s * Math.abs(turnSin);
   const fw = w * squash;
-  const bw = Math.ceil(fw + edgeW) + 8, bh = Math.ceil(h) + 8;
-  if (slab.width  < bw) slab.width  = bw;    // grow only; a resize clears it
-  if (slab.height < bh) slab.height = bh;
-  slabCtx.setTransform(1, 0, 0, 1, 0, 0);
-  slabCtx.globalCompositeOperation = 'source-over';
-  slabCtx.globalAlpha = 1;
-  slabCtx.clearRect(0, 0, bw, bh);
-  /* A BUFFER MUST LAND ON WHOLE SCREEN PIXELS. Blitting it to a fractional
-     position resamples the whole board and leaves a soft half-transparent halo
-     round every edge, which is the bug again by another route. And WHOLE means
-     whole on the SCREEN: the mobile is drawn
-     inside the pan-and-bob translate, so flooring the local coordinate snaps to
-     nothing. The sub-pixel remainder is baked into the buffer instead. */
+  return { alpha: depthAlpha(z, s), near: nearness(z, s), squash,
+           flip: turn < 0 ? -1 : 1, edgeW, side: (turn * turnSin >= 0) ? -1 : 1,
+           w, h, cy: y + h / 2, fw,
+           bw: Math.ceil(fw + edgeW) + 8, bh: Math.ceil(h) + 8,
+           sw: Math.ceil(fw) + 4 };
+}
+
+function buildCards(items){
+  const cards = [];
+  let needW = 8, needH = 8, slivW = 8;
+  for (const it of items){
+    if (it.kind !== 'card' || it.node.boat || !INK_ART[it.node.name]){ it.g = null; continue; }
+    const g = it.g = cardGeom(it);
+    g.ox0 = (g.side < 0 ? g.fw / 2 + g.edgeW : g.fw / 2) + 4;
+    g.oy0 = g.bh / 2;
+    needW += g.bw + 2; needH = Math.max(needH, g.bh + 4); slivW = Math.max(slivW, g.sw);
+    cards.push(it);
+  }
+  if (!cards.length) return;
+  if (atlas.width  < needW) atlas.width  = needW;
+  if (atlas.height < needH) atlas.height = needH;
+  if (sliver.width  < slivW)  sliver.width  = slivW;
+  if (sliver.height < needH)  sliver.height = needH;
+  const ac = atlasCtx;
+  ac.setTransform(1, 0, 0, 1, 0, 0);
+  ac.globalCompositeOperation = 'source-over'; ac.globalAlpha = 1;
+  ac.clearRect(0, 0, needW, needH);
   const T = ctx.getTransform();              // translation only on this canvas
-  const ox0 = (side < 0 ? fw / 2 + edgeW : fw / 2) + 4, oy0 = bh / 2;
-  const dx = Math.round(x - ox0 + T.e) - T.e, dy = Math.round(cy - oy0 + T.f) - T.f;
-  const ox = ox0 + (x - ox0 - dx), oy = oy0 + (cy - oy0 - dy);
+  let ax = 4;
+  for (const it of cards){
+    const g = it.g, a = INK_ART[it.node.name];
+    g.ax = ax; ax += g.bw + 2;
+    /* THE BLIT MUST LAND ON WHOLE SCREEN PIXELS, or the whole board is resampled
+       and every edge picks up a soft half-transparent halo - the first bug again
+       by another route. Whole means whole on the SCREEN: the mobile is drawn
+       inside the pan-and-bob translate, so the remainder is baked in here. */
+    g.dx = Math.round(it.x - g.ox0 + T.e) - T.e;
+    g.dy = Math.round(g.cy - g.oy0 + T.f) - T.f;
+    const ox = g.ox0 + (it.x - g.ox0 - g.dx), oy = g.oy0 + (g.cy - g.oy0 - g.dy);
 
-  if (edgeW >= 0.5){
-    /* THE SLIVER IS MADE SOLID BEFORE IT IS SMEARED, NOT AFTER (Joe, 2026-09-17:
-       "the transparency issue is more common when seeing thinner structures
-       on-edge"). Smearing first cannot work for a thin part. A leg two pixels
-       wide, squashed to a tenth, lands as a sliver far narrower than the ONE
-       PIXEL between copies - so consecutive copies never touch, and the sawn
-       edge of that leg comes out as a picket fence of faint stripes with the
-       air between them. Self-drawing the result squares what is missing, which
-       fixes a weak pixel and does nothing whatever to an empty one.
-       So: squash the silhouette once, make THAT solid - after rasterising it
-       occupies whole pixels, however thin the limb was - and only then step it
-       across the thickness at whole-pixel offsets, where each copy touches the
-       next. Whole-pixel offsets also matter: a fractional one resamples the
-       sliver and hands back the soft edges this is here to remove. */
-    const sw = Math.ceil(fw) + 4;
-    if (sliver.width  < sw) sliver.width  = sw;
-    if (sliver.height < bh) sliver.height = bh;
-    sliverCtx.setTransform(1, 0, 0, 1, 0, 0);
-    sliverCtx.globalCompositeOperation = 'source-over';
-    sliverCtx.globalAlpha = 1;
-    sliverCtx.clearRect(0, 0, sw, bh);
-    sliverCtx.save();
-    sliverCtx.translate(sw / 2, oy);
-    sliverCtx.scale(squash * flip, 1);
-    sliverCtx.drawImage(a.edge, -w/2, -h/2, w, h);
-    sliverCtx.restore();
-    /* SIX, not three. Each self-draw SQUARES what is missing and moves nothing
-       sideways, so the count is set by the thinnest limb the cast contains. The
-       ostrich's narrowest inked row is 1.4% of its width - about three quarters
-       of a pixel on the card, a twelfth of one once squashed - so it arrives at
-       alpha 0.09. Three passes lift that to 0.53, which still reads as a hole
-       across the neck; six lift it to 0.998. The sliver is a few pixels wide,
-       so the extra passes cost nothing worth measuring. */
-    /* ...but only while the sliver is THIN ENOUGH TO NEED IT, which is also
-       when it is cheap. Past about a third of a turn each destination pixel
-       samples barely more than one source pixel, so the squash comes back solid
-       on its own - and that is exactly the case where the sliver is nearly a
-       whole card wide and the passes would cost the most. */
-    if (squash < 0.35)
-      for (let q = 0; q < 6; q++)
-        sliverCtx.drawImage(sliver, 0, 0, sw, bh, 0, 0, sw, bh);
-
-    /* SMEAR BY DOUBLING, not one column at a time. The thickness needs a band
-       `steps` pixels wide; laying it down a pixel at a time costs `steps` draws
-       of the sliver, and at 4K on the Pi the boards were the most expensive
-       thing on the page. Draw the sliver once, then keep drawing the BAND back
-       over itself one band-width along: 1, 2, 4, 8... so the width doubles each
-       pass and six passes cover what nineteen used to. The last shift is capped
-       so the band lands on exactly `steps`. */
-    const steps = Math.max(1, Math.round(edgeW));
-    const sx0 = Math.round(ox - sw / 2);
-    slabCtx.drawImage(sliver, 0, 0, sw, bh, sx0 + side, 0, sw, bh);
-    for (let covered = 1; covered < steps; ){
-      const shift = Math.min(covered, steps - covered);
-      slabCtx.drawImage(slab, 0, 0, bw, bh, side * shift, 0, bw, bh);
-      covered += shift;
+    if (g.edgeW >= 0.5){                     // the sawn edge
+      sliverCtx.setTransform(1, 0, 0, 1, 0, 0);
+      sliverCtx.globalCompositeOperation = 'source-over'; sliverCtx.globalAlpha = 1;
+      sliverCtx.clearRect(0, 0, g.sw, g.bh);
+      sliverCtx.save();
+      sliverCtx.translate(g.sw / 2, oy);
+      sliverCtx.scale(g.squash * g.flip, 1);
+      sliverCtx.drawImage(a.edge, -g.w/2, -g.h/2, g.w, g.h);
+      sliverCtx.restore();
+      /* Six self-draws, and only while the sliver is thin enough to need them.
+         Each squares what is missing and moves nothing sideways, so the count is
+         set by the thinnest limb in the cast: the ostrich's narrowest inked row
+         is 1.4% of its width, a twelfth of a pixel once squashed, arriving at
+         alpha 0.09 - three passes lift that to 0.53, which still reads as a hole
+         across the neck, and six lift it to 0.998. Past a third of a turn the
+         squash is solid on its own, which is also when the sliver is widest. */
+      if (g.squash < 0.35)
+        for (let q = 0; q < 6; q++) sliverCtx.drawImage(sliver, 0, 0, g.sw, g.bh, 0, 0, g.sw, g.bh);
+      const steps = Math.max(1, Math.round(g.edgeW));
+      const sx0 = Math.round(g.ax + ox - g.sw / 2);
+      ac.drawImage(sliver, 0, 0, g.sw, g.bh, sx0 + g.side, 0, g.sw, g.bh);
+      for (let covered = 1; covered < steps; ){
+        const shift = Math.min(covered, steps - covered);
+        ac.drawImage(atlas, g.ax, 0, g.bw, g.bh, g.ax + g.side * shift, 0, g.bw, g.bh);
+        covered += shift;
+      }
+      if (g.near > 0){                       // the cut surface, lit
+        ac.globalCompositeOperation = 'source-atop';
+        ac.globalAlpha = g.near * 0.85;
+        ac.fillStyle = a.edgeLitColour;
+        ac.fillRect(g.ax, 0, g.bw, g.bh);
+        ac.globalCompositeOperation = 'source-over'; ac.globalAlpha = 1;
+      }
     }
-    if (near > 0){                            // the cut surface, lit
-      slabCtx.globalCompositeOperation = 'source-atop';
-      slabCtx.globalAlpha = near * 0.85;
-      slabCtx.fillStyle = a.edgeLitColour;
-      slabCtx.fillRect(0, 0, bw, bh);
-      slabCtx.globalCompositeOperation = 'source-over';
-      slabCtx.globalAlpha = 1;
+
+    ac.save();                               // the painted face, over the edge
+    ac.translate(g.ax + ox, oy);
+    ac.scale(g.squash * g.flip, 1);
+    ac.drawImage(a.face, -g.w/2, -g.h/2, g.w, g.h);
+    if (g.near > 0){
+      ac.globalAlpha = g.near * 0.45;
+      ac.drawImage(a.lit, -g.w/2, -g.h/2, g.w, g.h);
+      ac.globalAlpha = 1;
     }
+    ac.restore();
+
+    /* DISTANCE, AS COLOUR RATHER THAN AS HOLES - and the colour has to be the
+       one that was actually coming through. What showed through a square-on
+       board was the board's OWN sawn edge, stepped along right behind it, so a
+       far animal read darker because it was showing its own shaded side. That
+       is where the depth in this picture came from, so that is what the wash
+       reproduces. Measured against the old look over three frozen frames, mean
+       error where anything changed: this 9.1 levels, washing toward the ground
+       18.2, washing toward the haze alone 24.6. */
+    ac.globalCompositeOperation = 'source-atop';
+    ac.globalAlpha = 1 - g.alpha;
+    ac.fillStyle = a.edgeColour;
+    ac.fillRect(g.ax, 0, g.bw, g.bh);
+    ac.globalAlpha = 0.85 * (1 - g.alpha);
+    ac.fillStyle = 'rgb(' + HAZE.join(',') + ')';
+    ac.fillRect(g.ax, 0, g.bw, g.bh);
+    ac.globalCompositeOperation = 'source-over'; ac.globalAlpha = 1;
   }
+}
 
-  slabCtx.save();                            // the painted face, over the edge
-  slabCtx.translate(ox, oy);
-  slabCtx.scale(squash * flip, 1);
-  slabCtx.drawImage(a.face, -w/2, -h/2, w, h);
-  if (near > 0){
-    slabCtx.globalAlpha = near * 0.45;
-    slabCtx.drawImage(a.lit, -w/2, -h/2, w, h);
-    slabCtx.globalAlpha = 1;
-  }
-  slabCtx.restore();
-
-  /* DISTANCE, AS COLOUR RATHER THAN AS HOLES - and the colour has to be the one
-     that was actually coming through. What showed through a square-on board was
-     the board's OWN sawn edge, stepped along right behind it, so a far animal
-     read darker because it was showing its own shaded side. That is where the
-     depth in this picture came from, so that is what the wash has to reproduce:
-     the finished board goes toward its own shadow by (1 - alpha), then toward
-     the haze by 0.85(1 - alpha) - the same two numbers as the old strokes, now
-     applied as colour, owing nothing to what happens to be behind.
-     Measured against the old look over three frozen frames, mean error where
-     anything changed at all: this 9.1 levels, washing toward the ground 18.2,
-     washing toward the haze alone 24.6. */
-  slabCtx.globalCompositeOperation = 'source-atop';
-  slabCtx.globalAlpha = 1 - alpha;
-  slabCtx.fillStyle = a.edgeColour;
-  slabCtx.fillRect(0, 0, bw, bh);
-  slabCtx.globalAlpha = 0.85 * (1 - alpha);
-  slabCtx.fillStyle = 'rgb(' + HAZE.join(',') + ')';
-  slabCtx.fillRect(0, 0, bw, bh);
-  slabCtx.globalCompositeOperation = 'source-over';
-  slabCtx.globalAlpha = 1;
-
+function paintCard(it){
+  const g = it.g;
+  if (!g) { ctx.globalAlpha = 1; return; }
   ctx.globalAlpha = 1;
-  ctx.drawImage(slab, 0, 0, bw, bh, dx, dy, bw, bh);
+  ctx.drawImage(atlas, g.ax, 0, g.bw, g.bh, g.dx, g.dy, g.bw, g.bh);
 }
 
 /* the drawn height of a board, which its label needs BEFORE anything is
@@ -1769,6 +1760,7 @@ function frame(ms){
   if (MODE !== 'boats')
     items.push(...placeLabels(items.filter(i => i.kind === 'card'), fit.s, fit.y + bobPx));
   items.sort((p, q) => q.z - p.z);          // far first
+  buildCards(items);                        // every board drawn before any is blitted
   for (const it of items) paint(it);
   ctx.restore();
 
