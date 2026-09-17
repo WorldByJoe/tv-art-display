@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v2.0 · 2026-09-16 — in the ring as of 2026-09-16.
+/* mobile.html · v2.1 · 2026-09-17 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,10 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v2.1  a board is OPAQUE: assembled solid in its own buffer, with distance
+           applied to the finished thing as colour. It used to let the air
+           through the wood, which only showed when a board turned edge-on.
+           And ?at now FREEZES, so two captures of one pose are identical
      v2.0  a third cast - 22 birds - and boats that differ in LENGTH, so mass
            goes as its cube and sail as its square and the fleet has a real
            spread of sail-per-tonne
@@ -555,8 +559,10 @@ for (const [name, src] of Object.entries(ART)){
     const c = ANIMAL_COLOUR[name] || FALLBACK;
     INK_ART[name] = { face:    tint(img, c),
                       edge:    tint(img, shade(c, 0.42)),
+                      edgeColour: shade(c, 0.42),
                       lit:     tint(img, toward(c, '#ffffff', 0.55)),
                       edgeLit: tint(img, toward(c, '#ffffff', 0.22)),
+                      edgeLitColour: toward(c, '#ffffff', 0.22),
                       haze:    tint(img, 'rgb(' + HAZE.join(',') + ')') };
     if (--artPending === 0) resize();      // extents change once the art is real
   };
@@ -1284,10 +1290,32 @@ function paintRod(it){
    sawn face foreshortens by cos(theta) while the THICKNESS opens up by
    sin(theta), and edge-on you see end grain rather than nothing. The edge is
    faked the honest cheap way - the same silhouette redrawn in the darker grain
-   colour, stepped across the projected thickness, face on top. */
+   colour, stepped across the projected thickness, face on top.
+
+   A BOARD IS OPAQUE (Joe, 2026-09-17: "parts of the solid material becomes
+   transparent showing the black background"). It was not, and edge-on was where
+   it showed. A far board is drawn at alpha 0.42 and then given haze at 0.85 of
+   what is missing, which leaves 29% of the AIR BEHIND IT coming through the
+   wood - invisible on a square-on board, because the leak is even, and glaring
+   on a sawn edge, because there it is not. The edge was thirty squashed copies
+   stepped across the thickness, each one both faded by depth AND part-covered
+   (drawImage AVERAGES what it samples, so a row that is a quarter ink comes
+   back a quarter alpha). Nine of those overlap in the middle of the slab and
+   one at each end, so the edge faded out at its own edges.
+
+   Wood does not do that. Each board is now assembled in its own buffer at full
+   opacity - edge first, solidified with three self-draws, then the painted face
+   over it - and distance is applied to the finished board as COLOUR: washed
+   toward the air behind it, then toward the haze, by exactly the fractions the
+   two old strokes worked out to. A square-on board looks the same as it did.
+   An edge-on one is now as solid as it always should have been. */
+const slab = document.createElement('canvas');
+const slabCtx = slab.getContext('2d');
+
 function paintCard(it){
   const { node, x, y, z, turn, turnSin } = it, s = fit.s;
   const a = INK_ART[node.name];
+  if (!a){ ctx.globalAlpha = 1; return; }
   const alpha = depthAlpha(z, s);
   const squash = Math.max(0.06, Math.abs(turn));
   const flip = turn < 0 ? -1 : 1;
@@ -1296,38 +1324,88 @@ function paintCard(it){
   const bx = cardBox(node.name);
   const k = persp(z, s);                     // the animals take it too, or nobody does
   const w = bx.w * s * k, h = bx.h * s * k;
+  const near = nearness(z, s);
+  const cy = y + h / 2;
 
-  ctx.globalAlpha = alpha;
-  if (a){
-    ctx.save();
-    ctx.translate(x, y + h/2);
-    const near = nearness(z, s);
+  const fw = w * squash;
+  const bw = Math.ceil(fw + edgeW) + 8, bh = Math.ceil(h) + 8;
+  if (slab.width  < bw) slab.width  = bw;    // grow only; a resize clears it
+  if (slab.height < bh) slab.height = bh;
+  slabCtx.setTransform(1, 0, 0, 1, 0, 0);
+  slabCtx.globalCompositeOperation = 'source-over';
+  slabCtx.globalAlpha = 1;
+  slabCtx.clearRect(0, 0, bw, bh);
+  /* A BUFFER MUST LAND ON WHOLE SCREEN PIXELS. Blitting it to a fractional
+     position resamples the whole board and leaves a soft half-transparent halo
+     round every edge, which is the bug again by another route. And WHOLE means
+     whole on the SCREEN: the mobile is drawn
+     inside the pan-and-bob translate, so flooring the local coordinate snaps to
+     nothing. The sub-pixel remainder is baked into the buffer instead. */
+  const T = ctx.getTransform();              // translation only on this canvas
+  const ox0 = (side < 0 ? fw / 2 + edgeW : fw / 2) + 4, oy0 = bh / 2;
+  const dx = Math.round(x - ox0 + T.e) - T.e, dy = Math.round(cy - oy0 + T.f) - T.f;
+  const ox = ox0 + (x - ox0 - dx), oy = oy0 + (cy - oy0 - dy);
+
+  if (edgeW >= 0.5){                         // the sawn edge
     const steps = Math.max(1, Math.round(edgeW));
-    for (let i = steps; i >= 1; i--){          // back of the board first
-      ctx.save();
-      ctx.translate(side * edgeW * i / steps, 0);
-      ctx.scale(squash * flip, 1);
-      ctx.globalAlpha = alpha;
-      ctx.drawImage(a.edge, -w/2, -h/2, w, h);
-      if (near > 0){                           // the cut surface, lit
-        ctx.globalAlpha = alpha * near * 0.85;
-        ctx.drawImage(a.edgeLit, -w/2, -h/2, w, h);
-      }
-      ctx.restore();
+    for (let i = steps; i >= 1; i--){         // back of the board first
+      slabCtx.save();
+      slabCtx.translate(ox + side * edgeW * i / steps, oy);
+      slabCtx.scale(squash * flip, 1);
+      slabCtx.drawImage(a.edge, -w/2, -h/2, w, h);
+      slabCtx.restore();
     }
-    ctx.scale(squash * flip, 1);
-    ctx.globalAlpha = alpha;
-    ctx.drawImage(a.face, -w/2, -h/2, w, h);
-    if (near > 0){                             // and the face
-      ctx.globalAlpha = alpha * near * 0.45;
-      ctx.drawImage(a.lit, -w/2, -h/2, w, h);
+    /* A stack of part-covered slivers is not yet wood. Each self-draw squares
+       what is missing, so three take a 0.6 to 0.9995. I tried running them only
+       near edge-on to save the work, and measured: the saving is smaller than
+       the noise (two modes disagreed on its SIGN), so they always run. Whole
+       buffer, small buffer - this is cheaper than what it replaced. */
+    for (let q = 0; q < 3; q++)
+      slabCtx.drawImage(slab, 0, 0, bw, bh, 0, 0, bw, bh);
+    if (near > 0){                            // the cut surface, lit
+      slabCtx.globalCompositeOperation = 'source-atop';
+      slabCtx.globalAlpha = near * 0.85;
+      slabCtx.fillStyle = a.edgeLitColour;
+      slabCtx.fillRect(0, 0, bw, bh);
+      slabCtx.globalCompositeOperation = 'source-over';
+      slabCtx.globalAlpha = 1;
     }
-    // then the air in front of it, thicker the further away it is
-    ctx.globalAlpha = (1 - alpha) * 0.85;
-    ctx.drawImage(a.haze, -w/2, -h/2, w, h);
-    ctx.restore();
   }
+
+  slabCtx.save();                            // the painted face, over the edge
+  slabCtx.translate(ox, oy);
+  slabCtx.scale(squash * flip, 1);
+  slabCtx.drawImage(a.face, -w/2, -h/2, w, h);
+  if (near > 0){
+    slabCtx.globalAlpha = near * 0.45;
+    slabCtx.drawImage(a.lit, -w/2, -h/2, w, h);
+    slabCtx.globalAlpha = 1;
+  }
+  slabCtx.restore();
+
+  /* DISTANCE, AS COLOUR RATHER THAN AS HOLES - and the colour has to be the one
+     that was actually coming through. What showed through a square-on board was
+     the board's OWN sawn edge, stepped along right behind it, so a far animal
+     read darker because it was showing its own shaded side. That is where the
+     depth in this picture came from, so that is what the wash has to reproduce:
+     the finished board goes toward its own shadow by (1 - alpha), then toward
+     the haze by 0.85(1 - alpha) - the same two numbers as the old strokes, now
+     applied as colour, owing nothing to what happens to be behind.
+     Measured against the old look over three frozen frames, mean error where
+     anything changed at all: this 9.1 levels, washing toward the ground 18.2,
+     washing toward the haze alone 24.6. */
+  slabCtx.globalCompositeOperation = 'source-atop';
+  slabCtx.globalAlpha = 1 - alpha;
+  slabCtx.fillStyle = a.edgeColour;
+  slabCtx.fillRect(0, 0, bw, bh);
+  slabCtx.globalAlpha = 0.85 * (1 - alpha);
+  slabCtx.fillStyle = 'rgb(' + HAZE.join(',') + ')';
+  slabCtx.fillRect(0, 0, bw, bh);
+  slabCtx.globalCompositeOperation = 'source-over';
+  slabCtx.globalAlpha = 1;
+
   ctx.globalAlpha = 1;
+  ctx.drawImage(slab, 0, 0, bw, bh, dx, dy, bw, bh);
 }
 
 /* the drawn height of a board, which its label needs BEFORE anything is
@@ -1534,7 +1612,14 @@ function frame(ms){
   // that made the timestamp go backwards produced a NEGATIVE step - which ran
   // the physics in reverse and, once the view could pan, threw the mobile clean
   // off the screen. A step is never less than nothing.
-  const dt = Math.max(0, Math.min(0.05, last ? t - last : 0.016)); last = t;
+  /* AND FROZEN ONCE ?at HAS ARRIVED. Pre-stepping the physics to ?at fixed
+     where the capture STARTS, then handed the page to the animation clock,
+     which kept stepping for however many frames the capture happened to allow:
+     two screenshots of the same ?at differed in 28,102 pixels, which is enough
+     to swamp any before-and-after you try to measure with them. A capture is a
+     still, so it holds still. */
+  const dt = AT_FREEZE ? 0 : Math.max(0, Math.min(0.05, last ? t - last : 0.016));
+  last = t;
 
   // physics in fixed sub-steps: a dropped frame must not launch the mobile
   for (let left = dt; left > 1e-6; ){
@@ -1660,6 +1745,7 @@ const startedAt = performance.now();
    and it means it exactly - same answer every time, which a rAF-driven capture
    could never give. */
 const AT = parseFloat((location.search.match(/[?&]at=([\d.]+)/) || [])[1]);
+const AT_FREEZE = isFinite(AT) && AT > 0;  // a capture holds the pose it asked for
 resize();
 if (isFinite(AT) && AT > 0){
   for (let n = Math.round(AT / 0.008); n > 0; n--){
