@@ -37,7 +37,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v3.3 · 2026-09-14
+  lightning.html · v3.4 · 2026-09-17
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -73,6 +73,10 @@
 ==========================================================================
 
   CHANGED
+    v3.4  every figure on the panel describes the flashes the page is HOLDING.
+          The data were live and the numbers beside them were not: a sky running
+          at 4.9 flashes a second announced the capture's 9.06, and the footer
+          claimed six minutes of sky while holding eighty seconds
     v3.3  the live flag was named `live` and draw() already had a local `live`
           counting flashes in the air - so the handoff test read the counter
           and left two seconds after loading. Renamed liveFeed. The globe,
@@ -254,7 +258,14 @@ function recordedWords(){
             :               ' (' + Math.round(hrs/24) + ' days ago)';
   /* Name the END of the window and how long it ran, so "six minutes of sky to
      22:57" cannot be misread as "a snapshot from 22:51". */
-  const span = SHOW.spanSec ? Math.round(SHOW.spanSec/60) + ' min of sky to ' : 'sky to ';
+  /* AND HOW MUCH SKY IS ACTUALLY HERE. Once the live feed takes over, the page
+     keeps only the couple of minutes it can still draw - it announced "6 min of
+     sky" while holding eighty seconds of it. */
+  const h = held();
+  const mins = h.span / 60;
+  const span = !h.n     ? 'sky to '
+             : mins < 1 ? Math.round(h.span) + ' s of sky to '
+             :            Math.round(mins) + ' min of sky to ';
   return span + when + ago;
 }
 
@@ -582,8 +593,43 @@ function drawKey(){
 
 let lastRows='';
 function med(a){ if(!a.length) return 0; a.sort((x,y)=>x-y); return a[a.length>>1]; }
+
+/* WHAT THE SKY ON SCREEN IS DOING - not what the capture was doing.
+   Joe, 2026-09-17: "I don't think the data are actually the latest data, even
+   though it says they are." The DATA were latest (granules fetched by hand came
+   back 34 s old); the FIGURES beside them were not. Three of the panel's rows
+   and two of its beats still read from SHOW.stats, which is frozen at whatever
+   the capture found - so a sky running at 4.9 flashes a second announced 9.06,
+   and quoted a biggest-footprint from ninety minutes earlier.
+   This is the same bug as 2026-09-13 ("flash lasts and lights up seem to not be
+   updating"), which fixed the two medians and left the rate and the maxima. So
+   the rule that fix established now covers every figure: they all describe the
+   flashes the page is HOLDING. Before the live feed arrives the page holds the
+   capture, so the numbers are the capture's - the same answer, without a second
+   source of truth to go stale. */
+let heldKey = '', heldVal = null;
+function held(){
+  const f = SHOW.flashes || [];
+  const key = f.length + ':' + (f.length ? f[f.length-1].t : 0);
+  if (key === heldKey && heldVal) return heldVal;
+  heldKey = key;
+  if (!f.length) return (heldVal = { n:0, span:0, rate:0, medDur:0, maxDur:0,
+                                     medArea:0, maxArea:0, medGroups:0, maxGroups:0 });
+  const span = Math.max(1, (f[f.length-1].t - f[0].t) / 1000);
+  const durs = [], areas = [], grps = [];
+  let maxDur = 0, maxArea = 0, maxGroups = 0;
+  for (const x of f){
+    durs.push(x.d); areas.push(x.a); grps.push(x.g.length);
+    if (x.d > maxDur) maxDur = x.d;
+    if (x.a > maxArea) maxArea = x.a;
+    if (x.g.length > maxGroups) maxGroups = x.g.length;
+  }
+  return (heldVal = { n: f.length, span,
+    rate: f.length / span, medDur: med(durs), maxDur,
+    medArea: med(areas), maxArea, medGroups: med(grps), maxGroups });
+}
 function panel(live, lit, durs, areas){
-  const s = SHOW.stats;
+  const s = held();
   /* EVERY ROW MOVES, or the panel looks broken. Joe, 2026-09-13: "the field
      for flash lasts and lights up seem to not be updating." They were the
      capture's whole-show medians sitting beside two live counters, which is a
@@ -592,11 +638,11 @@ function panel(live, lit, durs, areas){
   const rows = [
     {k:'in the air now',  v: live + ' flashes'},
     {k:'pulses lit',      v: lit + ''},
-    {k:'flash rate',      v: s.rate + ' / s'},
+    {k:'flash rate',      v: s.rate.toFixed(2) + ' / s'},
     {k:'pulses per flash',v: (live ? Math.round(lit/live) : 0) + ' now, ' + s.maxGroups + ' most'},
     {k:'flash lasts',     v: (durs.length ? med(durs) : 0) + ' ms, up to ' + s.maxDur},
     {k:'lights up',       v: (areas.length ? Math.round(med(areas)) : 0) + ' km², up to '
-                             + s.maxArea.toLocaleString()},
+                             + Math.round(s.maxArea).toLocaleString()},
     {k:'light came',      v: (SHOW.slantKm ? SHOW.slantKm.toLocaleString() + ' km, '
                              + SHOW.lightMs + ' ms' : '—')},
     {k:'at',              v: '777.4 nm, oxygen'},
@@ -611,7 +657,8 @@ function handOff(){ handedOff=true; Wall.lane('');
 const infoEl=document.getElementById('info');
 function updateInfo(inAir, lit){
   infoEl.textContent =
-    SHOW.where + '  ' + SHOW.flashes.length + ' flashes, ' + SHOW.stats.groups + ' groups\n'
+    SHOW.where + '  ' + SHOW.flashes.length + ' flashes, '
+    + SHOW.flashes.reduce((n,f)=>n+f.g.length,0) + ' groups\n'
     + 'box ' + SHOW.box.map(b=>b.toFixed(1)).join(', ') + '\n'
     + 'active ' + live + '  pulses lit ' + lit + '  window ' + lo + '..' + hi + '\n'
     + 'keys: i info · n new sky · arrows change page';
@@ -667,7 +714,7 @@ if (!SHOW){
           + (LIVE ? ' — and the Pi is fetching the newest right now.' : '.'));
   Wall.after(9000, () => Wall.lane(
       `${SHOW.where}: ${SHOW.flashes.length.toLocaleString()} flashes in six minutes, `
-    + `${(SHOW.stats.rate).toFixed(1)} every second.`, {hold: 8000}));
+    + `${held().rate.toFixed(1)} every second.`, {hold: 8000}));
 
   /* The rest of the science waits for the sky it describes. sayTheScience()
      runs on a timer, so a showing is never left mute. */
@@ -692,7 +739,7 @@ let scienceSaid = false;
 function sayTheScience(){
   if (scienceSaid || !SHOW) return;
   scienceSaid = true;
-  const s = SHOW.stats;
+  const s = held();
   Wall.after(600, () => Wall.lane(
       `A flash is not an instant: it stutters through ${s.medGroups} pulses in about `
     + `${(s.medDur/1000).toFixed(1)} s, and every pulse here is drawn at its own recorded `
@@ -700,7 +747,7 @@ function sayTheScience(){
   Wall.after(26000, () => Wall.lane(
       `The ring is not the bolt. Cloud scatters the light sideways, so a channel a few kilometres `
     + `long makes the whole thunderhead glow — a paper lantern lit from inside. Median ${s.medArea} km²; `
-    + `the biggest here lit ${s.maxArea.toLocaleString()}.`));
+    + `the biggest here lit ${Math.round(s.maxArea).toLocaleString()}.`));
   Wall.after(50000, () => Wall.lane(
       `The satellite caught a median of ${s.medE} femtojoules from each one. The flash that made it `
     + `moved some 15 coulombs across a hundred million volts — of order a billion joules, through a `
