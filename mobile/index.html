@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v1.4 · 2026-09-16 — in the ring as of 2026-09-16.
+/* mobile.html · v1.6 · 2026-09-16 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,8 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v1.6  a tighter puff blows harder, the way pursed lips do
+     v1.5  the cone is set by what it should cover - tightest is one boat wide
      v1.4  the fleet gets 50% more wind and 50% more puffs
      v1.3  the wind is a PUFF, not a weather system: it leaves a mouth, spreads
            in a cone of 14 to 55 degrees, and only moves what it happens to
@@ -727,12 +729,38 @@ function stepWind(dt, t){
        The aim is a point picked anywhere in the mobile's own box; the mouth sits
        a way upwind of it along the gust's bearing; the cone is narrow or wide by
        the throw of a die, from a pursed 14 degrees to an open-mouthed 55. */
-    wind.cone = Math.cos((CONE_FORCE || (14 + rnd() * 41)) * Math.PI / 180);
+    /* HOW WIDE THE CONE OPENS IS SET BY WHAT IT SHOULD COVER, not by an angle
+       picked out of the air. The tightest puff is aimed at ONE OBJECT - its
+       footprint where it lands is about one hull wide - and the widest takes in
+       most of the mobile. Everything between is log-uniform, so narrow puffs are
+       as common as broad ones rather than being a rare tail.
+
+       Deriving it this way means it keeps meaning "one boat" if the fleet is
+       ever built wider or the rods lengthened again; an angle in degrees would
+       have quietly stopped meaning that the moment ROD_LONG changed. */
+    const D  = 1400;
+    const tightR = (MODE === 'boats' ? HULL_L : CARD_R * 2) * 0.80;
+    const wideR  = Math.max(SPAN.x1 - SPAN.x0, 600) * 0.55;
+    const r = CONE_FORCE ? D * Math.tan(CONE_FORCE * Math.PI / 180)
+                         : tightR * Math.pow(wideR / tightR, rnd());
+    wind.cone = Math.cos(Math.atan(r / D));
+
+    /* A NARROW PUFF IS A FASTER ONE. Pursed lips and an open mouth move about
+       the same breath; the small aperture just sends it out quicker. So a puff
+       aimed at one boat blows harder than one that takes in the whole fleet -
+       which is both what a person does and what this needed.
+
+       MEASURED, because the narrow cone cost motion on its own: drawing cones
+       log-uniformly between one boat and the whole fleet dropped the rods from
+       3.1 revolutions in two minutes to 2.2 and the hulls from 1.7-2.6 to
+       1.1-1.7, since most puffs now miss most of the boats. Strictly the speed
+       would go as 1/area; that is far too violent, so it goes as the square
+       root of the radius ratio and is capped at two and a half. */
+    wind.gust *= Math.min(2.5, Math.sqrt(wideR / r));
     const W = windVec();
     const ax = SPAN.x0 + rnd() * (SPAN.x1 - SPAN.x0);
     const ay = SPAN.y0 + rnd() * (SPAN.y1 - SPAN.y0);
     const az = (rnd() * 2 - 1) * ROD_LONG * 0.8;
-    const D  = 1400;
     wind.ox = ax - W.x * D; wind.oy = ay - W.y * D; wind.oz = az - W.z * D;
 
     const gap = MODE === 'boats' ? BOAT_GUST_GAP : [5, 9];
