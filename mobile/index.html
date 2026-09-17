@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v1.2 · 2026-09-16 — in the ring as of 2026-09-16.
+/* mobile.html · v1.3 · 2026-09-16 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,9 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v1.3  the wind is a PUFF, not a weather system: it leaves a mouth, spreads
+           in a cone of 14 to 55 degrees, and only moves what it happens to
+           hit; the boats' rigging is almost invisible
      v1.2  rods 15% longer; the fleet's rigging fades into the air; puffs come
            two to three times as often for the boats; and the wind has an
            elevation, always blowing toward the plane it came at
@@ -298,7 +301,14 @@ function makeBoat(){
            n:1, I:0, depth:0,
            sx:0, sz:0, vx:0, vz:0, ax_:0, az_:0,
            tw: rnd() * Math.PI * 2, twV: 0,
-           cx: (rnd() - 0.5) * 0.10 };                  // each hull hung a touch off centre
+           /* A BOAT IS A WEATHERVANE AND A CUT-OUT ANIMAL IS NOT. Its sail
+              is a big surface whose centre of effort sits well aft of the mast
+              it hangs from, so the wind has real leverage to swing her round -
+              which is what a boat on a thread does, every time. The animals'
+              levers come from measuring their own lopsided silhouettes and run
+              to about a tenth of their width; a boat's is two and a half times
+              that, and signed at random so the fleet does not turn as one. */
+           cx: (rnd() < 0.5 ? -1 : 1) * (0.18 + rnd() * 0.12) };
 }
 
 /* A ROD OF FIXED LENGTH WITH A MOVING PIVOT, which is the other way to build a
@@ -360,7 +370,7 @@ const BOAT_GUST_GAP = [1.8, 3.2];                       // a puff every 2-5 s, n
    measurement - where a pivot sits is the whole claim - so they stay at full
    strength. A fleet claims nothing, and the wires only stand between you and
    the boats, so they fall back into the air until they are barely there. */
-const RIG_VIS = MODE === 'boats' ? 0.26 : 1;
+const RIG_VIS = MODE === 'boats' ? 0.10 : 1;   // almost gone, for the boats
 
 const GAP      = MODE === 'boats' ? BOAT_GAP : GAP_ANIMALS;
 const SAG_FRAC = MODE === 'boats' ? SAG_ANIMALS * BOAT_LIMP : SAG_ANIMALS;
@@ -632,7 +642,33 @@ function tipDrop(node, d){
    speak of; what stops a rod is drag. Each rod is also dragged a little by its
    parent's turning, which is what carries a disturbance DOWN the mobile
    instead of leaving every rod in a world of its own. */
-const wind = { dir:0, mag:0, next:2, gust:0, gustDir:0, gustT:0, gustLen:0, vert:0 };
+const wind = { dir:0, mag:0, next:2, gust:0, gustDir:0, gustT:0, gustLen:0, vert:0,
+               cone:0, ox:0, oy:0, oz:0 };
+let SPAN = { x0:-600, x1:600, y0:0, y1:900 };     // the mobile's own box, set by resize()
+const CONE_FORCE = parseFloat((location.search.match(/[?&]cone=([\d.]+)/) || [])[1]) || 0;
+
+/* the gust's direction as a vector: bearing round the compass, elevation from
+   wind.vert, with y counted downward the way the screen does */
+function windVec(){
+  const ce = Math.sqrt(Math.max(0, 1 - wind.vert * wind.vert));
+  return { x: Math.cos(wind.dir) * ce, y: wind.vert, z: Math.sin(wind.dir) * ce };
+}
+
+/* HOW HARD THE WIND IS BLOWING AT ONE PARTICULAR PLACE. Inside the cone it is
+   the full gust; at the edge it feathers out rather than stopping dead, because
+   a mouth does not have a rim. Outside it there is only the ambient breeze. */
+function windAt(x, y, z){
+  if (wind.mag <= 0) return 0;
+  const dx = x - wind.ox, dy = y - wind.oy, dz = z - wind.oz;
+  const len = Math.hypot(dx, dy, dz) || 1;
+  const W = windVec();
+  const cosang = (dx * W.x + dy * W.y + dz * W.z) / len;
+  if (cosang <= wind.cone) return wind.mag * AMBIENT;
+  // 1 at the axis, 0 at the rim, smoothed
+  const u = (cosang - wind.cone) / (1 - wind.cone);
+  return wind.mag * (AMBIENT + (1 - AMBIENT) * u * u * (3 - 2 * u));
+}
+const AMBIENT = 0.12;              // what still stirs outside the cone
 const WIND_GAIN = 0.0016;    // torque per unit (boards x lever) per unit wind
 /* A SWIVEL HAS ALMOST NO FRICTION IN IT, and these two numbers had forgotten
    that. At 0.55 and 0.45 the effective damping on a rod's spin was about 1 per
@@ -674,6 +710,24 @@ function stepWind(dt, t){
        arm flexes as it passes. A puff square in the horizontal plane has an
        elevation of zero and does exactly what puffs did before. */
     wind.vert = Math.sin((rnd() * 2 - 1) * (Math.PI / 2));
+
+    /* A PUFF IS BLOWN AT SOMETHING, not laid over everything (Joe,
+       2026-09-16). It leaves a mouth, spreads in a cone, and reaches whatever
+       happens to be inside that cone - so one gust may catch three boats and
+       miss the other five, and the mobile turns because it was hit unevenly.
+       That is how a real breath moves one of these.
+
+       The aim is a point picked anywhere in the mobile's own box; the mouth sits
+       a way upwind of it along the gust's bearing; the cone is narrow or wide by
+       the throw of a die, from a pursed 14 degrees to an open-mouthed 55. */
+    wind.cone = Math.cos((CONE_FORCE || (14 + rnd() * 41)) * Math.PI / 180);
+    const W = windVec();
+    const ax = SPAN.x0 + rnd() * (SPAN.x1 - SPAN.x0);
+    const ay = SPAN.y0 + rnd() * (SPAN.y1 - SPAN.y0);
+    const az = (rnd() * 2 - 1) * ROD_LONG * 0.8;
+    const D  = 1400;
+    wind.ox = ax - W.x * D; wind.oy = ay - W.y * D; wind.oz = az - W.z * D;
+
     const gap = MODE === 'boats' ? BOAT_GUST_GAP : [5, 9];
     wind.next    = t + gap[0] + rnd() * gap[1];
   }
@@ -685,6 +739,17 @@ function stepWind(dt, t){
   wind.mag = breeze + wind.gust * env;
   wind.dir = wind.gustDir + 0.35 * Math.sin(t * 0.17);
   return env * wind.gust;                   // how hard the puff is pushing right now
+}
+
+/* WHAT FRACTION OF THE PIECE THE PUFF IS ACTUALLY ON, 0 to 1. The bob is the
+   whole mobile moving as one, so it answers to the AVERAGE of what the gust
+   reaches rather than to the gust's own strength: a puff aimed at one corner
+   barely lifts the piece, one that engulfs it lifts all of it. */
+function coverage(){
+  let sum = 0, n = 0;
+  (function walk(x){ if (x.leaf){ sum += windAt(x.wx, x.wy, x.wz); n++; }
+                     else { walk(x.a); walk(x.b); } })(root);
+  return n && wind.mag > 0 ? (sum / n) / wind.mag : 0;
 }
 
 /* the whole piece rides up and down on the springiness of its own rods */
@@ -718,8 +783,9 @@ const SWING_Z = 0.14;       // damping. Gusts land right on the boards' own
 
 function stepSwing(node, dt){
   const w2 = SWING_G / node.Leff, w = Math.sqrt(w2), c = 2 * SWING_Z * w;
-  const ax = (SWING_K * wind.mag * Math.cos(wind.dir)) / node.Leff;
-  const az = (SWING_K * wind.mag * Math.sin(wind.dir)) / node.Leff;
+  const here = windAt(node.wx, node.wy, node.wz);      // only what reaches IT
+  const ax = (SWING_K * here * Math.cos(wind.dir)) / node.Leff;
+  const az = (SWING_K * here * Math.sin(wind.dir)) / node.Leff;
   node.vx += (ax - w2 * node.ax_ - c * node.vx) * dt; node.ax_ += node.vx * dt;
   node.vz += (az - w2 * node.az_ - c * node.vz) * dt; node.az_ += node.vz * dt;
   // a soft ceiling on how far anything leans, so nothing ever hits a stop
@@ -745,6 +811,19 @@ function stepSwing(node, dt){
 
    Boards deep in a subtree face all sorts of ways, so the sum does not vanish
    when the rod happens to line up, and the assembly keeps being driven. */
+/* WHERE EVERY PIECE ACTUALLY IS. Until now nothing needed to know: the wind
+   was one number that reached the whole mobile at once. A puff that only hits
+   PART of it has to be asked about a place, so once per step the tree is walked
+   from the root and each node told where in the room it sits. Cheap - fifteen
+   nodes - and it is the same walk collect() does for drawing. */
+function locate(node, x, y, z){
+  node.wx = x; node.wy = y; node.wz = z;
+  if (node.leaf) return;
+  const c = Math.cos(node.th), sn = Math.sin(node.th);
+  locate(node.a, x - node.da * c, y + tipDrop(node, node.da) + GAP, z - node.da * sn);
+  locate(node.b, x + node.db * c, y + tipDrop(node, node.db) + GAP, z + node.db * sn);
+}
+
 function boardsUnder(node, out, ox, oz, face){
   if (node.leaf){ out.push({ x:ox, z:oz, face }); return out; }
   const c = Math.cos(node.th), s = Math.sin(node.th);
@@ -757,9 +836,14 @@ function windTorque(node){
   const cw = Math.cos(wind.dir), sw = Math.sin(wind.dir);
   let T = 0;
   for (const b of bs){
-    // every board is the same area, so area drops out and only its facing and
-    // its position matter
-    T += Math.abs(Math.sin(wind.dir - b.face)) * (b.x * sw - b.z * cw);
+    /* Every board is the same area, so area drops out; what is left is its
+       facing, its position on this rod, and - new - HOW MUCH WIND IS ACTUALLY
+       REACHING IT. A rod whose two ends sit in and out of the cone now has a
+       torque even when it is perfectly symmetric, which is exactly the case
+       the boats are: eight near-identical hulls that a uniform wind could
+       never turn, because it pushed both sides the same. */
+    const w = windAt(node.wx + b.x, node.wy, node.wz + b.z);
+    T += w * Math.abs(Math.sin(wind.dir - b.face)) * (b.x * sw - b.z * cw);
   }
   return T;
 }
@@ -777,7 +861,14 @@ function windTorque(node){
    its rod is doing - unlike the rods themselves, which hang on swivels and have
    almost none. That is why boards wander a few tens of degrees and return,
    while a rod will turn round and round. */
-const TWIST_GAIN = 0.0065, TWIST_DRAG = 0.55, TWIST_SPRING = 0.42;
+const TWIST_GAIN = 0.0065, TWIST_DRAG = 0.55;
+/* THE THREAD'S TWIST, AND WHY THE BOATS GET LESS OF IT. A cut-out animal hangs
+   from a thread that has been twisted up and wants to untwist, which is what
+   holds it roughly square to its rod. A boat swings freely and points where the
+   wind tells it to - so its restoring spring is a quarter of the animals'.
+   Measured: at the animals' value the fleet barely moved on its swivels, which
+   is what Joe was seeing. */
+const TWIST_SPRING = MODE === 'boats' ? 0.11 : 0.42;
 
 function stepNode(node, dt, omParent, aIn, thParent){
   stepSwing(node, dt);
@@ -785,17 +876,19 @@ function stepNode(node, dt, omParent, aIn, thParent){
     const rel = wind.dir - node.tw;
     const drag = Math.sin(rel) * Math.abs(Math.sin(rel));
     const lever = node.cx * cardBox(node.name).w;      // signed, layout px
-    const a = wind.mag * drag * lever * TWIST_GAIN
+    const a = windAt(node.wx, node.wy, node.wz) * drag * lever * TWIST_GAIN
             - TWIST_DRAG * node.twV
             + TWIST_SPRING * Math.sin(thParent - node.tw);
     node.twV += a * dt; node.tw += node.twV * dt;
+    node.swept = (node.swept || 0) + Math.abs(node.twV) * dt;   // diagnostic
     return;
   }
-  const alpha = wind.mag * windTorque(node) * WIND_GAIN / Math.max(1, node.I / 20000)
+  const alpha = windTorque(node) * WIND_GAIN / Math.max(1, node.I / 20000)
               - DRAG * node.om
               + COUPLE * (omParent - node.om);
   node.om += alpha * dt;
   node.th += node.om * dt;
+  node.swept = (node.swept || 0) + Math.abs(node.om) * dt;   // diagnostic
 
   // the arms bend more when the piece is accelerating downward, less when up
   const w = node.flexW;
@@ -834,6 +927,7 @@ function resize(){
   /* The cap stops a small mobile being blown up past the point where its own
      line weights look right. A four-boat fleet is small enough to hit it, and
      sat in the middle of the screen looking lost, so it is no longer 1.15. */
+  SPAN = { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1 };   // what the wind can aim at
   fit.s = Math.min(s, 2.1);
   fit.x = W/2 - ((b.x0 + b.x1)/2) * fit.s;
   fit.y = top - b.y0 * fit.s;
@@ -1332,7 +1426,8 @@ function frame(ms){
     const h = Math.min(0.008, left); left -= h;
     simT += h;
     const push = stepWind(h, simT);
-    stepBob(h, push);
+    locate(root, 0, 0, 0);                 // where everything is, for the cone
+    stepBob(h, push * coverage());
     stepNode(root, h, 0, bobA, 0);
   }
 
@@ -1396,6 +1491,11 @@ function frame(ms){
                  '  bx ' + bx0.toFixed(0) + '..' + bx1.toFixed(0), 40, 96);
     ctx.fillText('arms ' + (function f(n){ return n.leaf ? '' :
         (' ' + n.da.toFixed(0) + '/' + n.db.toFixed(0) + f(n.a) + f(n.b)); })(root), 40, 124);
+    const revs = [], twists = [];
+    (function f(n){ if (n.leaf) twists.push(((n.swept||0)/(2*Math.PI)).toFixed(2));
+                    else { revs.push(((n.swept||0)/(2*Math.PI)).toFixed(2)); f(n.a); f(n.b); } })(root);
+    ctx.fillText('rods turned  (revs in ' + simT.toFixed(0) + ' s): ' + revs.join('  '), 40, 152);
+    ctx.fillText('hulls turned (revs in ' + simT.toFixed(0) + ' s): ' + twists.join('  '), 40, 180);
   }
 
   const bobPx = bob * fit.s;
@@ -1450,7 +1550,8 @@ if (isFinite(AT) && AT > 0){
   for (let n = Math.round(AT / 0.008); n > 0; n--){
     simT += 0.008;
     const push = stepWind(0.008, simT);
-    stepBob(0.008, push);
+    locate(root, 0, 0, 0);
+    stepBob(0.008, push * coverage());
     stepNode(root, 0.008, 0, bobA, 0);
   }
   // last stays 0: it belongs to the ANIMATION clock, and simT is the
