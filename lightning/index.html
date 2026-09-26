@@ -37,7 +37,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v3.4 · 2026-09-17
+  lightning.html · v3.6 · 2026-09-26
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -73,6 +73,15 @@
 ==========================================================================
 
   CHANGED
+    v3.6  THE BASEMAP IS THE CAPTURE'S OWN. The page asked for a filename
+          nothing has written since the capture moved to <stem>_basemap.jpg, so
+          a twelve-day-old map of somewhere else sat under every storm while
+          the town labels moved correctly. Cache-busted, because every capture
+          reuses one filename
+    v3.5  THE ENERGY BEAT SAID "undefined". v3.4 moved every figure on to the
+          flashes the page is holding, and held() did not carry energy - so the
+          one sentence that still asked for it printed nothing at all. It is
+          computed from the held flashes now, like every other figure
     v3.4  every figure on the panel describes the flashes the page is HOLDING.
           The data were live and the numbers beside them were not: a sky running
           at 4.9 flashes a second announced the capture's 9.06, and the footer
@@ -614,19 +623,28 @@ function held(){
   if (key === heldKey && heldVal) return heldVal;
   heldKey = key;
   if (!f.length) return (heldVal = { n:0, span:0, rate:0, medDur:0, maxDur:0,
-                                     medArea:0, maxArea:0, medGroups:0, maxGroups:0 });
+                                     medArea:0, maxArea:0, medGroups:0, maxGroups:0,
+                                     medE:0, maxE:0 });
   const span = Math.max(1, (f[f.length-1].t - f[0].t) / 1000);
-  const durs = [], areas = [], grps = [];
-  let maxDur = 0, maxArea = 0, maxGroups = 0;
+  const durs = [], areas = [], grps = [], energies = [];
+  let maxDur = 0, maxArea = 0, maxGroups = 0, maxE = 0;
   for (const x of f){
-    durs.push(x.d); areas.push(x.a); grps.push(x.g.length);
+    durs.push(x.d); areas.push(x.a); grps.push(x.g.length); energies.push(x.e);
     if (x.d > maxDur) maxDur = x.d;
     if (x.a > maxArea) maxArea = x.a;
     if (x.g.length > maxGroups) maxGroups = x.g.length;
+    if (x.e > maxE) maxE = x.e;
   }
+  /* ENERGY WAS LEFT OUT OF THIS OBJECT AND THE PAGE SAID SO. v3.4 moved every
+     figure off the capture's frozen SHOW.stats and on to the flashes actually
+     held - but the energy beat still asked for s.medE, which this returned for
+     nothing, so the wall read "a median of undefined femtojoules" for eight
+     days. The capture's own stats block carries medE, which is why it read
+     correctly before. Rounded to a tenth, as the capture rounded it. */
   return (heldVal = { n: f.length, span,
     rate: f.length / span, medDur: med(durs), maxDur,
-    medArea: med(areas), maxArea, medGroups: med(grps), maxGroups });
+    medArea: med(areas), maxArea, medGroups: med(grps), maxGroups,
+    medE: Math.round(med(energies) * 10) / 10, maxE });
 }
 function panel(live, lit, durs, areas){
   const s = held();
@@ -690,9 +708,26 @@ if (!SHOW){
   Wall.lane('No storm is built. Run glm_show.py.');
 } else {
   resize(); computeMap();
-  base = new Image();
-  base.onload = () => { baseReady = true; };
-  base.src = 'glm_basemap.jpg';
+  /* ASK THE CAPTURE WHICH MAP IS ITS OWN. This said 'glm_basemap.jpg', a name
+     nothing has written since glm_show.py moved to <stem>_basemap.jpg - so the
+     page drew a twelve-day-old map of somewhere else under every storm, while
+     the town labels, which come from the capture's own towns[], moved
+     correctly. Joe spotted it from the sofa: "it's showing a lightning storm
+     in the Caribbean, but the base map is I think still the midwest US."
+
+     THE CACHE-BUSTER IS NOT OPTIONAL. Every capture writes the SAME filename,
+     so without it Chromium keeps the first image it ever loaded and the bug
+     comes straight back in a form that only shows after a reload.
+
+     AND THERE IS NO FALLBACK ON PURPOSE. A missing basemap is a black field
+     with the storm still drawn on it; the WRONG basemap is a page stating that
+     a Caribbean storm is over Illinois. If the capture does not name its map,
+     we draw no map. */
+  if (SHOW.basemap) {
+    base = new Image();
+    base.onload = () => { baseReady = true; };
+    base.src = SHOW.basemap + '?t=' + (SHOW.t0 || Date.now());
+  }
   window.WALL_SECONDS_PER_RUN = Math.round(spanMs()/1000 + 30);
   document.getElementById('pname').textContent = 'Lantern';
 

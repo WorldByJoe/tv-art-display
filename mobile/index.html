@@ -30,7 +30,7 @@
 })();
 </script>
 <script>
-/* mobile.html · v2.4 · 2026-09-17 — in the ring as of 2026-09-16.
+/* mobile.html · v2.8 · 2026-09-24 — in the ring as of 2026-09-16.
 
    A Calder mobile hung with real animals. Every animal is cut the same size, so
    the picture tells you nothing about how heavy it is; the only place mass
@@ -52,6 +52,36 @@
    Wood sways; the geometry is the measurement.
 
    CHANGED
+     v2.8  THE D-PAD WORKS HERE NOW. This page carried no keydown listener
+           at all, and being last in the ring that read as "the wall cannot get
+           back to the first piece". The ring was always fine - Wall.step(1)
+           returns kiosk.html from here - the key had nowhere to land.
+     v2.7  A BOAT'S OWN THREAD IS AS FREE AS THE RODS' SWIVELS - the damping
+           ratio falls from 0.83 (near critical, so she SAT on her heading and
+           a regular fleet synchronised) to 0.18, and the two boats on a rod now
+           differ by a median of 7-11 degrees instead of 1. And the fleet is
+           never smaller than EIGHT. Measured: net turn 17-27 deg per rod per
+           ten seconds, dead looks 4-9%, against 13-27 and 1-40% before.
+           SIXTEEN was measured and rejected - it turns MORE (25-28 deg, 0%
+           dead) and costs only 7% of the frame rate, but two thirds of the
+           fleet is hidden behind another boat at any moment against one third
+           at eight, and spreading the levels cannot fix it because the overlap
+           is projection, not layout
+     v2.6  A REGULAR FLEET (Joe): every sailboat the same size, every pivot at
+           the centre of its rod. Depth is now the ONLY thing that changes a
+           boat's size on screen. The v2.0 worry that a symmetric rod cannot be
+           turned no longer holds - measured over 20 min, the eight-boat fleets
+           turn 17-19 deg per rod per ten seconds against 18-27 irregular, and
+           the weathervane term collapses from 0.12-0.47 to 0.00-0.09, so what
+           turning there is comes from the puff catching the fleet unevenly
+     v2.5  THE RODS TURN. Four errors, all in the same direction: the turning
+           had a free gain of its own (4.4x under what the swing's own gravity
+           says the wind pushes), each rod carried its children's spin inertia
+           though a swivel decouples it (3.6x too heavy at the root), the wind
+           was aimed at the rod a board hangs from rather than the board, and a
+           near-vertical puff still shoved sideways at full strength (1.57x).
+           One puff used to turn a rod 8 degrees; it now turns it 55-154. In
+           64% of ten-second looks not one rod turned 20 degrees; now 1-8%
      v2.4  every board is drawn into ONE atlas and only then blitted. Writing to
            a canvas and then using it as a source costs the Pi ~5 ms of pipeline
            stall each time the two interleave; this leaves a single round trip
@@ -341,12 +371,8 @@ window.WALL_SECONDS_ONCE = 2;
 
    THE BOATS hang on a PERFECT BINARY tree - two children at every joint, all
    the way down - so 2^n of them end at the same level and lie in one plane.
-   With nothing to encode they can afford to be regular, which is what a Calder
-   actually looks like. They are not all identical: each is drawn a little
-   heavier or lighter than its neighbour, which nudges every pivot off centre
-   and, more importantly, gives the wind something to push against. A perfectly
-   symmetric rod has equal sail either side of its axis and therefore no turning
-   moment at all - it would hang there, dead, while the animals danced. */
+   With nothing to encode they are REGULAR, which is what a Calder actually
+   looks like: every boat identical, every pivot dead centre of its rod. */
 const MODE = /[?&]mode=boats/.test(location.search)   ? 'boats'
            : /[?&]mode=birds/.test(location.search)   ? 'birds'
            : /[?&]mode=animals/.test(location.search) ? 'animals'
@@ -356,61 +382,112 @@ const MODE = /[?&]mode=boats/.test(location.search)   ? 'boats'
    derived constant has been written above the thing it derives from */
 const STABLE = STABLES[MODE === 'birds' ? 'birds' : 'mammals'];
 
-const BOAT_LEVELS = 2 + (rnd() < 0.45 ? 1 : 0);        // 4 boats, or 8
+/* EIGHT BOATS, AND WHY NOT SIXTEEN (Joe, 2026-09-17).
 
-/* BOATS OF DIFFERENT SIZES, and that one decision does all the work.
+   Four was the old low draw and it was the worst case in every measurement -
+   three rods and a short span give a puff almost nothing to catch unevenly, and
+   it sat far stiller than the eight-boat fleet. Eight is the floor now.
 
-   Draw her LENGTH and everything follows the way it does on the water: she
-   displaces as the cube of it and she carries sail as the square. So a big boat
-   is heavier AND has more canvas - but LESS canvas per tonne, because the
-   square grows slower than the cube. That is the density contrast this piece
-   needed: the wind's moment on a rod goes as area x distance while the balance
-   goes as mass x distance, and those two only diverge when sail-per-tonne
-   differs between the ends. Two boats of length L1 and L2 give a wind moment
-   proportional to L1^2 L2^2 (L2 - L1) - zero only if they are the same size.
+   SIXTEEN (levels 4) was built and measured before being turned down, and NOT
+   for the reason you would expect. It moves BETTER - 25-28 deg of net turn per
+   rod per ten seconds against 19-22, and no dead ten-second look at all, since
+   fifteen rods give a cone far more edges to catch. It is not expensive either:
+   4K frame rate 37.5 fps against 40.2, a 7% cost.
 
-   Set them all the same length and the fleet goes dead still again, which is
-   how the first version was built and why no puff could turn it.
+   It is turned down because it is CROWDED. Two thirds of the boats are behind
+   another boat by more than a third of a hull at any moment, against one third
+   of them at eight. And that cannot be spread away: opening the nesting ratio
+   from 0.72 to 0.92 bought only 68% -> 57% while shrinking every hull from 73
+   to 55 px, because the overlap is PROJECTION - sixteen boats in one horizontal
+   band on a structure that turns will pass in front of each other whatever the
+   layout does. A fleet you cannot count is not a better fleet.
 
-   Length runs 0.55 to 1.60, so the biggest displaces about twenty-five times
-   the smallest and carries roughly three times the sail per tonne of the
-   smallest - enough contrast to move, not so much that a pivot ends up jammed
-   against one end of its rod (worst case it sits 3.9% along).
+   ONE SIDE EFFECT, so nobody hunts it later: this used to be a coin toss, and
+   dropping it removed a draw from the generator. Every seed therefore deals a
+   different cast and a different evening from v2.7 on - the animals are not
+   behaving differently, they are a different seven. Checked: put the draw back
+   and seed 20260916 returns its old cast and its old numbers exactly. A ?at
+   capture from an earlier version will not reproduce; one made from v2.7 will. */
+const BOAT_LEVELS = 3;                                 // 8 boats
 
-   Tying sail to length COSTS some contrast, and that is worth knowing: drawing
-   mass and sail independently gave a four-fold spread in sail-per-tonne, where
-   length-driven gives about three. It is the physically honest version and the
-   one that looks like a fleet, so the range is widened rather than the coupling
-   broken. */
+/* WHAT THE FLEET IS MEANT TO BE (Joe, 2026-09-17), and it is a decision about
+   the MODEL, not about the drawing:
+
+       EVERY SAILBOAT IS THE SAME SIZE, AND EVERY PIVOT SITS AT THE CENTRE
+       OF ITS ROD.
+
+   One boat, built once, hung 2^n times from a perfect binary tree of rods each
+   balanced at its middle. That is what a Calder fleet looks like and it is what
+   this is meant to be.
+
+   A BOAT MAY STILL LOOK SMALLER - when she is at the BACK. That is perspective
+   and nothing else: paintBoat sizes her by persp(z), the same viewer-distance
+   factor every part of the mobile gets. It is a depth cue applied at the last
+   moment to a fleet that is identical in the model. Nobody should ever read a
+   size difference on this screen as a difference between the boats.
+
+   So: len, kg and sail are all 1, and they are kept as fields rather than
+   deleted because paintBoat scales the rig by sqrt(sail) and the hull by
+   cbrt(kg) - a boat drawn from a single length - and one day the fleet may
+   want to be irregular again. Set them from one L and it all still works.
+
+   WHAT THIS GAVE UP, so nobody re-derives it by surprise. v2.0 gave the boats a
+   size spread ON PURPOSE: the wind's moment on a rod goes as area x distance
+   while the balance goes as mass x distance, so a rod with equal sail either
+   side has ZERO net moment under a UNIFORM wind and hangs there dead. That was
+   true when it was written and it is why the regular fleet was abandoned.
+
+   IT IS NO LONGER THE WHOLE STORY, and it was measured again before this was
+   changed. Three things now break the symmetry that a uniform wind cannot:
+     - a puff is a CONE aimed at a point, so one end of a rod can be in it and
+       the other out - windTorque asks windAt for every board separately;
+     - each boat twists on her OWN thread, so two identical hulls present
+       different sail to the same wind;
+     - since v2.5 the drive is the same force the swing uses, 4 to 15 times what
+       it was, so what asymmetry there is actually moves something.
+   Measured, regular fleet: see the CHANGED note at the top of the file. */
 function makeBoat(){
-  const L = 0.55 + rnd() * 1.05;
+  /* ALL ONE SIZE. Length 1, so displacement (the cube) and sail area (the
+     square) are 1 as well - she simply is the boat, and every other boat in
+     the fleet is the same boat. */
+  const L = 1;
   return { leaf:true, boat:true, name:'boat', len:L,
            kg:   L * L * L,                            // displacement
            sail: L * L,                                // sail area
            n:1, I:0, depth:0,
            sx:0, sz:0, vx:0, vz:0, ax_:0, az_:0,
+           /* Her POSE is still her own - she is hung at a random heading, and
+              the puff that reaches her is her own too. Identical boats, not
+              boats in lockstep. */
            tw: rnd() * Math.PI * 2, twV: 0,
-           cx: (rnd() < 0.5 ? -1 : 1) * (0.18 + rnd() * 0.12) };
+           /* How far her masthead is from the centre of her sail area: the
+              lever the wind has to weathervane her. Identical boats are hung
+              identically, so this is one number, not a throw of the dice. */
+           cx: 0.24 };
 }
 
-/* A ROD OF FIXED LENGTH WITH A MOVING PIVOT, which is the other way to build a
-   balance and the right one here. The animals' rods grow their long arm to
-   honour ratios of 30:1; boats sit within a whisker of each other, so a fixed
-   span with the pivot placed by the masses is both simpler and more like the
-   real thing - a wire cut to length, balanced by where you hang it. */
+/* A ROD OF FIXED LENGTH, PIVOTED AT ITS CENTRE. The animals' rods grow their
+   long arm to honour ratios of 30:1; the fleet has no ratios to honour, so each
+   rod is a wire cut to length and hung from its middle.
+
+   The lever law is still what puts the pivot there - da and db are worked out
+   from the masses exactly as they always were, and equal masses simply put the
+   answer at the centre. It is written that way on purpose: balance the rod, and
+   a regular fleet CENTRES ITSELF. Give a boat a different size again and every
+   pivot moves to where it belongs with no other change. */
 function buildBoats(levels){
   function node(level){
     if (level === 0) return makeBoat();
     const a = node(level - 1), b = node(level - 1);
     const span = BOAT_SPAN * Math.pow(BOAT_SPAN_SHRINK, levels - level);
-    const da = span * b.kg / (a.kg + b.kg);             // heavier side, shorter arm
-    const db = span * a.kg / (a.kg + b.kg);
+    const da = span * b.kg / (a.kg + b.kg);   // heavier side, shorter arm - and
+    const db = span * a.kg / (a.kg + b.kg);   // with a regular fleet, span/2 both
     return {
       leaf:false, a, b, da, db,
       kg: a.kg + b.kg,
       ratio: Math.max(a.kg, b.kg) / Math.min(a.kg, b.kg),
       n: a.n + b.n,
-      I: a.I + a.n*da*da + b.I + b.n*db*db,
+      I: a.n*da*da + b.n*db*db,          // what turning this rod must drag round
       th: rnd() * Math.PI * 2, om: 0,
       flex: 1, flexV: 0, flexW: 4.2 + rnd() * 2.2,
       depth: 1 + a.depth,
@@ -612,9 +689,23 @@ function cardBox(name){
 /* ---- build the balance tree -------------------------------------------
    Fold the animals in lightest-first, so each new joint hangs everything so far
    against the next animal up. Each node also carries what the wind needs: how
-   many boards hang on each side, how far out they are, and the subtree's moment
-   of inertia about this rod's own vertical axis (parallel axis, every board
-   weighing the same - see the note at the top of the file). */
+   many boards hang on each side, how far out they are, and how hard the rod is
+   to turn (every board weighing the same - see the note at the top of the file).
+
+   WHAT A SWIVEL DOES NOT MAKE YOU CARRY. Turning a rod drags everything under
+   it sideways: a board three levels down still has to travel da * dtheta,
+   because its hanger goes round with the rod tip. That is the n*d^2 term, and
+   it is real. What the rod does NOT have to do is SPIN the sub-assembly about
+   its own thread - the thread is a bearing, and the sub-assembly simply keeps
+   pointing where it was pointing.
+
+   So the children's own I does not belong here. It used to be added in anyway
+   (I = a.I + a.n*da^2 + b.I + b.n*db^2), which counted every child's spin
+   inertia twice: once in the child's own equation, where it belongs, and again
+   in its parent's, where it is a brake on a motion the child never resists.
+   The cost fell on the TOP of the mobile, where the most is hanging - the root
+   rod was carrying 3.6x the inertia it owes, which is why the big slow rods
+   were the deadest things on the page. */
 function build(){
   const sorted = [...MAMMALS].sort((a,b) => a.kg - b.kg);
   const board = (m) => ({ leaf:true, name:m.name, kg:m.kg, n:1, I:0, depth:0,
@@ -652,7 +743,7 @@ function build(){
     node = {
       leaf:false, kg: heavy.kg + light.kg, ratio, a, b, da, db,
       n: a.n + b.n,
-      I: a.I + a.n*da*da + b.I + b.n*db*db,   // parallel axis, equal-mass boards
+      I: a.n*da*da + b.n*db*db,   // what turning this rod must drag round
       th: DEMO ? 0 : rnd() * Math.PI * 2,           // where this rod is facing
       om: 0,                                  // and how fast it is turning
       flex: 1, flexV: 0,                      // how bent its arms are, 1 = at rest
@@ -748,6 +839,20 @@ function windVec(){
   return { x: Math.cos(wind.dir) * ce, y: wind.vert, z: Math.sin(wind.dir) * ce };
 }
 
+/* HOW MUCH OF A PUFF IS ACTUALLY BLOWING SIDEWAYS (2026-09-17).
+
+   windVec has always known the elevation, but only the CONE used it: everything
+   that pushed - the swing, the rods' turning, a board's twist on its thread -
+   took wind.mag whole and aimed it at wind.dir, as though every puff were level.
+   A puff coming almost straight down was shoving the mobile sideways at full
+   strength AND driving the bob at full strength, which is one puff doing the
+   work of two.
+
+   It is not a rare case. Elevations are drawn as sin of a uniform angle, so the
+   mean horizontal fraction is 2/pi = 0.64 and a THIRD of all puffs come in
+   steeper than 60 degrees. The sideways push was inflated 1.57x on average. */
+function windHoriz(){ return Math.sqrt(Math.max(0, 1 - wind.vert * wind.vert)); }
+
 /* HOW HARD THE WIND IS BLOWING AT ONE PARTICULAR PLACE. Inside the cone it is
    the full gust; at the edge it feathers out rather than stopping dead, because
    a mouth does not have a rim. Outside it there is only the ambient breeze. */
@@ -763,7 +868,23 @@ function windAt(x, y, z){
   return wind.mag * (AMBIENT + (1 - AMBIENT) * u * u * (3 - 2 * u));
 }
 const AMBIENT = 0.12;              // what still stirs outside the cone
-const WIND_GAIN = 0.0016;    // torque per unit (boards x lever) per unit wind
+/* THE TURNING HAS NO GAIN OF ITS OWN ANY MORE, and it should never have had
+   one. WIND_GAIN was a free knob (0.0016, against an inertia scaled by 20000),
+   and a free knob is exactly what a physical quantity must not be: the force
+   the wind puts on a board is already FIXED by the swing, because a pendulum
+   that settles at a measured lean has declared how hard it is being pushed.
+
+   Hold the wind steady and this page leans SWING_K/SWING_G = 0.0986 rad per
+   unit wind - so each board is being pushed at SWING_K px/s^2 per unit of its
+   own mass, and there is nothing left to choose. Feed that same force through
+   the same levers and the rods turn; feed a smaller one and they do not.
+
+   MEASURED: the old knob worked out to 32 px/s^2 where the swing says 140 - a
+   factor of 4.4 - and that, with the inertia below, is why a puff turned a rod
+   eight degrees instead of seventy-five. The drive is now SWING_K itself, so
+   the two motions can never drift apart again. (If anything it is still shy:
+   the swing drive takes the wind unprojected while the torque multiplies by
+   |sin| of each board's facing, so this errs on the gentle side.) */
 /* A SWIVEL HAS ALMOST NO FRICTION IN IT, and these two numbers had forgotten
    that. At 0.55 and 0.45 the effective damping on a rod's spin was about 1 per
    second - a brake, not a bearing - and the measured result was that a rod
@@ -902,7 +1023,8 @@ const SWING_Z = 0.14;       // damping. Gusts land right on the boards' own
 
 function stepSwing(node, dt){
   const w2 = SWING_G / node.Leff, w = Math.sqrt(w2), c = 2 * SWING_Z * w;
-  const here = windAt(node.wx, node.wy, node.wz);      // only what reaches IT
+  // only what reaches IT, and only the part of it that is blowing sideways
+  const here = windAt(node.wx, node.wy, node.wz) * windHoriz();
   const ax = (SWING_K * here * Math.cos(wind.dir)) / node.Leff;
   const az = (SWING_K * here * Math.sin(wind.dir)) / node.Leff;
   node.vx += (ax - w2 * node.ax_ - c * node.vx) * dt; node.ax_ += node.vx * dt;
@@ -923,13 +1045,26 @@ function stepSwing(node, dt){
    moment a rod lined up with the wind. Every rod weathervaned into alignment
    and sat there, which is precisely the not-turning that prompted this.
 
-   Now every board contributes at its OWN facing, set by the rod it hangs from,
-   and at its own true position relative to this rod's axis:
+   Now every board contributes at its OWN facing and at its own true position
+   relative to this rod's axis:
 
        torque = SUM over boards of  A |sin(phi - face)| * (r x wind)_z
 
    Boards deep in a subtree face all sorts of ways, so the sum does not vanish
-   when the rod happens to line up, and the assembly keeps being driven. */
+   when the rod happens to line up, and the assembly keeps being driven.
+
+   AND "ITS OWN FACING" MEANS ITS OWN, not its rod's (2026-09-17). This asked
+   boardsUnder for the angle of the rod a board hangs from, while the board is
+   DRAWN at node.tw - it hangs on a thread and has been turning on it all along.
+   So the wind was pushing on a board that was not there, square to a rod the
+   real one had wandered tens of degrees away from.
+
+   That is not a small bookkeeping slip, because slaving every board to its rod
+   rebuilds the exact weathervane this block was written to destroy: with one
+   facing per rod the torque collapses to sin|sin|(phi - theta) times the arm
+   difference, which has a stable zero pointing downwind. The rods did not turn,
+   they HUNTED - measured over twenty minutes, they swept 195 revolutions of
+   travel and got 16 revolutions of actual rotation out of it, a net of 8%. */
 /* WHERE EVERY PIECE ACTUALLY IS. Until now nothing needed to know: the wind
    was one number that reached the whole mobile at once. A puff that only hits
    PART of it has to be asked about a place, so once per step the tree is walked
@@ -943,16 +1078,18 @@ function locate(node, x, y, z){
   locate(node.b, x + node.db * c, y + tipDrop(node, node.db) + GAP, z + node.db * sn);
 }
 
-function boardsUnder(node, out, ox, oz, face){
-  if (node.leaf){ out.push({ x:ox, z:oz, face, area: node.sail || 1 }); return out; }
+function boardsUnder(node, out, ox, oz){
+  // face is the board's OWN twist - the angle it is drawn at, so the wind and
+  // the eye are looking at the same board
+  if (node.leaf){ out.push({ x:ox, z:oz, face: node.tw, area: node.sail || 1 }); return out; }
   const c = Math.cos(node.th), s = Math.sin(node.th);
-  boardsUnder(node.a, out, ox - node.da * c, oz - node.da * s, node.th);
-  boardsUnder(node.b, out, ox + node.db * c, oz + node.db * s, node.th);
+  boardsUnder(node.a, out, ox - node.da * c, oz - node.da * s);
+  boardsUnder(node.b, out, ox + node.db * c, oz + node.db * s);
   return out;
 }
 function windTorque(node){
-  const bs = boardsUnder(node, [], 0, 0, node.th);
-  const cw = Math.cos(wind.dir), sw = Math.sin(wind.dir);
+  const bs = boardsUnder(node, [], 0, 0);
+  const cw = Math.cos(wind.dir), sw = Math.sin(wind.dir), ch = windHoriz();
   let T = 0;
   for (const b of bs){
     /* Every board is the same area, so area drops out; what is left is its
@@ -961,7 +1098,7 @@ function windTorque(node){
        torque even when it is perfectly symmetric, which is exactly the case
        the boats are: eight near-identical hulls that a uniform wind could
        never turn, because it pushed both sides the same. */
-    const w = windAt(node.wx + b.x, node.wy, node.wz + b.z);
+    const w = windAt(node.wx + b.x, node.wy, node.wz + b.z) * ch;
     T += w * b.area * Math.abs(Math.sin(wind.dir - b.face)) * (b.x * sw - b.z * cw);
   }
   return T;
@@ -980,7 +1117,7 @@ function windTorque(node){
    its rod is doing - unlike the rods themselves, which hang on swivels and have
    almost none. That is why boards wander a few tens of degrees and return,
    while a rod will turn round and round. */
-const TWIST_GAIN = 0.0065, TWIST_DRAG = 0.55;
+const TWIST_GAIN = 0.0065;
 /* THE THREAD'S TWIST, AND WHY THE BOATS GET LESS OF IT. A cut-out animal hangs
    from a thread that has been twisted up and wants to untwist, which is what
    holds it roughly square to its rod. A boat swings freely and points where the
@@ -988,6 +1125,31 @@ const TWIST_GAIN = 0.0065, TWIST_DRAG = 0.55;
    Measured: at the animals' value the fleet barely moved on its swivels, which
    is what Joe was seeing. */
 const TWIST_SPRING = MODE === 'boats' ? 0.11 : 0.42;
+/* AND A FREE THREAD SHOULD NOT BE A DAMPED ONE (Joe, 2026-09-17). This is the
+   lesson v0.8 learned for the rods' SWIVELS - "a swivel has almost no friction
+   in it; what actually slows a hanging rod is air, and air is weak" - and it was
+   never carried one level down, to the thread each boat hangs on.
+
+   At 0.55 against a spring of 0.11 a boat was an oscillator with a 19 s period
+   and a damping ratio of 0.83: near enough critically damped that she SAT on her
+   heading instead of hunting about it. Two boats started at different headings
+   converged within about one period, and a regular fleet then points one way -
+   measured, the two boats on a rod differed by a MEDIAN OF 1 DEGREE.
+
+   That matters because of what turns a rod. The torque is
+
+       d * sin(phi - theta) * [ w_B*s_B - w_A*s_A ]
+
+   and s is how much sail each boat presents AT HER OWN HEADING. Identical boats
+   all pointing the same way make s_B = s_A, and half the drive vanishes - the
+   fleet was left turning on the cone alone (measured: the cone carried 72-107%
+   of the torque, the headings only 23-67%).
+
+   At 0.12 - the rods' own value - the damping ratio is 0.18, the boats stay out
+   of phase, and the heading difference goes from a median of 1 degree to 10.
+   The animals keep 0.55 for now: nobody has asked, and their spring is four
+   times stiffer, so the same number means something different there. */
+const TWIST_DRAG = MODE === 'boats' ? 0.12 : 0.55;
 
 function stepNode(node, dt, omParent, aIn, thParent){
   stepSwing(node, dt);
@@ -995,7 +1157,7 @@ function stepNode(node, dt, omParent, aIn, thParent){
     const rel = wind.dir - node.tw;
     const drag = Math.sin(rel) * Math.abs(Math.sin(rel));
     const lever = node.cx * cardBox(node.name).w;      // signed, layout px
-    const a = windAt(node.wx, node.wy, node.wz) * drag * lever * TWIST_GAIN
+    const a = windAt(node.wx, node.wy, node.wz) * windHoriz() * drag * lever * TWIST_GAIN
             - TWIST_DRAG * node.twV
             + TWIST_SPRING * Math.sin(thParent - node.tw);
     node.twV += a * dt; node.tw += node.twV * dt;
@@ -1009,7 +1171,7 @@ function stepNode(node, dt, omParent, aIn, thParent){
      left it unscaled and the rods wound up to 1,180 revolutions in two minutes,
      which is a pump, not a mobile. Removed. The real answer is below. */
 
-  const alpha = windTorque(node) * WIND_GAIN / Math.max(1, node.I / 20000)
+  const alpha = SWING_K * windTorque(node) / node.I
               - DRAG * node.om
               + COUPLE * (omParent - node.om);
   node.om += alpha * dt;
@@ -1064,6 +1226,24 @@ function resize(){
   if (MODE === 'boats')
     fit.y = Math.max(top - b.y0 * fit.s, H / 2 - b.leafY * fit.s);
 }
+/* THE REMOTE'S D-PAD. This page had NO keydown listener of any kind, which is
+   why the wall appeared to stop at the last stop: pressing right here did
+   nothing, so the ring looked like it could not get back to the beginning.
+   The ring was never the problem - Wall.step(1) returns kiosk.html from this
+   page, verified on the wall itself - the key simply had nowhere to land.
+
+   Only the keys this page can honour are bound. There is no pause, no info
+   box and no newRun() here, so binding p or i would be a control that looks
+   live and does nothing; 'n' reloads, which is how this piece draws another
+   fleet, the same convention lightning.html uses. */
+addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'ArrowRight': rotateTo(1); break;
+    case 'ArrowLeft':  rotateTo(-1); break;
+    case 'n': case 'N': location.reload(); break;
+  }
+});
+
 addEventListener('resize', resize);
 
 /* ---- collect, then paint back to front ---------------------------------
@@ -1476,9 +1656,16 @@ function paintBoat(it){
   const a = depthAlpha(z, s), near = nearness(z, s), k = persp(z, s);
   const c = Math.abs(turn), flip = turn < 0 ? -1 : 1;
   const beam = Math.max(0.05, c);                  // how broadside she lies
-  /* Rig is the square root of her sail area and hull the cube root of her
-     displacement, which for a boat drawn from a single length both come back
-     to that length - so she simply scales, as a bigger boat does. */
+  /* THE ONLY THING THAT CHANGES HER SIZE ON SCREEN IS DEPTH. k is persp(z) -
+     how far back she is - and EVERY part of the mobile gets the same factor.
+     rig and bulk come out at 1 for every boat in the fleet, because the fleet
+     is regular by design (see makeBoat): a boat that looks smaller is further
+     away, never a smaller boat.
+     They are kept rather than folded away because the arithmetic is the honest
+     one - rig is the square root of her sail area, hull the cube root of her
+     displacement, and for a boat drawn from a single length both come back to
+     that length - so an irregular fleet would simply scale, with no other
+     change here. */
   const rig = Math.sqrt(node.sail || 1), bulk = Math.cbrt(node.kg || 1);
   const Hm = MAST_H * s * k * rig, L = HULL_L * s * k * bulk, D = HULL_D * s * k * bulk;
   const col = node.hull || (node.hull = nextBoatColour());

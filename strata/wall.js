@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v1.2 · 2026-09-14
+   wall.js · v1.3 · 2026-09-24
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,6 +39,9 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.3  ecology_closeup.html joins the ring, immediately before
+           ecology.html: the same model with one animal followed decision by
+           decision, then the whole world of them at full speed
      v1.1  stallSecs() accepts WALL_SECONDS_ONCE - a page's one-time load,
            counted once per visit rather than multiplied by the repeat count
      v1.0  versioning starts here; this file predates the scheme
@@ -527,6 +530,12 @@
     { file:'reading.html',       name:'Reading',          kind:'runs', unit:'passages',   def:1,  loop:'reload' },
     { file:'artworks.html',      name:'Open Gallery',     kind:'runs', unit:'works',      def:5,  loop:'inside' },
     { file:'voyage.html',        name:'The Voyage',       kind:'runs', unit:'tours',      def:1,  loop:'reload' },
+    /* THE SAME MODEL, ONE ANIMAL AT A TIME - a hunter then a grazer, each step
+       played out as SEE / TAKE STOCK / WEIGH / ACT so a decision can be read
+       rather than inferred. Deliberately the stop IMMEDIATELY BEFORE the full
+       simulation (Joe, 2026-09-24): learn what one animal is doing, then watch
+       a world of them do it at eight steps a second. */
+    { file:'ecology_closeup.html', name:'Selection, up close', kind:'time', unit:'minutes', def:15, loop:'time' },
     { file:'ecology.html',       name:'Selection',        kind:'time', unit:'minutes',    def:15, loop:'time'   },
     { file:'weatherclocks.html', name:'House Electricity',kind:'time', unit:'minutes',    def:4,  loop:'time'   },
     { file:'strata.html',        name:'Strata',           kind:'runs', unit:'landscapes', def:1,  loop:'reload' },

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Accretion</title>
 <!-- ==========================================================================
-  gravity.html · v1.0 · 2026-09-13
+  gravity.html · v1.1 · 2026-09-19
   Accretion: a cloud of bodies collapsing into a system under real gravity.
 
   Ring stop 2 of 20, one run per visit, loop:'inside'. A run is 180 s of
@@ -26,21 +26,35 @@
   bodies inside 15 seconds, and shrinking it to fix that turned every body
   into a speck.
 
-  THE FRAMING RULE is what this page got wrong longest and the current one is
-  worth stating: the CORE is the largest bodies out to 90% of total mass, and
-  the view is then set by the 60th percentile of what REMAINS (recentre(),
-  ~line 792). Mass out there is dust and 80% of it is a black field, so a
-  plain quantile over all bodies stopped counting the central ones and framed
-  the emptiness. On top of that the zoom is deliberately sluggish - Joe,
-  2026-09-10, "so it's not zooming in and out and causing motion sickness":
-  a 0.35% ceiling per frame plus a deadband, inside which the target is not
-  moved at all, so the view stops creeping after the last digit of a
-  percentile and answers only a real change of scale.
+  THE FRAMING RULE is what this page got wrong longest. It is now an
+  INTERPOLATED QUANTILE of every framed body (recentre(), ~line 792): the view
+  holds the radius that three fifths of them sit inside, times a fit factor
+  that turns a world radius into a half-height. It used to contain the whole
+  framed set instead, which measured out at a median body drawn 1.3 px on a 4K
+  screen - under the 2.2 px marker floor, so every body was the same dot. The
+  cost is that about a quarter of the bound bodies are outside the frame at any
+  moment; the gain is that the ones in shot are three times the size. On top of
+  that the zoom is deliberately sluggish - Joe, 2026-09-10, "so it's not zooming
+  in and out and causing motion sickness": a 0.35% ceiling per frame plus a
+  deadband, inside which the target is not moved at all, so the view stops
+  creeping after the last digit of a percentile and answers only a real change
+  of scale.
 
   KEYS  n new run · i diagnostics · left/right walk the ring.
 ==========================================================================
 
   CHANGED
+    v1.1  THE VIEW HELD THE WHOLE SYSTEM AND SHOWED NONE OF IT. Framing is now
+          an interpolated quantile of the framed bodies rather than containment
+          of all of them, and the quantile is taken over the WHOLE framed set,
+          core included, instead of the handful left after the core was
+          subtracted. Measured over 20 runs on seeds never used for tuning:
+          view radius 349 -> 114, median body 1.32 -> 3.90 px, samples with the
+          median body under the 2.2 px floor 73% -> 19%, worst two-second swing
+          41% -> 19%, and the view sits at the 600 ceiling on 1% of samples
+          against 19%. The price, stated plainly: bodies on screen 46% -> 32%,
+          bound bodies 94% -> 77%. Mass on screen 97% -> 95% and the heaviest
+          body is off frame in 0.0% of samples either way.
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -183,6 +197,24 @@ const CONFIG = {
      quantile below is what keeps escapers from setting the scale; the ceiling
      is only a backstop, so it can afford to be much further out. */
   viewMax:         600,   // zoom ceiling: escapers leave frame, nothing shrinks
+  /* HOW MUCH OF THE SYSTEM THE FRAME HOLDS. The view is sized on the radius
+     that this share of the framed bodies sits inside - not on containing all
+     of them, which is what it used to do. See recentre() for why containment
+     empties the picture: the last few bodies are strung over enormous radii,
+     so buying them costs the whole scale and returns almost nothing. Measured
+     across 20 runs, widening from this setting to containment moves 14 more
+     bodies onto a 4K screen and shrinks every one of them from 3.9 px to
+     1.3 px, which is under the 2.2 px marker floor - a field of identical
+     dots. */
+  frameQuantile:  0.60,
+  /* A WORLD RADIUS IS NOT A HALF-HEIGHT, and this is the conversion. A body at
+     radius r almost never projects to r: the camera is orthographic and tilted,
+     so most of r is foreshortened, and the frame is 2.08x wider than it is
+     tall while viewRadius measures the HALF HEIGHT. Measured, the radius runs
+     1.54x the half-height that would actually put that body on the edge, so
+     this is 1/1.54 and not a fudge factor. Quantile and fit multiply out to
+     "about three quarters of the framed bodies are in shot" - measured 77%. */
+  frameFit:       0.60,
   /* Both PER FRAME, deliberately - see recentre() and the frame loop. zoomEase
      is how eagerly the view chases its target; zoomMaxRate is the hard ceiling
      on how fast the picture may scale, and is what stops the fast-forward from
@@ -772,10 +804,9 @@ class Sim {
     this.rHalf = rHalf;          // kept for escaping(): the scale of the scrum
 
     const framing = [];
-    let fMass = 0;
     for (const [rr, mi, i] of byDist) {
       if (!cur[i] && rr > rHalf*3.2) continue;      // on its way out: do not frame for it
-      framing.push([rr, mi, i]); fMass += mi;
+      framing.push([rr, mi, i]);
     }
     if (!framing.length) return;
 
@@ -821,14 +852,36 @@ class Sim {
        mass because a merger moved the index and the view stepped. That cannot
        happen here: the bodies being counted are the ones that never merge -
        the core, where the merging happens, has already been taken out. */
-    const byMass = framing.slice().sort((p, q) => q[1] - p[1]);
-    const core = new Set();
-    let held = 0;
-    for (const [, mi, i] of byMass){ if (held >= 0.90*fMass) break; core.add(i); held += mi; }
-    const outer = framing.filter(e => !core.has(e[2]));      // still sorted by radius
-    const rFrame = outer.length
-      ? outer[Math.min(outer.length-1, Math.floor(0.60*outer.length))][0]
-      : framing[framing.length-1][0];
+    /* A QUANTILE OF THE FRAMED BODIES, INTERPOLATED, CORE INCLUDED.
+
+       Two changes from the rule above, and they are the same change twice:
+       stop letting the LENGTH of a short list decide the number.
+
+       THE LIST IS NOW EVERY FRAMED BODY. Taking the central masses out was
+       right while the statistic was a MASS quantile - they swamped it, and
+       that is what the long comment above is about. A BODY quantile does not
+       care that the innermost two are heavy, and subtracting them left a list
+       of about ten: short enough that one body joining or leaving moved the
+       index a whole place. Measured over 20 runs past 45 s, that list changed
+       length on 49% of one-second steps, and when it did this radius jumped a
+       median of 17.9% against 5.9% when it did not. That is the same
+       index-stepping the mass rule was brought in to kill; it came back when
+       the core was removed from the count, and the note claiming it "cannot
+       happen here" was wrong. A merger is not the only thing that changes a
+       list's length - the clump escape test and the rHalf*3.2 cut churn
+       membership constantly.
+
+       AND THE QUANTILE IS INTERPOLATED rather than indexed, because
+       floor(q*L) is a step function of L and hands back a different body every
+       time the list changes size.
+
+       THE VIEW NO LONGER CONTAINS THE SET, it holds a stated share of it.
+       Containment is what emptied the picture: the outermost framed bodies sit
+       at huge radii, so the view chased them out to a median 349 and drew
+       every body at 1.3 px. */
+    const pos = CONFIG.frameQuantile*(framing.length - 1);
+    const lo = Math.floor(pos), hi = Math.min(framing.length - 1, lo + 1);
+    const rFrame = framing[lo][0] + (framing[hi][0] - framing[lo][0])*(pos - lo);
     /* Only DECIDE the zoom here. Moving it is the frame loop's job.
 
        This used to ease viewRadius by a fixed fraction on every call - and
@@ -838,7 +891,7 @@ class Sim {
        compressed: measured, the fractional change per frame went from 2.7% at
        real time to 8.0% at three to six times, which is about 480% a second
        and reads as lurching in and out. */
-    const want = Math.min(CONFIG.viewMax, Math.max(10, rFrame*1.4));
+    const want = Math.min(CONFIG.viewMax, Math.max(10, rFrame*CONFIG.frameFit));
     /* A DEADBAND on top. Even a well-behaved statistic wanders by a percent or
        two, and easing toward a wandering target means the picture is never
        actually still. Below this the target is left exactly where it was, so
