@@ -37,7 +37,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v3.7 · 2026-09-26
+  lightning.html · v3.8 · 2026-10-03
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -73,6 +73,9 @@
 ==========================================================================
 
   CHANGED
+    v3.8  the 'i' box no longer stops the page (updateInfo read `live`, renamed
+          liveFeed in v3.3, and the error killed draw()); a live showing declares
+          its nine-minute dwell to the stall watchdog
     v3.7  THE CAPTION FOLLOWS THE SKY. It was set once at boot and re-set only
           by a 100-second timer, so a page holding live flashes after twenty
           seconds still announced the cached capture's age for another eighty.
@@ -90,29 +93,6 @@
           The data were live and the numbers beside them were not: a sky running
           at 4.9 flashes a second announced the capture's 9.06, and the footer
           claimed six minutes of sky while holding eighty seconds
-    v3.3  the live flag was named `live` and draw() already had a local `live`
-          counting flashes in the air - so the handoff test read the counter
-          and left two seconds after loading. Renamed liveFeed. The globe,
-          the flight and the handoff entry point are deleted with it.
-    v3.2  the arrow keys actually work: this page bound only 'i' while its own
-          diagnostics promised the arrows changed page
-    v3.1  a feed gap has to last five minutes to end a showing, not two and a
-          half - a cron boundary was enough to qualify
-    v3.0  LIVE: the clock is now the wall clock minus 75 s and new granules
-          are appended as they publish, so the sky stays about a minute old
-          instead of ageing from 6 to 12 minutes while you watch it
-    v2.2  age is measured from the NEWEST flash, not the oldest: a capture
-          whose last flash was 40 s old was calling itself 7 minutes old
-    v2.1  accepts a cache that declares either global, so a pipeline slip
-          degrades to a stale sky instead of a dead page; refuses a handoff
-          older than what is already showing
-    v2.0  opens INSTANTLY on the cached sky and says how old it is, while the
-          Pi fetches the current one behind it; the globe is no longer an
-          opening but a flight from the old sky to the fresh one, triggered
-          as each new granule publishes
-    v1.1  the signature says when the sky was recorded, and how long ago -
-          a published copy can be hours old and never said so
-    v1.0  first build
 ========================================================================== */
 const ROTATION = ['index.html'];   // standalone: nowhere else to go
 function rotateTo(step){
@@ -338,6 +318,10 @@ window.__glmAppend = function(list){
   restateSignature();        // the sky just changed; say so
   if (!liveFeed){
     liveFeed = true;
+    /* A live page holds for its dwell, not for the capture it started from:
+       the replay's span + 30 s (about 390 s) was the budget it declared, and
+       a nine-minute live showing outran it at three storms and up. */
+    window.WALL_SECONDS_PER_RUN = CONFIG.holdMin * 60 + 30;
     Wall.lane('Live now — this sky is about a minute old, and stays that way. '
             + 'Each new twenty seconds of it arrives as the satellite sends it.',
             {hold: 9000});
@@ -699,7 +683,7 @@ function updateInfo(inAir, lit){
     SHOW.where + '  ' + SHOW.flashes.length + ' flashes, '
     + SHOW.flashes.reduce((n,f)=>n+f.g.length,0) + ' groups\n'
     + 'box ' + SHOW.box.map(b=>b.toFixed(1)).join(', ') + '\n'
-    + 'active ' + live + '  pulses lit ' + lit + '  window ' + lo + '..' + hi + '\n'
+    + 'active ' + inAir + '  pulses lit ' + lit + '  window ' + lo + '..' + hi + '\n'
     + 'keys: i info · n new sky · arrows change page';
 }
 /* THE REMOTE. This page bound only 'i' and then told the viewer "arrows change

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reading</title>
 <!-- ==========================================================================
-  reading.html · v1.0 · 2026-09-13
+  reading.html · v1.1 · 2026-10-03
   Reading: a passage of real literature, revealed line by line.
 
   Ring stop 12 of 20, one passage per visit, loop:'reload'. 165 s a turn: the
@@ -27,6 +27,8 @@
 ==========================================================================
 
   CHANGED
+    v1.1  declares WALL_SECONDS_PER_RUN (200 s), so a long passage count is
+          not cut by the stall watchdog
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -202,6 +204,12 @@ function rotateTo(step){
 
 const Q = new URLSearchParams(location.search);
 const PINNED = /[?&]pin\b/.test(location.search);
+
+/* ONE PASSAGE, for the stall watchdog (wall.js stallSecs): slideSec 165 s
+   plus up to 25 s fetching the book. Without it the flat 25-minute limit
+   restarts the kiosk partway through a setting of nine or more passages in a
+   row. */
+window.WALL_SECONDS_PER_RUN = 200;
 
 const CONFIG = {
   slideSec:      165,   // the whole turn, start to hand-off

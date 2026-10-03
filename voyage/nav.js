@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   nav.js · v1.0 · 2026-09-13
+   nav.js · v1.1 · 2026-10-03
    makes the wall controllable when the remote is in MOUSE MODE.
 
    WHY THIS EXISTS. The Fm4 remote has two modes. In keyboard mode the D-pad
@@ -25,6 +25,9 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.1  the arrows ask Wall.step() first, so they skip switched-off pieces on
+           every page (five pages had no rotateTo and fell back to the mosaic);
+           the 'i' button opens the piece's card, the same one the up key opens
      v1.0  versioning starts here; this file predates the scheme
 */
 (function (global) {
@@ -86,17 +89,17 @@
     };
     ui = { prev: mk('prev', '‹', -1), next: mk('next', '›', +1) };
 
-    /* Not a page step, so it does not go through mk()'s go(). */
+    /* Not a page step, so it does not go through mk()'s go(). In mouse mode
+       no key arrives, so this button is the up key: it opens the piece's card
+       (wall.js). The desk diagnostics stay on the keyboard's i. */
     const info = document.createElement('div');
     info.className = 'navArrow info';
     info.textContent = 'i';
     info.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (global.Wall && typeof Wall.toggleCard === 'function') { Wall.toggleCard(); return; }
       document.body.classList.toggle('showinfo');
-      /* Pages that keep a live readout expose updateInfo(); those that do not
-         simply have static content in the box already. */
       try { if (typeof updateInfo === 'function') updateInfo(); } catch (err) {}
-      /* The Lane and #info want the same corner and are never both wanted. */
       try { if (global.Wall) global.Wall.hideLane(); } catch (err) {}
     });
     document.body.appendChild(info);
@@ -124,6 +127,13 @@
      rotateTo the back arrow simply does the same as forward rather than
      pretending to a history it does not have. */
   function go(step) {
+    /* The ring first: Wall.step() knows the setup screen's switches. A page
+       with no rotateTo used to fall through to its CONFIG.nextPage - the
+       mosaic, in both directions - whatever the menu said. */
+    try {
+      const want = global.Wall && Wall.step ? Wall.step(step) : null;
+      if (want) { location.href = want; return; }
+    } catch (e) { /* not a ring stop: the page's own way below */ }
     try {
       if (typeof rotateTo === 'function') { rotateTo(step); return; }
     } catch (e) { /* not defined on this page */ }

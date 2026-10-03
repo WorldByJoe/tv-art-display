@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Strata</title>
 <!-- ==========================================================================
-  strata.html · v1.0 · 2026-09-13
+  strata.html · v1.1 · 2026-10-03
   a folded sedimentary landscape eroding under rain, on the wall.
   Joe, 2026-09-04: "simulate landscapes like what we'd see in Utah, where there
   are different hardnesses of sedimentary layers, different colors, and then
@@ -48,6 +48,8 @@
 ==========================================================================
 
   CHANGED
+    v1.1  declares WALL_SECONDS_PER_RUN (450 s), so a long landscape count is
+          not cut by the stall watchdog
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -86,6 +88,12 @@ function rotateTo(step){
   if (i < 0) i = 0;
   location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
 }
+/* ONE LANDSCAPE, for the stall watchdog (wall.js stallSecs): runMin 7 min of
+   erosion plus the fades, about 435 s. Without it the flat 25-minute limit
+   restarts the kiosk partway through a setting of four or more landscapes in
+   a row. */
+window.WALL_SECONDS_PER_RUN = 450;
+
 const CONFIG = {
   holdMin: 12,            // NOT the pacing - one landscape is runMin (7) plus a
                           // closing sentence. This is the deadline for a stalled run.

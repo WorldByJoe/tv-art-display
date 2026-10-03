@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Fastest Line</title>
 <!-- ==========================================================================
-  descent.html · v1.0 · 2026-09-13
+  descent.html · v1.1 · 2026-10-03
   The Fastest Line: a mountain bike descent, ridden by a physics model.
 
   Ring stop 11 of 20, one descent per visit, loop:'reload'. A rider and a
@@ -40,6 +40,8 @@
 ==========================================================================
 
   CHANGED
+    v1.1  declares WALL_SECONDS_PER_RUN (480 s), so a long descent count is
+          not cut by the stall watchdog
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -161,6 +163,12 @@ const wrapA=a=>{ while(a>Math.PI)a-=TAU; while(a<-Math.PI)a+=TAU; return a; };
 
 /* ========================== configuration =============================== */
 const Q = new URLSearchParams(location.search);
+/* ONE DESCENT, for the stall watchdog (wall.js stallSecs): 8 s intro, 3 s
+   count, the ride (longest of 32 measured: 7.4 min) and 7 s of finish.
+   Without it the flat 25-minute limit restarts the kiosk partway through a
+   setting of four or more descents in a row. */
+window.WALL_SECONDS_PER_RUN = 480;
+
 const CONFIG = {
   ds: 1.0,                 // metres between trail stations (the sim's spatial grid)
   drawDist: 250,           // how far ahead the renderer bothers to look, metres

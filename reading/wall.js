@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v1.9 · 2026-10-02
+   wall.js · v2.0 · 2026-10-03
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,6 +39,9 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.0  THE D-PAD IS THE WALL'S: left/right change piece and up opens the
+           piece's card (about.js) on EVERY page, in the capture phase - five
+           pages ignored the arrows and Ballgame could not be left at all
      v1.9  murmuration.html joins the ring as 'Murmuration', after The Balance:
            starlings at dusk, no text, a fresh flock and evening every 8 minutes
      v1.8  baseball.html joins the ring as 'Ballgame', after Game Day: one whole
@@ -47,11 +50,6 @@
            is only ever brought up by a solo, but a solo needs a ring entry
      v1.6  radio_yard.html joins the ring as 'Radio Yard', right after Three
            Skies - the same antenna, turned round to look at the yard itself
-     v1.4  ring stop for gameday.html, kind:'time' def 240 so the stall
-           watchdog budgets a whole football game
-     v1.3  ecology_closeup.html joins the ring, immediately before
-           ecology.html: the same model with one animal followed decision by
-           decision, then the whole world of them at full speed
 */
 (function (global) {
   'use strict';
@@ -152,7 +150,8 @@
     if (!text) { hideLane(); return 0; }
     /* #info and the Lane are never both wanted: one is for the sofa and the
        other is for somebody at a keyboard, and they occupy the same corner. */
-    if (document.body.classList.contains('showinfo')) return 0;
+    if (document.body.classList.contains('showinfo') ||
+        document.body.classList.contains('showabout')) return 0;
 
     hideMoment();
     const el = lane_();
@@ -229,7 +228,8 @@
   function moment(text, opts) {
     opts = opts || {};
     if (!text) return false;
-    if (document.body.classList.contains('showinfo')) return false;
+    if (document.body.classList.contains('showinfo') ||
+        document.body.classList.contains('showabout')) return false;
     const now = performance.now();
     if (!opts.force && now - lastMomentAt < MOMENT_GAP) return false;
 
@@ -961,6 +961,203 @@
      than a key, depending on which of its two modes it is in. */
   global.addEventListener('contextmenu', (e) => { e.preventDefault(); openSetup(); });
 
+  /* =====================================================================
+     THE REMOTE'S D-PAD, ONE GRAMMAR FOR EVERY PIECE      (Joe, 2026-10-03)
+
+       left / right   the previous / next piece that is switched on
+       up             the card that says what this piece is, and what was
+                      drawn for this run of it; up again (or down, OK, back)
+                      puts it away
+       down, OK       the piece's own, where it has a use for them
+
+     Until now every page carried its own keydown handler, and five did not
+     carry one at all - Murmuration, Game Day, Three Skies, Radio Yard and the
+     noise instrument ignored the arrows completely, so the remote could not
+     leave them. Ballgame used the four arrows for its own controls and could
+     not be left either. Fixing that page by page is how it broke in the first
+     place, and two of the pages belong to other sessions whose deploys
+     overwrite anything patched in here. So the grammar lives in this file,
+     which every piece loads, and runs in the CAPTURE phase: it hears the key
+     before the page does and, when it acts, the page never sees it.
+
+     A page that needs a key for a moment says so with Wall.claimKeys(fn): fn
+     gets the event and returns true to keep it. The mosaic's rating dial uses
+     it - while the dial is open, up and down move the score.
+
+     Not on the setup screen, which uses the arrows to move between its rows,
+     and left/right do nothing on a page that is not a ring stop (a published
+     copy), where the page keeps whatever it did before. */
+  let keyClaim = null;
+  function claimKeys(fn) { keyClaim = typeof fn === 'function' ? fn : null; }
+
+  function onRemoteKey(e) {
+    if (here() === 'setup.html') return;
+    try { if (keyClaim && keyClaim(e)) return; } catch (err) {}
+    const k = e.key;
+    if (k === 'ArrowUp') {
+      e.preventDefault(); e.stopImmediatePropagation();
+      toggleCard();
+      return;
+    }
+    if (cardOpen && (k === 'ArrowDown' || k === 'Escape' || k === 'Backspace' ||
+                     k === 'Enter' || k === 'NumpadEnter' || k === 'BrowserBack')) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      closeCard();
+      return;
+    }
+    if (k === 'ArrowRight' || k === 'ArrowLeft') {
+      const to = step(k === 'ArrowRight' ? 1 : -1);
+      if (!to) return;                         /* not a ring stop: the page decides */
+      e.preventDefault(); e.stopImmediatePropagation();
+      location.href = to;
+    }
+  }
+  global.addEventListener('keydown', onRemoteKey, true);
+
+  /* ---- THE CARD ----------------------------------------------------------
+     What this piece is, in two or three plain sentences, and the parameters
+     of THIS run - the seed, the drawn traits, the place, the data's date -
+     read live from the page, so a second press a minute later shows the run
+     a minute later. The words live in about.js, one entry per file, so they
+     are written and checked in one place; it is fetched the first time up is
+     pressed, so no page pays for it on load. A piece with no entry still gets
+     its name and what the menu has it set to.
+
+     A CARD surface (DESIGN_STANDARDS §6), sofa tiers only - the sentences at
+     T3, keys at T4 above values at T3. Its plate is .94, denser than
+     --plate-solid's .88: the card lies over whole pages of text (Radio Yard's
+     titles read straight through .88) and has to win outright. It puts itself away after
+     a minute, so a card summoned and forgotten does not sit on the art all
+     evening. */
+  const CARD_MS = 60000;
+  let cardEl = null, cardOpen = false, cardTick = null, cardTimer = null, aboutState = 0;
+
+  function cardCss() {
+    const css = document.createElement('style');
+    /* Tokens with fallbacks: two pieces (Ballgame, Sugar Maple) do not load
+       wall.css, and the card must read the same on them. */
+    css.textContent = `
+      .wallcard{ --cw: calc(100vw / 3840);
+        position:fixed; left:50%; top:50%; transform:translate(-50%,-48%); z-index:10001;
+        width:calc(2300 * var(--cw)); max-height:calc(100vh - 160 * var(--cw)); overflow:hidden;
+        box-sizing:border-box; padding:calc(70 * var(--cw)) calc(96 * var(--cw)) calc(56 * var(--cw));
+        background:rgba(8,11,18,.94); border:1px solid var(--edge, rgba(255,255,255,.16));
+        border-radius:var(--r, calc(16 * var(--cw)));
+        box-shadow:0 calc(10 * var(--cw)) calc(50 * var(--cw)) rgba(0,0,0,.55);
+        color:var(--ink, rgba(238,244,252,.95)); font-family:var(--font-ui, ui-sans-serif, system-ui, sans-serif);
+        opacity:0; pointer-events:none; transition:opacity .45s ease, transform .45s ease; }
+      .wallcard.show{ opacity:1; transform:translate(-50%,-50%); }
+      .wallcard .wc-name{ font:italic 400 var(--t1, calc(108 * var(--cw)))/1.1 Georgia, 'Times New Roman', serif; }
+      .wallcard .wc-set{ margin-top:calc(14 * var(--cw)); font:500 var(--t4, calc(43 * var(--cw)))/1.3 var(--font-num, ui-monospace, Menlo, monospace);
+        letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2, rgba(206,220,240,.80)); }
+      .wallcard .wc-what{ margin-top:calc(40 * var(--cw)); font:300 var(--t3, calc(60 * var(--cw)))/1.42 var(--font-ui, ui-sans-serif, system-ui, sans-serif);
+        max-width:60ch; }
+      .wallcard .wc-rule{ height:1px; background:var(--edge, rgba(255,255,255,.16)); margin:calc(48 * var(--cw)) 0 calc(36 * var(--cw)); }
+      .wallcard .wc-params{ display:grid; grid-template-columns:repeat(3, 1fr); gap:calc(30 * var(--cw)) calc(60 * var(--cw)); }
+      .wallcard .wc-k{ font:500 var(--t4, calc(43 * var(--cw)))/1.3 var(--font-num, ui-monospace, Menlo, monospace);
+        letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2, rgba(206,220,240,.80)); }
+      .wallcard .wc-v{ font:300 var(--t3, calc(60 * var(--cw)))/1.2 var(--font-ui, ui-sans-serif, system-ui, sans-serif);
+        font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+      .wallcard .wc-hint{ white-space:pre; margin-top:calc(46 * var(--cw)); font:400 var(--t4, calc(43 * var(--cw)))/1.3 var(--font-num, ui-monospace, Menlo, monospace);
+        letter-spacing:.08em; color:var(--ink-2, rgba(206,220,240,.80)); opacity:.75; }
+    `;
+    document.head.appendChild(css);
+  }
+
+  /* about.js, fetched once. The cache-buster is the wall's usual one: file://
+     otherwise serves a stale copy for the life of the browser. */
+  function withAbout(cb) {
+    if (aboutState === 2) return cb();
+    if (aboutState === 1) { setTimeout(() => withAbout(cb), 60); return; }
+    aboutState = 1;
+    const s = document.createElement('script');
+    s.src = 'about.js?v=' + Date.now();
+    s.onload = s.onerror = () => { aboutState = 2; cb(); };
+    document.head.appendChild(s);
+  }
+
+  /* What the menu has this piece set to, in the menu's own words. */
+  function menuLine(file) {
+    const i = ringIndex(file);
+    if (i < 0) return '';
+    const spec = RING[i], s = settings()[file] || {};
+    const solo = soloNow();
+    if (solo && solo.file === file) {
+      return 'held on this piece for ' + Math.max(1, Math.round((solo.until - Date.now()) / 60000)) + ' more minutes';
+    }
+    const parts = [];
+    if (s.on === false) parts.push('switched off in the menu');
+    if (spec.kind === 'time') {
+      parts.push(s.value >= FOREVER ? 'left on until you move on' : 'on the wall for ' + s.value + ' ' + (s.value === 1 ? 'minute' : 'minutes'));
+    } else {
+      parts.push(s.value + ' ' + (s.value === 1 ? singular(spec.unit) : spec.unit) + ' per visit');
+    }
+    return parts.join(' · ');
+  }
+  function singular(u) {
+    const irregular = { passages: 'passage', landscapes: 'landscape', surveys: 'survey', descents: 'descent' };
+    return irregular[u] || u.replace(/s$/, '');
+  }
+
+  function fillCard() {
+    const file = here().split('?')[0];
+    const ab = (global.ABOUT && global.ABOUT[file]) || null;
+    const i = ringIndex(file);
+    const name = (ab && ab.title) || (i >= 0 ? RING[i].name : document.title || file);
+    let rows = [];
+    if (ab && typeof ab.params === 'function') {
+      try { rows = (ab.params() || []).filter(r => r && r.k && r.v != null && String(r.v) !== ''); }
+      catch (err) { rows = []; }
+    }
+    const sig = JSON.stringify([name, ab && ab.what, rows, menuLine(file)]);
+    if (sig === cardEl.dataset.sig) return;              /* nothing changed: leave the DOM alone */
+    cardEl.dataset.sig = sig;
+    cardEl.textContent = '';
+    const add = (cls, text) => { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; cardEl.appendChild(d); return d; };
+    add('wc-name', name);
+    const ml = menuLine(file);
+    if (ml) add('wc-set', ml);
+    if (ab && ab.what) add('wc-what', ab.what);
+    if (rows.length) {
+      add('wc-rule');
+      const g = add('wc-params');
+      for (const r of rows.slice(0, 12)) {
+        const cell = document.createElement('div');
+        const kk = document.createElement('div'); kk.className = 'wc-k'; kk.textContent = r.k;
+        const vv = document.createElement('div'); vv.className = 'wc-v'; vv.textContent = String(r.v);
+        cell.appendChild(kk); cell.appendChild(vv); g.appendChild(cell);
+      }
+    }
+    add('wc-hint', i >= 0 ? '▲ close  ·  ◀ ▶ other pieces  ·  menu: settings'
+                          : '▲ close');
+  }
+
+  function openCard() {
+    if (!cardEl) {
+      cardCss();
+      cardEl = document.createElement('div');
+      cardEl.className = 'wallcard';
+      document.body.appendChild(cardEl);
+    }
+    withAbout(() => {
+      fillCard();
+      cardOpen = true;
+      document.body.classList.add('showabout');
+      hideLane(true); hideMoment();
+      requestAnimationFrame(() => requestAnimationFrame(() => { if (cardOpen) cardEl.classList.add('show'); }));
+      clearInterval(cardTick); cardTick = setInterval(() => { if (cardOpen) fillCard(); }, 1000);
+      clearTimeout(cardTimer); cardTimer = setTimeout(closeCard, CARD_MS);
+    });
+  }
+  function closeCard() {
+    cardOpen = false;
+    document.body.classList.remove('showabout');
+    clearInterval(cardTick); cardTick = null;
+    clearTimeout(cardTimer); cardTimer = null;
+    if (cardEl) cardEl.classList.remove('show');
+  }
+  function toggleCard() { if (cardOpen) closeCard(); else openCard(); }
+
   global.Wall = {
     lane, moment, signature, instrument, episode, clearEpisode,
     after, every, clearTimers, holdFor, place,
@@ -970,6 +1167,7 @@
     wallOpts, setShuffle, startSolo, clearSolo, soloNow,
     repeats, holdMs, forever, nextPage, step, enabled, here, openSetup,
     runCount, setRunCount,
+    claimKeys, openCard, closeCard, toggleCard,
     ARRIVE_MS, FADE_IN, FADE_OUT, MOMENT_HOLD,
   };
 })(window);

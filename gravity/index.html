@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Accretion</title>
 <!-- ==========================================================================
-  gravity.html · v1.1 · 2026-09-19
+  gravity.html · v1.2 · 2026-10-03
   Accretion: a cloud of bodies collapsing into a system under real gravity.
 
   Ring stop 2 of 20, one run per visit, loop:'inside'. A run is 180 s of
@@ -44,6 +44,8 @@
 ==========================================================================
 
   CHANGED
+    v1.2  declares WALL_SECONDS_PER_RUN (210 s), so a long run count is not
+          cut by the stall watchdog
     v1.1  THE VIEW HELD THE WHOLE SYSTEM AND SHOWED NONE OF IT. Framing is now
           an interpolated quantile of the framed bodies rather than containment
           of all of them, and the quantile is taken over the WHOLE framed set,
@@ -159,6 +161,12 @@ function rotateTo(step){
    softening, symplectic Euler, perfectly inelastic merging conserving mass
    and momentum, centre-of-mass re-centring.
    ======================================================================= */
+
+/* ONE RUN, for the stall watchdog (wall.js stallSecs): 180 s watched + 26 s
+   pull-back + 1.4 s fade = 208 s. Without it the flat 25-minute limit
+   restarts the kiosk partway through a setting of eight or more runs in a
+   row. */
+window.WALL_SECONDS_PER_RUN = 210;
 
 const CONFIG = {
   /* Pacing. A run ends when the system SETTLES, not on a clock: if bodies are

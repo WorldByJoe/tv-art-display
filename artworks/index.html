@@ -11,7 +11,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Open Gallery</title>
 <!-- ==========================================================================
-  artworks.html · v1.0 · 2026-09-13
+  artworks.html · v1.1 · 2026-10-03
   Open Gallery: works from the Art Institute of Chicago, fetched live.
 
   Ring stop 13 of 20, five works per visit at 55 s each - about 4.6 minutes,
@@ -39,6 +39,9 @@
 ==========================================================================
 
   CHANGED
+    v1.1  shows the number of works the menu asks for (it waited for a
+          ten-work queue to empty); the no-network exit goes through
+          Wall.nextPage; WALL_SECONDS_PER_RUN 60 s a work
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -162,6 +165,11 @@ function rotateTo(step){
   location.href = ROTATION[(i + step + ROTATION.length) % ROTATION.length];
 }
 
+/* ONE WORK, for the stall watchdog (wall.js stallSecs): holdMs 55 s on the
+   wall plus the image load. Without it the flat 25-minute limit restarts the
+   kiosk partway through a setting of twenty-seven or more works in a row. */
+window.WALL_SECONDS_PER_RUN = 60;
+
 const CONFIG = {
   holdMs:      55000,   // one work on the wall - long enough to actually look
   worksPerTurn:    5,   // ~4.6 minutes, in step with the rest of the rotation
@@ -222,6 +230,7 @@ async function buildQueue(){
   const shallow=1+Math.floor(Math.random()*3);              // the icons
   const word=SEEDS[Math.floor(Math.random()*SEEDS.length)]; // the variety
   const wordPage=1+Math.floor(Math.random()*8);             // within the cap
+  stats.draw={shallow, word, wordPage};                     // for the card behind the up key (about.js)
   const [a,b]=await Promise.all([fetchPage(shallow), fetchPage(wordPage, word)]);
   stats.fetched=a.length+b.length;
   /* Only works that actually have an image; a label with no painting is a
@@ -357,7 +366,11 @@ async function nextWork(){
        queue forever. */
     if(failStreak>=12 && !PINNED){ handOff(); return; }
   }
-  if(!queue.length && shown>=Wall.repeats(CONFIG.worksPerTurn) && !PINNED){ handOff(); return; }
+  /* The count is the menu's, and it is reached whatever is left in the
+     queue. This used to wait for the queue to run dry as well, and the queue
+     holds worksPerTurn*2 - so a setting of 5 showed 10, and every setting
+     rounded up to a multiple of ten (found 2026-10-03). */
+  if(shown>=Wall.repeats(CONFIG.worksPerTurn) && !PINNED){ handOff(); return; }
   if(!queue.length){          // refill for a pinned wall that keeps watching
     try{ queue=await buildQueue(); }catch(e){ if(!PINNED){ handOff(); return; } }
   }
@@ -413,7 +426,7 @@ addEventListener('keydown',(e)=>{
        this page out of the rotation to publish it, and location.replace('')
        reloads the page it is on. Without this guard a published copy with no
        network reloads itself forever. Say so and stop, as ?pin does. */
-    if(!PINNED && CONFIG.nextPage){ location.replace(CONFIG.nextPage); return; }
+    if(!PINNED && CONFIG.nextPage){ location.replace(Wall.nextPage(CONFIG.nextPage)); return; }
     infoEl.textContent='no network - '+e; document.body.classList.add('showinfo');
     return;
   }

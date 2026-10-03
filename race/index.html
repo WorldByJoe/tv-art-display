@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html · v1.1 · 2026-09-14
+  race.html · v1.2 · 2026-10-03
   a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
@@ -42,6 +42,8 @@
 ==========================================================================
 
   CHANGED
+    v1.2  declares WALL_SECONDS_PER_RUN (690 s), so a count of three or more
+          races is not cut by the stall watchdog
     v1.1  CONFIG restored - the 2026-09-13 rotateTo rewrite had deleted the
           whole block, so every tick threw and the page froze on its name
     v1.0  versioning starts here; this file predates the scheme
@@ -100,6 +102,12 @@ function rotateTo(step){
    name until the Pi's watchdog restarted the kiosk 27 minutes later.
    Restored from the published copy at 84f9d9f, with nextPage put back to the
    wall's value (the published build blanks it for the standalone page). */
+/* ONE SHOW, for the stall watchdog (wall.js stallSecs): a full race show runs
+   about 11 min (CONFIG.holdMin below is only the stalled-show deadline).
+   Without it, repeats reload the same URL and three races in a row passed the
+   flat 25-minute limit in the third. */
+window.WALL_SECONDS_PER_RUN = 690;
+
 const CONFIG = {
   freezeStep: 600,        // erosion steps before the land is frozen (300,000 model years)
   raceCell: 10,           // metres per erosion cell at the race scale

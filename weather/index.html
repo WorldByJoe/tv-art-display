@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sun and Wind</title>
 <!-- ==========================================================================
-  weather.html · v1.0 · 2026-09-13
+  weather.html · v1.1 · 2026-10-03
   Sun and Wind: real forecast wind over real terrain, three locations.
 
   Ring stop 6 of 20, one tour per visit, loop:'reload'. Live Open-Meteo wind
@@ -44,6 +44,8 @@
 ==========================================================================
 
   CHANGED
+    v1.1  declares WALL_SECONDS_PER_RUN (240 s), so a long tour count is not
+          cut by the stall watchdog
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -192,6 +194,12 @@ const LOCATIONS = [
     marks:[ {label:'P', name:'Peter · SFU', lat:49.2781, lon:-122.9199, side:'right', dy:-1.4},
             {label:'L', name:'Liam · UBC',  lat:49.2606, lon:-123.2460, side:'left',  dy: 1.4} ] }
 ];
+
+/* ONE TOUR, for the stall watchdog (wall.js stallSecs): three places x 36 h
+   x 1.7 s = 184 s, plus up to 15 s a place for the forecast fetch and a 1.4
+   s fade. Without it the flat 25-minute limit restarts the kiosk partway
+   through a setting of seven or more tours in a row. */
+window.WALL_SECONDS_PER_RUN = 240;
 
 const CONFIG = {
   gridLat: 7, gridLon: 8,       // sample points per location

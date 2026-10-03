@@ -6,7 +6,7 @@
 <title>The Voyage</title>
 <style>
   /* =====================================================================
-     voyage.html · v1.1 · 2026-09-24
+     voyage.html · v1.2 · 2026-10-03
 
      VOYAGE - from our solar system to a randomly drawn one that is real.
 
@@ -56,6 +56,8 @@
      =====================================================================
 
      CHANGED
+       v1.2  declares WALL_SECONDS_PER_RUN per tour (200 s + 17 s a planet), so a
+             long tour count is not cut by the stall watchdog
        v1.1  hands on to ecology_closeup.html, the new stop before Selection
        v1.0  versioning starts here; this file predates the scheme
 */
@@ -449,6 +451,10 @@ function newRun(){
     +ly(distLy)+' out.');
   console.log('[voyage] -> '+dest+', '+Math.round(distLy)+' ly, '
     +planets.length+' planets');
+  /* ONE TOUR, for the stall watchdog (wall.js stallSecs): 197 s of the
+     galaxy and the crossing, 17 s a planet, a 1.4 s fade - 250-335 s. Without
+     it the flat 25-minute limit cut five or more tours in a row. */
+  window.WALL_SECONDS_PER_RUN = 200 + CONFIG.planetSec * planets.length;
 }
 
 /* How much the crossing opens the corridor across the track.

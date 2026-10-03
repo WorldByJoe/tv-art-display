@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Selection</title>
 <!-- ==========================================================================
-  ecology.html · v1.0 · 2026-09-13
+  ecology.html · v1.1 · 2026-10-03
   the community-ecology + evolution simulation, on the wall.
   The MODEL lives in ecology_engine.js (pure, seeded, jsc-testable); this
   page only steps it and draws it. Joe's spec, 2026-08-28: grass grows on a
@@ -28,6 +28,8 @@
 ==========================================================================
 
   CHANGED
+    v1.1  a new world (extinction, the population cap) no longer restarts the
+          dwell clock
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -288,7 +290,11 @@ function newRun(){
   world=Eco.newWorld(seed, Object.assign({maxAnimals:CONFIG.maxAnimals}, land));
   gcv.width=world.P.W; gcv.height=world.P.H;
   gimg=gtx.createImageData(world.P.W, world.P.H);
-  peakPop=0; told={}; startedAt=performance.now(); lastLane=0; capFrames=0;
+  /* startedAt is NOT reset here. It is the page's time on the wall, which the
+     dwell counts; a world that dies out or hits the cap starts a new world,
+     not a new dwell - resetting it let a world that ended at minute 14 hold
+     the wall for 29, past the stall watchdog's limit (found 2026-10-03). */
+  peakPop=0; told={}; lastLane=0; capFrames=0;
   speciesReg=new Map(); areaCol=0; sinceSample=0; SAMPLE_EVERY=2;
   atx.clearRect(0,0,AREA_W,AREA_H);
   Wall.clearEpisode(); Wall.clearTimers();
@@ -603,7 +609,7 @@ if(CONFIG.startGate){
     started=true; startedAt=performance.now();
     document.getElementById('startGate').hidden=true;
   };
-} else started=true;
+} else { started=true; startedAt=performance.now(); }   // the dwell counts from here, once
 requestAnimationFrame(frame);
 </script>
 </body>

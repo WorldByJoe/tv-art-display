@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Patriline</title>
 <!-- ==========================================================================
-  surnames.html · v1.0 · 2026-09-13
+  surnames.html · v1.1 · 2026-10-03
   Patriline: surname loss as a river, live rather than pre-rendered.
 
   Ring stop 3 of 20, one cycle per visit, loop:'inside'. A JavaScript
@@ -45,6 +45,9 @@
 ==========================================================================
 
   CHANGED
+    v1.1  each act starts its own clock again: with the village opening off,
+          startAct() returned before the act began, so Wealth and Invention
+          flashed past and no act spoke; WALL_SECONDS_PER_RUN declared
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -198,6 +201,12 @@ function rotateTo(step){
    the crawl unfolds at full width. It is a log-ish axis achieved with one
    drawImage instead of a coordinate transform on every band.
    ======================================================================= */
+
+/* ONE CYCLE, for the stall watchdog (wall.js stallSecs): the three acts' caps
+   125 + 80 + 100 s, three naming pauses (~8.4 s, not charged to the caps),
+   three 5.2 s holds and three 1.2 s curtains - about 350 s at most. Without
+   it the flat 25-minute limit cut a five-cycle setting mid-act. */
+window.WALL_SECONDS_PER_RUN = 360;
 
 const CONFIG = {
   /* ---- shared demography ---- */
@@ -1311,30 +1320,33 @@ function startAct() {
      the only place the duration lives; restoring the village for the next act
      has to switch the transition off first, or the act would open by fading
      the village IN from nothing over the same six seconds. */
+  /* Skipped outright: never turn it on, never composite it, and do not
+     schedule the two timers that would only turn it off again. ONLY the
+     village is skipped - this used to `return`, which also skipped the act's
+     own start below: its clock was never reset, so every act was timed from
+     page load, Wealth and Invention each flashed for a frame, and no act
+     ever spoke its opening sentence (found 2026-10-03). */
   if (CONFIG.villageHoldMs <= 0) {
-    /* Skipped outright: never turn it on, never composite it, and do not
-       schedule the two timers that would only turn it off again. */
     villageLive = false;
     villageCv.style.transition = 'none';
     villageCv.style.opacity    = '0';
     villageCv.style.display    = 'none';
-    vctx.clearRect(0, 0, W, VH);
-    return;
+  } else {
+    villageLive = true;
+    villageCv.style.display    = '';
+    villageCv.style.transition = 'none';
+    villageCv.style.opacity    = '1';
+    void villageCv.offsetWidth;                   // force the reset to stick
+    Wall.after(CONFIG.villageHoldMs, () => {
+      villageCv.style.transition = 'opacity ' + CONFIG.villageFadeMs + 'ms linear';
+      villageCv.style.opacity    = '0';
+    });
+    Wall.after(CONFIG.villageHoldMs + CONFIG.villageFadeMs, () => {
+      villageLive = false;
+      vctx.clearRect(0, 0, W, VH);
+      villageCv.style.display = 'none';           // and stop compositing it
+    });
   }
-  villageLive = true;
-  villageCv.style.display    = '';
-  villageCv.style.transition = 'none';
-  villageCv.style.opacity    = '1';
-  void villageCv.offsetWidth;                     // force the reset to stick
-  Wall.after(CONFIG.villageHoldMs, () => {
-    villageCv.style.transition = 'opacity ' + CONFIG.villageFadeMs + 'ms linear';
-    villageCv.style.opacity    = '0';
-  });
-  Wall.after(CONFIG.villageHoldMs + CONFIG.villageFadeMs, () => {
-    villageLive = false;
-    vctx.clearRect(0, 0, W, VH);
-    villageCv.style.display = 'none';             // and stop compositing it
-  });
 
   vctx.clearRect(0, 0, W, VH);
   actStart = performance.now();
