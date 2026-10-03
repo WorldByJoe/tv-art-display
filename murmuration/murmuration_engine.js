@@ -1,5 +1,5 @@
 /* ==========================================================================
-  murmuration_engine.js · v0.4 · 2026-10-02
+  murmuration_engine.js · v0.6 · 2026-10-03
 
   A starling murmuration as an agent-based model. Pure JavaScript, no DOM, so
   the same file runs in the page and under jsc for testing.
@@ -72,7 +72,24 @@
   Pearce's model needs the long-range term at that strength too - it is what
   keeps real flocks whole while their edges churn.
 
+  THE ROOST IS A TREE (Joe, 2026-10-02). When the page grows one it passes in
+  its position (the roost), its perches and its crown. Flying birds steer
+  round the crown; at dusk each bird has its own perch, homes on it, brakes
+  hard in the last few metres as real birds do, and settles. With no tree the
+  flock goes down into the field as before.
+
+  SETTLE, FLUSH, SETTLE (Joe, 2026-10-03: "land on the tree, then flee a
+  couple of times"). Real roosts do this - the flock pours in, sits, and
+  something startles it out again before it finally stays. Here: once the
+  roost has filled and rested a few seconds, one perched bird bolts, and each
+  bird bolts a fraction of a second after any of its nearest PERCHED
+  neighbours does, so the flush tears across the tree as a wave. The flock
+  murmurates again, comes back, and after `flushes` of these it stays.
+
   CHANGED
+    v0.6  settle-flush cycles: the roost fills, rests, flushes as a startle
+          wave through perched neighbours, and re-forms (opts.flushes)
+    v0.5  roost = the page's tree: perches, braking final approach, crown avoidance
     v0.4  field 250 m deep (was 400) with the roost brought in to match
     v0.3  rear blind sector; per-bird speed and spacing with speed matching; the
           long-range pull starts at 6 m; denser flock (personal space 0.6-1.0 m,
@@ -121,7 +138,7 @@ function drawParams(r, opts) {
     K_far:    U(10, 18),                   // long-range pull toward the visible mass - as strong as alignment (Pearce 2014)
     noise:    U(0.8, 1.8),                 // rad/s^2 of private wobble - where turns begin
     wMax:     U(2.2, 3.2),                 // max turn rate, rad/s
-    roost:    { x: U(-40, 40), z: U(90, 150) },
+    roost:    (opts && opts.roost) || { x: U(-40, 40), z: U(90, 150) },
     roostR:   U(45, 85),                   // free roaming radius around the roost, m
     K_roost:  U(1.5, 3.0),                 // pull back toward it beyond that
     yPref:    U(25, 60),                   // preferred flying height, m
@@ -152,6 +169,28 @@ function Flock(seed, opts) {
   this.nbn = new Uint8Array(N);
   this.t = 0; this.step = 0;
   this.roostAt = (opts && opts.roostAt) || 1e9;          // sim time the dusk descent may begin
+  this.flushesLeft = (opts && opts.flushes) || 0;         // how many times the roost will be flushed
+  this.phase = 'air';                                     // air | settling | resting | flushing
+  this.fnb = new Int32Array(N * MAXNB); this.fnbn = new Uint8Array(N);   // perched neighbours
+  this.launchAt = F32();
+  /* The tree, if there is one: each bird gets its own perch (shared, a little
+     apart, if the tree has fewer perches than birds). */
+  this.crown = (opts && opts.crown) || null;
+  const pr = opts && opts.perches;
+  this.tx = F32(); this.ty = F32(); this.tz = F32();
+  if (pr && pr.length >= 3) {
+    const np = pr.length / 3, order = new Int32Array(np);
+    for (let k = 0; k < np; k++) order[k] = k;
+    /* the tree hands its perches over outside-in; shuffle only within the
+       outer set the flock will actually fill, so the edge fills first */
+    const fill = Math.min(np, Math.ceil(N * 1.4));
+    for (let k = fill - 1; k > 0; k--) { const j = Math.floor(r() * (k + 1)); const t = order[k]; order[k] = order[j]; order[j] = t; }
+    for (let i = 0; i < N; i++) {
+      const k = order[i % np], dup = Math.floor(i / np);
+      this.tx[i] = pr[3 * k] + dup * 0.12; this.ty[i] = pr[3 * k + 1]; this.tz[i] = pr[3 * k + 2] + dup * 0.12;
+    }
+    this.hasTree = true;
+  }
   /* Start as a loose ball over the roost, roughly agreed on a heading, so the
      first seconds are a flock and not a burst. */
   const cx = P.roost.x + (r() - 0.5) * 60, cy = P.yPref + 10 + r() * 20, cz = P.roost.z + (r() - 0.5) * 60;
@@ -228,6 +267,83 @@ Flock.prototype.findNeighbours = function () {
   }
 };
 
+/* The roost's cycle: fill, rest, flush (a startle wave), fly, fill again. */
+Flock.prototype.roostCycle = function () {
+  const N = this.N, P = this.P, r = this.r, t = this.t;
+  if (this.phase === 'air' && t > this.roostAt) { this.phase = 'settling'; this.phaseT = t; }
+  if (this.phase === 'settling') {
+    let down = 0; for (let i = 0; i < N; i++) down += this.landed[i];
+    if (down >= 0.97 * N || t - this.phaseT > 60) {
+      this.phase = 'resting'; this.phaseT = t;
+      this.restUntil = this.flushesLeft > 0 ? t + 10 + r() * 14 : 1e9;
+    }
+  } else if (this.phase === 'resting' && t > this.restUntil) {
+    this.flushesLeft--;
+    this.perchedNeighbours();
+    for (let i = 0; i < N; i++) this.launchAt[i] = t + 2 + r() * 2.5;    // nobody stays put long
+    let first = Math.floor(r() * N), k = 0;
+    while (!this.landed[first] && k++ < 100) first = Math.floor(r() * N);
+    this.launchAt[first] = t;
+    /* the next descent: after the flock has flown again for a while */
+    this.roostAt = t + 35 + r() * 30;
+    for (let i = 0; i < N; i++) { this.desc[i] = 0; this.descAt[i] = this.roostAt + r() * P.descSpread * 0.7; }
+    this.phase = 'flushing'; this.phaseT = t;
+  }
+  if (this.phase === 'flushing') {
+    const C = this.crown;
+    let still = 0;
+    for (let i = 0; i < N; i++) {
+      if (!this.landed[i]) continue;
+      if (t < this.launchAt[i]) { still++; continue; }
+      /* bolt: out of the crown and up, every bird its own way */
+      this.landed[i] = 0;
+      let ox = this.px[i] - C.cx, oz = this.pz[i] - C.cz; const ol = Math.hypot(ox, oz) || 1;
+      /* out more than up: the first render had them climb 0.65-0.95 and the
+         whole burst left the top of the frame in two seconds */
+      this.fx[i] = 0.9 * ox / ol + (r() - 0.5) * 0.6; this.fy[i] = 0.2 + r() * 0.3; this.fz[i] = 0.9 * oz / ol + (r() - 0.5) * 0.6;
+      norm3(this.fx, this.fy, this.fz, i);
+      this.sp[i] = this.vi[i] * 0.9; this.wx[i] = this.wy[i] = this.wz[i] = 0;
+      for (let s = 0; s < this.fnbn[i]; s++) {
+        const j = this.fnb[i * MAXNB + s];
+        if (this.landed[j]) this.launchAt[j] = Math.min(this.launchAt[j], t + 0.06 + r() * 0.2);
+      }
+    }
+    if (!still) { this.phase = 'air'; this.phaseT = t; }
+  }
+};
+
+/* The nc nearest PERCHED birds of each perched bird - what a flush runs on. */
+Flock.prototype.perchedNeighbours = function () {
+  const N = this.N, nc = this.P.nc, C = 1.5, cells = new Map();
+  const key = (x, y, z) => ((Math.floor(x / C) + 2048) * 4096 + (Math.floor(y / C) + 2048)) * 4096 + (Math.floor(z / C) + 2048);
+  for (let i = 0; i < N; i++) {
+    if (!this.landed[i]) continue;
+    const k = key(this.px[i], this.py[i], this.pz[i]);
+    let a = cells.get(k); if (!a) { a = []; cells.set(k, a); } a.push(i);
+  }
+  const bd = new Float32Array(MAXNB), bi = new Int32Array(MAXNB);
+  for (let i = 0; i < N; i++) {
+    this.fnbn[i] = 0;
+    if (!this.landed[i]) continue;
+    const cx = Math.floor(this.px[i] / C), cy = Math.floor(this.py[i] / C), cz = Math.floor(this.pz[i] / C);
+    let m = 0;
+    for (let ring = 1; ring <= 4 && m < nc; ring++) {
+      m = 0;
+      for (let dx = -ring; dx <= ring; dx++) for (let dy = -ring; dy <= ring; dy++) for (let dz = -ring; dz <= ring; dz++) {
+        const a = cells.get(((cx + dx + 2048) * 4096 + (cy + dy + 2048)) * 4096 + (cz + dz + 2048)); if (!a) continue;
+        for (const j of a) {
+          if (j === i) continue;
+          const d2 = (this.px[j] - this.px[i]) ** 2 + (this.py[j] - this.py[i]) ** 2 + (this.pz[j] - this.pz[i]) ** 2;
+          if (m < nc) { let s = m++; while (s > 0 && bd[s - 1] > d2) { bd[s] = bd[s - 1]; bi[s] = bi[s - 1]; s--; } bd[s] = d2; bi[s] = j; }
+          else if (d2 < bd[m - 1]) { let s = m - 1; while (s > 0 && bd[s - 1] > d2) { bd[s] = bd[s - 1]; bi[s] = bi[s - 1]; s--; } bd[s] = d2; bi[s] = j; }
+        }
+      }
+    }
+    this.fnbn[i] = m;
+    for (let s = 0; s < m; s++) this.fnb[i * MAXNB + s] = bi[s];
+  }
+};
+
 /* Soft walls of the flight space: a turn toward the inside that grows as a
    bird presses in. The roost keeps them well inside these almost always. */
 function wallPush(x, y, z, floorY, out) {
@@ -255,15 +371,26 @@ Flock.prototype.update = function (dt) {
   this.step++; this.t += dt;
   const wall = [0, 0, 0];
   const RX = P.roost.x, RZ = P.roost.z;
+  if (this.hasTree) this.roostCycle();
 
   for (let i = 0; i < N; i++) {
-    if (this.landed[i]) { this.amp[i] += (0 - this.amp[i]) * Math.min(1, dt * 6); continue; }
+    if (this.landed[i]) {
+      this.amp[i] += (0 - this.amp[i]) * Math.min(1, dt * 6);
+      if (this.hasTree) {                                  // settle onto the perch, no pop
+        const k = Math.min(1, dt * 5);
+        this.px[i] += (this.tx[i] - this.px[i]) * k; this.py[i] += (this.ty[i] - this.py[i]) * k; this.pz[i] += (this.tz[i] - this.pz[i]) * k;
+      }
+      continue;
+    }
     const x = this.px[i], y = this.py[i], z = this.pz[i];
     const fx = this.fx[i], fy = this.fy[i], fz = this.fz[i];
     let tx = 0, ty = 0, tz = 0;
     const torque = (dx, dy, dz, k) => { tx += k * (fy * dz - fz * dy); ty += k * (fz * dx - fx * dz); tz += k * (fx * dy - fy * dx); };
     const m = this.nbn[i];
     let nDesc = 0, vNb = -1;
+    /* a bird committed to its perch is listening to the flock much less -
+       otherwise neighbours still up there drag it round and round the tree */
+    const soc = this.desc[i] && this.hasTree ? 0.3 : 1;
     if (m) {
       let ax = 0, ay = 0, az = 0, cx = 0, cy = 0, cz = 0, sx = 0, sy = 0, sz = 0, sw = 0, vs = 0;
       for (let s = 0; s < m; s++) {
@@ -277,11 +404,11 @@ Flock.prototype.update = function (dt) {
         const rs = this.si[i];
         if (d < rs && d > 1e-4) { const w = (rs - d) / rs; sx -= ex / d * w; sy -= ey / d * w; sz -= ez / d * w; sw += w; }
       }
-      torque(ax / m, ay / m, az / m, P.K_align);
+      torque(ax / m, ay / m, az / m, P.K_align * soc);
       vNb = vs / m;
       cx /= m; cy /= m; cz /= m;
       const cl = Math.hypot(cx, cy, cz);
-      if (cl > 1e-4) torque(cx / cl, cy / cl, cz / cl, P.K_coh * Math.min(1, cl / 3));
+      if (cl > 1e-4) torque(cx / cl, cy / cl, cz / cl, P.K_coh * soc * Math.min(1, cl / 3));
       if (sw > 0) {
         const sl = Math.hypot(sx, sy, sz) || 1;
         torque(sx / sl, sy / sl, sz / sl, P.K_sep * Math.min(1, sw));
@@ -307,14 +434,36 @@ Flock.prototype.update = function (dt) {
       /* and the preferred height */
       const dy = P.yPref - y;
       if (Math.abs(dy) > 10) torque(0, Math.sign(dy), 0, P.K_alt * Math.min(1.5, (Math.abs(dy) - 10) / 25));
+    } else if (this.hasTree) {
+      /* Going to roost: home on this bird's own perch, coming down in
+         proportion to distance so the approach is a falling spiral; in the
+         last metres it simply flies at the perch (birds brake and flare - a
+         turn-rate limit would otherwise leave it circling). */
+      const ex = this.tx[i] - x, ey = this.ty[i] - y, ez = this.tz[i] - z;
+      const hd = Math.hypot(ex, ez) || 1, d3 = Math.hypot(ex, ey, ez);
+      if (d3 >= 8) {
+        const yT = this.ty[i] + 0.45 * Math.max(0, hd - 10);
+        const ddx = ex / hd, ddy = Math.max(-0.7, Math.min(0.4, (yT - y) / 15)), ddz = ez / hd;
+        const dl = Math.hypot(ddx, ddy, ddz);
+        torque(ddx / dl, ddy / dl, ddz / dl, 14);
+      }
+      /* inside 8 m the bird simply flies at its perch - applied AFTER the
+         heading update below; applied here it was overwritten by it, and the
+         birds circled their perches instead of landing (first test, 12-37%
+         perched 80 s into the descent) */
     } else {
-      /* Going down: home on the roost, descending in proportion to distance,
-         so the approach is a falling spiral and not a dive. */
+      /* No tree: down into the field, homing on the roost */
       const ex = RX - x, ez = RZ - z, hd = Math.hypot(ex, ez) || 1;
       const yT = Math.max(0, 0.45 * (hd - 12));
       const ddx = ex / hd, ddy = Math.max(-0.7, Math.min(0.3, (yT - y) / 15)), ddz = ez / hd;
       const dl = Math.hypot(ddx, ddy, ddz);
       torque(ddx / dl, ddy / dl, ddz / dl, 8);
+    }
+    /* the crown is not air: flying birds turn away from inside it */
+    if (this.crown && !going) {
+      const C = this.crown, qx = (x - C.cx) / (C.rx * 1.15), qy = (y - C.cy) / (C.ry * 1.15), qz = (z - C.cz) / (C.rz * 1.15);
+      const q2 = qx * qx + qy * qy + qz * qz;
+      if (q2 < 1) { const ql = Math.sqrt(q2) || 1; torque(qx / ql, qy / ql, qz / ql, 10 * (1 - q2)); }
     }
     wallPush(x, y, z, going ? 0 : 8, wall);
     const wl = Math.hypot(wall[0], wall[1], wall[2]);
@@ -336,12 +485,26 @@ Flock.prototype.update = function (dt) {
     const nl = Math.hypot(nfx, nfy, nfz) || 1;
     nfx /= nl; nfy /= nl; nfz /= nl;
     if (nfy > 0.8 || nfy < -0.8) { nfy = Math.sign(nfy) * 0.8; const h = Math.hypot(nfx, nfz) || 1; nfx *= 0.6 / h; nfz *= 0.6 / h; }
+    if (going && this.hasTree) {
+      const ex = this.tx[i] - x, ey = this.ty[i] - y, ez = this.tz[i] - z, d3 = Math.hypot(ex, ey, ez);
+      if (d3 < 8 && d3 > 1e-3) {
+        const k = Math.min(1, dt * 6);
+        nfx += (ex / d3 - nfx) * k; nfy += (ey / d3 - nfy) * k; nfz += (ez / d3 - nfz) * k;
+        const l = Math.hypot(nfx, nfy, nfz) || 1; nfx /= l; nfy /= l; nfz /= l;
+        this.wx[i] *= 0.5; this.wy[i] *= 0.5; this.wz[i] *= 0.5;   // stop turning, start flaring
+      }
+    }
     this.fx[i] = nfx; this.fy[i] = nfy; this.fz[i] = nfz;
     /* speed: back to cruise, slower climbing, faster diving */
     let v = this.sp[i];
-    const vT = vNb > 0 ? P.w_speed * vNb + (1 - P.w_speed) * this.vi[i] : this.vi[i];
+    let vT = vNb > 0 ? P.w_speed * vNb + (1 - P.w_speed) * this.vi[i] : this.vi[i];
+    let vMin = this.vi[i] * 0.55;
+    if (going && this.hasTree) {
+      const d3 = Math.hypot(this.tx[i] - this.px[i], this.ty[i] - this.py[i], this.tz[i] - this.pz[i]);
+      if (d3 < 15) { vT = Math.max(2, d3 * 0.6); vMin = 1.5; }   // braking into the perch
+    }
     v += ((vT - v) / 1.0 - G * 0.5 * nfy) * dt;
-    v = Math.max(this.vi[i] * 0.55, Math.min(this.vi[i] * 1.6, v));
+    v = Math.max(vMin, Math.min(this.vi[i] * 1.6, v));
     this.sp[i] = v;
     this.px[i] += nfx * v * dt; this.py[i] += nfy * v * dt; this.pz[i] += nfz * v * dt;
     /* bank into the turn, from the turn rate about vertical */
@@ -355,7 +518,12 @@ Flock.prototype.update = function (dt) {
     if (nfy > 0.15) aT = 1; else if (nfy < -0.25) aT = 0.1;
     this.amp[i] += (aT - this.amp[i]) * Math.min(1, dt * 5);
 
-    if (going && this.py[i] < 1.0) {                    // touchdown
+    if (going && this.hasTree) {
+      if (Math.hypot(this.tx[i] - this.px[i], this.ty[i] - this.py[i], this.tz[i] - this.pz[i]) < 1.2) {
+        this.landed[i] = 1; this.sp[i] = 0; this.bank[i] = 0;    // on the perch
+        this.fy[i] = 0; norm3(this.fx, this.fy, this.fz, i);
+      }
+    } else if (going && this.py[i] < 1.0) {                    // touchdown
       this.landed[i] = 1; this.py[i] = 0.08; this.sp[i] = 0;
       this.fy[i] = 0; norm3(this.fx, this.fy, this.fz, i);
       this.bank[i] = 0;

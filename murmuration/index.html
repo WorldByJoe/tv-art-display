@@ -18,10 +18,11 @@
 <div id="fade"></div>
 <script src="three.min.js"></script>
 <script src="murmuration_engine.js"></script>
+<script src="murmuration_tree.js"></script>
 <script>
 'use strict';
 /* ==========================================================================
-  murmuration.html · v0.4 · 2026-10-02
+  murmuration.html · v0.7 · 2026-10-03
 
   Starlings over a field at dusk, seen from where a person would stand at its
   edge. No text at all, by design (Joe, 2026-10-02): this one is nerdy in its
@@ -47,11 +48,32 @@
   and glide in the vertex shader. A bird far off would shrink below a pixel
   and shimmer, so the shader never lets one draw smaller than MIN_PX.
 
+  THE TREE. One big leafless tree per run, grown by murmuration_tree.js and
+  placed off-centre 55-100 m out. It is the birds' roost: they range round it,
+  steer clear of its crown, and at dusk settle onto its branches. Limbs over
+  4 cm are solid tapered tubes, 1.2-4 cm solid lines (21k tubes had held the
+  Pi to 56-60 fps); twigs are 1-px lines, which is the grey haze a winter
+  crown makes against the sky.
+
+  THE MOON. Its PHASE is the real one at the moment the run starts (mean
+  synodic month from the new moon of 2000-01-06 18:14 UTC - good to well
+  under a day). Its lit limb faces the sunset glow, as a real moon's does.
+  Its PLACE is not astronomical: a real waxing crescent sits low near the
+  sunset and a full moon rises behind you at dusk, so either would usually be
+  out of this view. It is drawn about 1.6x its true size and faintly, and not
+  at all within two days of new moon, when a real one cannot be seen.
+
   URL: ?solo=N holds the wall here N minutes · ?seed=S repeats a run ·
        ?t=S starts S seconds in (for captures) · ?rs=0.75 renders smaller
        and lets the browser scale up.
 
   CHANGED
+    v0.7  standalone (GitHub) copies fly 3,000-5,000 birds and thin the flock
+          if a warm-up timing says this machine cannot keep up
+    v0.6  the roost fills, is flushed and re-forms twice before the flock stays
+          (engine v0.6); an opener tree in wood a shade lighter than the birds
+    v0.5  one large leafless tree (murmuration_tree.js) the flock roosts in, and
+          a faint moon in tonight's real phase
     v0.4  a standalone copy (empty nextPage) keeps starting new evenings itself
     v0.3  birds drawn 1.3x life size and never under 2 render px (Joe: "a bit
           bigger"); engine v0.3 (denser, no peeling chunks)
@@ -71,7 +93,16 @@ const SOLO_MIN = parseFloat(Q.get('solo') || '0');
 const RS = Math.min(1, Math.max(0.4, parseFloat(Q.get('rs') || '0.6')));
 const START_T = parseFloat(Q.get('t') || '0');
 const N_FIX = parseInt(Q.get('n') || '0', 10);    // ?n=2500 fixes the count (for measuring)
-const N_RANGE = [1500, 2500];
+/* THE WALL'S PI vs A REAL COMPUTER (Joe, 2026-10-03). The Pi holds 60 fps at
+   up to ~2,500 birds (measured). A standalone copy - empty nextPage, which is
+   how the GitHub build marks it - is opened on laptops and desktops and flies
+   3,000-5,000, a median of 4,000. One source; the page decides. */
+const N_RANGE = CONFIG.nextPage ? [1500, 2500] : [3000, 5000];
+/* ...and a standalone copy times its own warm-up: a step costing more than
+   STEP_BUDGET_MS on THIS machine (a phone, an old laptop) means it could not
+   hold 60 fps, so the evening's flock is thinned until a step costs about
+   STEP_TARGET_MS. The wall is a measured machine and is left alone. */
+const STEP_BUDGET_MS = 12, STEP_TARGET_MS = 9;
 let seed = Q.has('seed') ? (parseInt(Q.get('seed'), 10) >>> 0) : ((Date.now() ^ (Math.random() * 1e9)) >>> 0);
 
 const DT = 1 / 30;
@@ -130,6 +161,9 @@ const skyUniforms = {
   uZen: { value: new THREE.Color() }, uMid: { value: new THREE.Color() }, uHor: { value: new THREE.Color() },
   uGlow: { value: new THREE.Color() }, uSun: { value: new THREE.Vector3(0, 0, 1) },
   uGlowAmt: { value: 0.3 }, uGlowPow: { value: 5 }, uDark: { value: 1 },
+  uMoonDir: { value: new THREE.Vector3(0, 0.4, 1).normalize() }, uMoonE1: { value: new THREE.Vector3(1, 0, 0) },
+  uMoonE2: { value: new THREE.Vector3(0, 1, 0) }, uMoonT: { value: new THREE.Vector2(1, 0) },
+  uMoonAlpha: { value: 1.0 }, uMoonR: { value: 0.0073 }, uMoonI: { value: 0 },
 };
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(5000, 48, 24),
@@ -145,6 +179,8 @@ const sky = new THREE.Mesh(
     fragmentShader: `
       uniform vec3 uZen, uMid, uHor, uGlow, uSun;
       uniform float uGlowAmt, uGlowPow, uDark;
+      uniform vec3 uMoonDir, uMoonE1, uMoonE2; uniform vec2 uMoonT;
+      uniform float uMoonAlpha, uMoonR, uMoonI;
       varying vec3 vDir;
       void main(){
         vec3 d = normalize(vDir);
@@ -153,6 +189,23 @@ const sky = new THREE.Mesh(
         col = mix(col, uZen, smoothstep(0.10, 0.80, h));
         float s = max(dot(d, uSun), 0.0);
         col += uGlow * uGlowAmt * (pow(s, uGlowPow) * (1.0 - smoothstep(0.0, 0.45, h)) + 0.25 * pow(s, 40.0));
+        /* the moon: a sphere lit from the sunward side at the phase angle */
+        if (uMoonI > 0.0) {
+          float c = dot(d, uMoonDir);
+          vec3 o = d - uMoonDir * c;
+          vec2 uv = vec2(dot(o, uMoonE1), dot(o, uMoonE2)) / uMoonR;
+          float rr = dot(uv, uv);
+          if (c > 0.0 && rr < 1.6) {
+            float edge = 1.0 - smoothstep(0.92, 1.0, sqrt(rr));
+            vec3 n = vec3(uv, sqrt(max(0.0, 1.0 - rr)));
+            vec3 L = vec3(uMoonT * sin(uMoonAlpha), cos(uMoonAlpha));
+            float lit = smoothstep(-0.04, 0.08, dot(n, L));
+            float limb = 0.75 + 0.25 * n.z;
+            vec3 moonCol = vec3(0.93, 0.92, 0.86);
+            col = mix(col, moonCol, uMoonI * edge * (lit * limb + 0.04));
+            col += moonCol * 0.035 * uMoonI * exp(-rr * 0.9) * (1.0 - edge);   // a breath of glow
+          }
+        }
         col *= uDark;
         /* dither: an 8-bit gradient across a 4K sky bands visibly without it */
         col += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
@@ -165,7 +218,7 @@ scene.add(sky);
 /* ------------------------------------------------------------- ground, trees, hills */
 const groundMat = new THREE.MeshBasicMaterial({ vertexColors: true });
 let ground = null, treeLine = null, hills = null;
-const treeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+const lineMat = new THREE.MeshBasicMaterial({ color: 0x000000 });   // the distant tree line
 const hillMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
 function buildGround(r) {
@@ -230,11 +283,90 @@ function buildHorizon(r) {
        few scales, under a metre at 900 m (the first try at 2 m read as pines) */
     const n = 0.6 * Math.sin(az * 330 + 1.3) + 0.4 * Math.sin(az * 760 + 0.2) + 0.25 * Math.sin(az * 1530 + 2.1);
     return h > hedge * 1.3 ? h + n * Math.min(0.9, h * 0.06) : h;
-  }, treeMat, -1.4, 1.4);
+  }, lineMat, -1.4, 1.4);
   const p = [r() * 6, r() * 6, r() * 6], amp = 50 + r() * 90;
   hills = band(2900, (az) => 12 + amp * (0.5 + 0.3 * Math.sin(az * 2.1 + p[0]) + 0.15 * Math.sin(az * 5.3 + p[1]) + 0.05 * Math.sin(az * 13 + p[2])),
                hillMat, -1.5, 1.5);
   hills.renderOrder = 0;
+}
+
+/* ------------------------------------------------------------- the roost tree */
+let tree = null, treeMeshes = [];
+const treeMat = (() => new THREE.MeshBasicMaterial({ color: 0x000000 }))();
+/* twigs are a haze, not a mass: at 0.6 the crown read as a solid blob and
+   hid the birds roosting in it */
+const twigMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22 });
+const limbMat = new THREE.LineBasicMaterial({ color: 0x000000 });          // small limbs: solid lines
+function tubeGeometry(t) {
+  /* each segment a tapered 5-sided tube; consecutive segments share their
+     radius at the joint, so the silhouette is continuous */
+  const n = t.length / 8, S = 5;
+  const pos = new Float32Array(n * S * 2 * 3), idx = new Uint32Array(n * S * 6);
+  for (let k = 0; k < n; k++) {
+    const o = k * 8;
+    const ax = t[o], ay = t[o + 1], az = t[o + 2], bx = t[o + 3], by = t[o + 4], bz = t[o + 5];
+    let dx = bx - ax, dy = by - ay, dz = bz - az; const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
+    let ex = Math.abs(dy) < 0.9 ? dz : 0, ey = Math.abs(dy) < 0.9 ? 0 : -dz, ez = Math.abs(dy) < 0.9 ? -dx : dy;   // a perpendicular
+    const el = Math.hypot(ex, ey, ez) || 1; ex /= el; ey /= el; ez /= el;
+    const fx = dy * ez - dz * ey, fy = dz * ex - dx * ez, fz = dx * ey - dy * ex;
+    for (let s2 = 0; s2 < S; s2++) {
+      const a = s2 / S * 6.2832, c = Math.cos(a), sn = Math.sin(a);
+      const nx = ex * c + fx * sn, ny = ey * c + fy * sn, nz = ez * c + fz * sn;
+      const v = (k * S + s2) * 6;
+      pos[v] = ax + nx * t[o + 6]; pos[v + 1] = ay + ny * t[o + 6]; pos[v + 2] = az + nz * t[o + 6];
+      pos[v + 3] = bx + nx * t[o + 7]; pos[v + 4] = by + ny * t[o + 7]; pos[v + 5] = bz + nz * t[o + 7];
+      const a0 = (k * S + s2) * 2, a1 = (k * S + (s2 + 1) % S) * 2, q = (k * S + s2) * 6;
+      idx[q] = a0; idx[q + 1] = a0 + 1; idx[q + 2] = a1; idx[q + 3] = a1; idx[q + 4] = a0 + 1; idx[q + 5] = a1 + 1;
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  return g;
+}
+function buildTree(r) {
+  for (const m of treeMeshes) { scene.remove(m); m.geometry.dispose(); }
+  treeMeshes = [];
+  /* off-centre, 70-140 m out: a third of the way in from either side */
+  const zt = 55 + r() * 45, side = r() < 0.5 ? -1 : 1, xt = side * (0.12 + r() * 0.18) * (zt + 12);
+  tree = MurmurationTree.grow(r, { base: [xt, 0, zt] });
+  const tubes = new THREE.Mesh(tubeGeometry(tree.tubes), treeMat);
+  const tg = new THREE.BufferGeometry();
+  tg.setAttribute('position', new THREE.BufferAttribute(tree.twigs, 3));
+  const twigs = new THREE.LineSegments(tg, twigMat);
+  const lg = new THREE.BufferGeometry();
+  lg.setAttribute('position', new THREE.BufferAttribute(tree.limbs, 3));
+  const limbs = new THREE.LineSegments(lg, limbMat);
+  tubes.frustumCulled = twigs.frustumCulled = limbs.frustumCulled = false;
+  scene.add(tubes); scene.add(limbs); scene.add(twigs);
+  treeMeshes = [tubes, limbs, twigs];
+  tree.x = xt; tree.z = zt;
+}
+
+/* ------------------------------------------------------------- the moon */
+/* Days since new moon, from the mean synodic month. */
+function moonAge(date) {
+  const SYN = 29.530588853, ref = Date.UTC(2000, 0, 6, 18, 14) / 86400000;
+  const d = date.getTime() / 86400000 - ref;
+  return ((d % SYN) + SYN) % SYN;
+}
+function placeMoon(r) {
+  const SYN = 29.530588853, age = moonAge(new Date());
+  const elong = 2 * Math.PI * age / SYN;                    // 0 new, pi full
+  const alpha = Math.abs(Math.PI - elong);                  // phase angle: 0 full, pi new
+  const shown = age > 2 && age < SYN - 2;
+  const az = (r() < 0.5 ? -1 : 1) * (8 + r() * 20) * Math.PI / 180, alt = (14 + r() * 14) * Math.PI / 180;
+  const fwd = new THREE.Vector3(0, 0, 1);
+  const M = new THREE.Vector3(Math.sin(az) * Math.cos(alt), Math.sin(alt), Math.cos(az) * Math.cos(alt)).normalize();
+  const E1 = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), M).normalize();
+  const E2 = new THREE.Vector3().crossVectors(M, E1).normalize();
+  const S = eve.sun.clone();
+  const t = new THREE.Vector2(S.dot(E1), S.dot(E2)); if (t.lengthSq() < 1e-6) t.set(0, -1); t.normalize();
+  skyUniforms.uMoonDir.value.copy(M); skyUniforms.uMoonE1.value.copy(E1); skyUniforms.uMoonE2.value.copy(E2);
+  skyUniforms.uMoonT.value.copy(t); skyUniforms.uMoonAlpha.value = alpha;
+  skyUniforms.uMoonR.value = 0.0073;                        // 0.42 deg - 1.6x the true 0.26
+  skyUniforms.uMoonI.value = shown ? 0.32 + 0.12 * r() : 0;
+  window.MURM_MOON = { age: +age.toFixed(2), illuminated: +((1 + Math.cos(alpha)) / 2).toFixed(2), shown };
 }
 
 /* ------------------------------------------------------------- birds */
@@ -271,6 +403,15 @@ birdMat.onBeforeCompile = (sh) => {
         transformed.x = sign(position.x) * ax * cos(th);
         transformed.y = ax * sin(th);
         transformed.z = mix(position.z, -0.07, aFold);
+      }
+      /* perched: a plump upright bird, not a folded sliver - sat on a branch a
+         starling is a small dark blob tilted nose-up */
+      if (aFold > 0.0) {
+        transformed.y *= 1.0 + 2.6 * aFold;
+        transformed.x *= 1.0 + 0.8 * aFold;
+        float tz = transformed.z, ty = transformed.y, tilt = 0.55 * aFold;
+        transformed.z = tz * cos(tilt) - ty * sin(tilt);
+        transformed.y = tz * sin(tilt) + ty * cos(tilt);
       }
       /* never smaller than uMinPx on screen, or a far bird shimmers */
       vec4 o = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
@@ -324,15 +465,31 @@ let eve = null, runStart = 0, acc = 0, last = 0, fading = false;
 function newRun() {
   const r = Murmuration.rng(seed ^ 0x9e3779b9);
   eve = drawEvening(r);
-  buildGround(r); buildHorizon(r);
-  const roostAt = CONFIG.warmSec + CONFIG.runSec - 100;     // flock time the descent may begin
-  flock = new Murmuration.Flock(seed, N_FIX ? { nMin: N_FIX, nMax: N_FIX, roostAt } : { nMin: N_RANGE[0], nMax: N_RANGE[1], roostAt });
+  buildGround(r); buildHorizon(r); buildTree(r); placeMoon(r);
+  /* the first descent 3 min 20 s into the run; then fill, rest, flush, fly
+     again - twice - and stay for the last minute and a half as the light goes */
+  const roostAt = CONFIG.warmSec + 200;
+  const treeOpts = { roostAt, flushes: 2, roost: { x: tree.x, z: tree.z }, perches: tree.perches, crown: tree.crown };
+  const opts = Object.assign(N_FIX ? { nMin: N_FIX, nMax: N_FIX } : { nMin: N_RANGE[0], nMax: N_RANGE[1] }, treeOpts);
+  flock = new Murmuration.Flock(seed, opts);
+  let thinnedFrom = 0;
+  if (!CONFIG.nextPage && !N_FIX) {
+    for (let k = 0; k < 10; k++) flock.update(DT);          // let the JIT settle first
+    const t0 = performance.now();
+    for (let k = 0; k < 30; k++) flock.update(DT);
+    const per = (performance.now() - t0) / 30;
+    if (per > STEP_BUDGET_MS) {
+      thinnedFrom = flock.N;
+      const n2 = Math.max(600, Math.round(flock.N * STEP_TARGET_MS / per));
+      flock = new Murmuration.Flock(seed, Object.assign({}, opts, { nMin: n2, nMax: n2 }));
+    }
+  }
   buildBirds(flock.N);
   /* the flock forms before anyone sees it */
   for (let k = 0, n = Math.round((CONFIG.warmSec + START_T) / DT); k < n; k++) flock.update(DT);
   runStart = performance.now() - START_T * 1000;
   acc = 0; last = performance.now();
-  window.MURM = { seed, n: flock.N, params: flock.P, fps: 0, simMs: 0 };
+  window.MURM = { seed, n: flock.N, thinnedFrom, params: flock.P, fps: 0, simMs: 0 };
   seed = (seed * 1664525 + 1013904223) >>> 0;     // the next run's seed
 }
 
@@ -344,7 +501,11 @@ function setLight(dark) {
   if (!scene.fog) scene.fog = new THREE.Fog(fogC, 30, 3000 * eve.haze);
   scene.fog.color.copy(fogC); scene.fog.far = 3000 * eve.haze;
   groundMat.color.copy(eve.ground).multiplyScalar(dark);
-  treeMat.color.copy(eve.trees).multiplyScalar(dark);
+  lineMat.color.copy(eve.trees).multiplyScalar(dark);
+  /* the wood is a shade LIGHTER than the birds - a little of the evening's
+     haze at 60-100 m - so a black starling still reads against a limb */
+  const wood = eve.trees.clone().lerp(eve.hor, 0.16).multiplyScalar(dark);
+  treeMat.color.copy(wood); twigMat.color.copy(wood); limbMat.color.copy(wood);
   hillMat.color.copy(eve.hills).multiplyScalar(dark);
 }
 

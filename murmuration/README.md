@@ -1,6 +1,6 @@
 # Murmuration
 
-Starlings over a field at dusk, seen from where a person would stand at its edge. Nobody leads and nobody knows where the flock is going: two thousand birds each follow the same few rules, and the turns, the ripples and the shape all come out of them.
+Starlings over a field at dusk, seen from where a person would stand at its edge. Nobody leads and nobody knows where the flock is going: four thousand birds each follow the same few rules, and the turns, the ripples and the shape all come out of them. Then they roost in a lone winter tree - and get flushed out of it, twice, before they stay.
 
 ## Running it
 
@@ -16,7 +16,10 @@ There is no text on screen, by design. Add `?pin` to the URL to stay on the curr
 - Birds match their neighbours' speed as well as their heading (Bialek et al. 2014). Without it, birds that were naturally a little slower dropped off the back together and the flock shed regular little chunks.
 - A weak pull toward the flock as a dark mass seen from afar keeps it in one piece while its edges churn (Pearce et al. 2014). It turned out to be the single strongest lever against the flock splitting.
 - What keeps it over the field is a roost the birds are all attached to and a height they prefer, as in the StarDisplay model (Hildenbrandt, Carere and Hemelrijk 2010). There is no camera in that model: the flock is sometimes close, sometimes far, sometimes out of sight.
-- As the light goes, each bird picks its own moment to go down to roost, and goes sooner once its neighbours have - so the descent spreads through the flock like everything else. Then a new evening: warmer or cooler light, a new flock, every behavioural constant drawn afresh.
+- The roost is a single large leafless tree, grown fresh each evening from a few drawn traits - how strongly the leader dominates, how crooked the limbs are, how far laterals splay and how much the thin ends droop - with limbs thinning by the pipe model, so a fork's children carry about the parent's cross-section between them.
+- Each bird picks its own moment to go down and goes sooner once its neighbours have, homes on a perch of its own and brakes into it. Once the roost has rested, one bird startles and each bolts a fraction of a second after its nearest perched neighbour does, so the flush tears across the tree as a wave. The flock re-forms and comes back - twice - and then stays as the light goes. Then a new evening: warmer or cooler light, a new tree, a new flock, every behavioural constant drawn afresh.
+- The moon is in its real phase for the moment the evening starts, with its lit edge toward the sunset. Its place in the sky is not astronomical - the real moon at dusk is usually out of this view - and it is drawn faint and a little larger than life.
+- A computer flies 3,000 to 5,000 birds. The page times its own first steps, and on a machine that could not keep that many smooth (a phone, an old laptop) it thins the flock for that evening rather than stutter. The television it was written for, a Raspberry Pi, flies 1,500 to 2,500.
 
 ## Credits
 
