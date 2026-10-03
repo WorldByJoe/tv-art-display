@@ -22,7 +22,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  murmuration.html · v0.7 · 2026-10-03
+  murmuration.html · v0.8 · 2026-10-03
 
   Starlings over a field at dusk, seen from where a person would stand at its
   edge. No text at all, by design (Joe, 2026-10-02): this one is nerdy in its
@@ -46,7 +46,7 @@
 
   DRAWING A BIRD. A few triangles: body, tail, two pointed wings that flap
   and glide in the vertex shader. A bird far off would shrink below a pixel
-  and shimmer, so the shader never lets one draw smaller than MIN_PX.
+  and shimmer, so the shader never lets one draw smaller than minPx().
 
   THE TREE. One big leafless tree per run, grown by murmuration_tree.js and
   placed off-centre 55-100 m out. It is the birds' roost: they range round it,
@@ -68,6 +68,8 @@
        and lets the browser scale up.
 
   CHANGED
+    v0.8  standalone copies draw at the screen's own resolution (Retina up to
+          2x) with antialiasing, stepping down if the frame rate sags
     v0.7  standalone (GitHub) copies fly 3,000-5,000 birds and thin the flock
           if a warm-up timing says this machine cannot keep up
     v0.6  the roost fills, is flushed and re-forms twice before the flock stays
@@ -75,10 +77,6 @@
     v0.5  one large leafless tree (murmuration_tree.js) the flock roosts in, and
           a faint moon in tonight's real phase
     v0.4  a standalone copy (empty nextPage) keeps starting new evenings itself
-    v0.3  birds drawn 1.3x life size and never under 2 render px (Joe: "a bit
-          bigger"); engine v0.3 (denser, no peeling chunks)
-    v0.2  no lead bird (engine v0.2); the dusk descent fills the run's last 100 s
-    v0.1  first draft: 0.6 render scale, no AA, 1,500-2,500 birds - all measured on the Pi
 ========================================================================== */
 
 const CONFIG = { holdMin: 8, nextPage: '' /* standalone: nowhere to hand on to; start again */, runSec: 480, warmSec: 20 };
@@ -90,7 +88,13 @@ const SOLO_MIN = parseFloat(Q.get('solo') || '0');
    still at 3,000 birds. Smooth beats sharp here (Joe), so the default draws at
    0.6 of the screen with no antialiasing and lets the browser scale it up -
    which softens the edges about as much as antialiasing would have. */
-const RS = Math.min(1, Math.max(0.4, parseFloat(Q.get('rs') || '0.6')));
+/* A STANDALONE copy (the GitHub build empties nextPage) is opened on real
+   computers, and Joe asked for full resolution there (2026-10-03): the screen's
+   own pixels, Retina up to 2x, with antialiasing. If that sags below 45 fps for
+   two readings in a row, the render scale steps down toward the wall's 0.6. */
+const STANDALONE = !CONFIG.nextPage;
+const DPR = STANDALONE ? Math.min(2, window.devicePixelRatio || 1) : 1;
+let RS = Math.min(1, Math.max(0.4, parseFloat(Q.get('rs') || (STANDALONE ? '1' : '0.6'))));
 const START_T = parseFloat(Q.get('t') || '0');
 const N_FIX = parseInt(Q.get('n') || '0', 10);    // ?n=2500 fixes the count (for measuring)
 /* THE WALL'S PI vs A REAL COMPUTER (Joe, 2026-10-03). The Pi holds 60 fps at
@@ -106,7 +110,8 @@ const STEP_BUDGET_MS = 12, STEP_TARGET_MS = 9;
 let seed = Q.has('seed') ? (parseInt(Q.get('seed'), 10) >>> 0) : ((Date.now() ^ (Math.random() * 1e9)) >>> 0);
 
 const DT = 1 / 30;
-const MIN_PX = Math.max(2.0, 2.4 * RS);   // in RENDER pixels: ~3.3 screen px at 0.6
+/* in RENDER pixels: ~3.3 screen px on the wall (0.6), ~2.4 CSS px standalone */
+const minPx = () => Math.max(2.0, 2.4 * RS * DPR);
 /* A real starling spans 37-42 cm. Drawn at 1.3x, a deliberate liberty: on a
    TV across the room the life-size bird read as dust (Joe, 2026-10-02). The
    flock's spacing and speeds stay life-size; only the drawing is enlarged. */
@@ -116,7 +121,7 @@ const FOV = 42;                                   // vertical; the eye looks 13 
 
 /* ------------------------------------------------------------- renderer */
 const canvas = document.getElementById('gl');
-const AA = Q.get('aa') === '1';
+const AA = Q.has('aa') ? Q.get('aa') === '1' : STANDALONE;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: AA, powerPreference: 'high-performance' });
 renderer.setPixelRatio(1);
 const scene = new THREE.Scene();
@@ -125,10 +130,11 @@ camera.position.copy(EYE);
 camera.lookAt(0, 1.7 + 200 * Math.tan(13 * Math.PI / 180), 188);
 
 function resize() {
-  const w = Math.round(innerWidth * RS), h = Math.round(innerHeight * RS);
+  const w = Math.round(innerWidth * RS * DPR), h = Math.round(innerHeight * RS * DPR);
   renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
   birdUniforms.uPxScale.value = 2 * Math.tan(FOV * Math.PI / 360) / h;
+  birdUniforms.uMinPx.value = minPx();
 }
 
 /* ------------------------------------------------------------- the evening */
@@ -370,7 +376,7 @@ function placeMoon(r) {
 }
 
 /* ------------------------------------------------------------- birds */
-const birdUniforms = { uPxScale: { value: 0.001 }, uMinPx: { value: MIN_PX }, uSpan: { value: 0.40 * BIRD_SCALE } };
+const birdUniforms = { uPxScale: { value: 0.001 }, uMinPx: { value: 2.0 }, uSpan: { value: 0.40 * BIRD_SCALE } };
 function birdGeometry() {
   /* metres; z forward, x along the wings, y up. Wingspan 0.40 m. */
   const V = [], W = [];
@@ -510,7 +516,7 @@ function setLight(dark) {
 }
 
 /* ------------------------------------------------------------- loop */
-let fpsN = 0, fpsT = performance.now(), simAcc = 0;
+let fpsN = 0, fpsT = performance.now(), simAcc = 0, slowReads = 0;
 function frame(now) {
   const dtF = Math.min(0.1, (now - last) / 1000); last = now;
   acc += dtF;
@@ -528,6 +534,10 @@ function frame(now) {
   if (now - fpsT > 2000) {
     MURM.fps = Math.round(fpsN * 1000 / (now - fpsT)); MURM.simMs = +(simAcc / fpsN).toFixed(2);
     fpsN = 0; simAcc = 0; fpsT = now;
+    /* standalone and not told a scale: two slow readings running -> draw smaller */
+    if (STANDALONE && !Q.has('rs') && RS > 0.6 && MURM.fps < 45) {
+      if (++slowReads >= 2) { RS = Math.max(0.6, RS * 0.8); resize(); slowReads = 0; MURM.rs = RS; }
+    } else slowReads = 0;
   }
   if (!fading && runT > CONFIG.runSec - 3) endRun();
   requestAnimationFrame(frame);
