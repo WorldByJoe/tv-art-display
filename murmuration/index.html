@@ -22,7 +22,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  murmuration.html · v0.8 · 2026-10-03
+  murmuration.html · v0.9 · 2026-10-03
 
   Starlings over a field at dusk, seen from where a person would stand at its
   edge. No text at all, by design (Joe, 2026-10-02): this one is nerdy in its
@@ -68,6 +68,9 @@
        and lets the browser scale up.
 
   CHANGED
+    v0.9  the tree is grown knowing where the eye is, so its big limbs are
+          pruned flat to the view (tree v0.6); tubes overlap at joints, so
+          a bending trunk no longer shows a hairline crack of sky
     v0.8  standalone copies draw at the screen's own resolution (Retina up to
           2x) with antialiasing, stepping down if the frame rate sags
     v0.7  standalone (GitHub) copies fly 3,000-5,000 birds and thin the flock
@@ -76,7 +79,6 @@
           (engine v0.6); an opener tree in wood a shade lighter than the birds
     v0.5  one large leafless tree (murmuration_tree.js) the flock roosts in, and
           a faint moon in tonight's real phase
-    v0.4  a standalone copy (empty nextPage) keeps starting new evenings itself
 ========================================================================== */
 
 const CONFIG = { holdMin: 8, nextPage: '' /* standalone: nowhere to hand on to; start again */, runSec: 480, warmSec: 20 };
@@ -305,13 +307,17 @@ const twigMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true
 const limbMat = new THREE.LineBasicMaterial({ color: 0x000000 });          // small limbs: solid lines
 function tubeGeometry(t) {
   /* each segment a tapered 5-sided tube; consecutive segments share their
-     radius at the joint, so the silhouette is continuous */
+     radius at the joint, so the silhouette is continuous. Each runs on half
+     its end radius past its end: where the axis bends, the next tube's ring
+     tilts and opened a hairline crack of sky on the outside of the bend */
   const n = t.length / 8, S = 5;
   const pos = new Float32Array(n * S * 2 * 3), idx = new Uint32Array(n * S * 6);
   for (let k = 0; k < n; k++) {
     const o = k * 8;
-    const ax = t[o], ay = t[o + 1], az = t[o + 2], bx = t[o + 3], by = t[o + 4], bz = t[o + 5];
+    const ax = t[o], ay = t[o + 1], az = t[o + 2];
+    let bx = t[o + 3], by = t[o + 4], bz = t[o + 5];
     let dx = bx - ax, dy = by - ay, dz = bz - az; const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
+    const ov = 0.5 * t[o + 7]; bx += dx * ov; by += dy * ov; bz += dz * ov;
     let ex = Math.abs(dy) < 0.9 ? dz : 0, ey = Math.abs(dy) < 0.9 ? 0 : -dz, ez = Math.abs(dy) < 0.9 ? -dx : dy;   // a perpendicular
     const el = Math.hypot(ex, ey, ez) || 1; ex /= el; ey /= el; ez /= el;
     const fx = dy * ez - dz * ey, fy = dz * ex - dx * ez, fz = dx * ey - dy * ex;
@@ -335,7 +341,7 @@ function buildTree(r) {
   treeMeshes = [];
   /* off-centre, 70-140 m out: a third of the way in from either side */
   const zt = 55 + r() * 45, side = r() < 0.5 ? -1 : 1, xt = side * (0.12 + r() * 0.18) * (zt + 12);
-  tree = MurmurationTree.grow(r, { base: [xt, 0, zt] });
+  tree = MurmurationTree.grow(r, { base: [xt, 0, zt], eye: [EYE.x, EYE.z] });
   const tubes = new THREE.Mesh(tubeGeometry(tree.tubes), treeMat);
   const tg = new THREE.BufferGeometry();
   tg.setAttribute('position', new THREE.BufferAttribute(tree.twigs, 3));

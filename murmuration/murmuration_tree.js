@@ -1,5 +1,5 @@
 /* ==========================================================================
-  murmuration_tree.js · v0.5 · 2026-10-03
+  murmuration_tree.js · v0.6 · 2026-10-03
 
   One large leafless tree for the starlings to roost in, grown fresh each run.
   Pure JavaScript (no DOM, no three.js) so it can be grown and measured under
@@ -28,11 +28,23 @@
     twigs   pairs of points for everything thinner - drawn as 1-px lines,
             which at a hundred metres is exactly the grey haze a winter crown
             makes against the sky
-    perches points on the tops of near-horizontal small limbs (1-6 cm), one
-            starling's width apart - where the flock settles at dusk
+    perches points on the tops of near-horizontal small limbs (1-6 cm),
+            16 cm apart, shoulder to shoulder - where the flock settles at dusk
     crown   the ellipsoid that holds the crown, for flying birds to steer round
 
+  PRUNED FLAT TO THE VIEWER (Joe, 2026-10-03: "a little more 2-dimensional
+  by pruning some of the big branches in the plane that goes toward and away
+  from the viewer"). Given the eye (opts.eye), the big limbs - scaffold limbs
+  off the trunk and the limbs off those - that head within PRUNE_DEG of the
+  line of sight are never grown, and the big forks open across the view.
+  The tree stays round in plan below that; it is the big structure that lies
+  in a slab facing the viewer, so a roosting bird is seen against the sky
+  and not behind a limb.
+
   CHANGED
+    v0.6  FLAT TO THE VIEWER: big limbs heading toward or away from the eye
+          pruned, big forks opened across the view; perches 16 cm apart, not
+          22, since the pruned tree has half the wood
     v0.5  OPENER (Joe: "too dense with branches, and when the birds fly in, we
           lose them"): laterals half as frequent past the scaffold, twigs end
           at 18 mm, one order fewer
@@ -54,6 +66,8 @@ const TUBE_R = 0.04;             // below this radius a branch is a line, not a 
 const LIMB_R = 0.012;            // between the two: a small limb, a solid line; under it, twig haze
 const MIN_R  = 0.009;            // nothing thinner than an 18 mm twig
 const GOLDEN = 2.39996;          // phyllotaxis: successive laterals turn 137.5 deg
+const PRUNE_DEG = 40;            // big limbs within this of the line of sight are pruned
+const BIG = 1;                   // orders 0 and 1 shed the big limbs that get pruned
 
 function grow(r, opts) {
   const U = (a, b) => a + (b - a) * r();
@@ -73,6 +87,18 @@ function grow(r, opts) {
   let perches = [];
   let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
   let azi = r() * 6.283;
+  /* the line of sight, flat on the ground, from the eye to the trunk */
+  const eye = (opts && opts.eye) || [base[0], base[2] - 100];
+  const sl = Math.hypot(base[0] - eye[0], base[2] - eye[1]) || 1;
+  const sight = [(base[0] - eye[0]) / sl, (base[2] - eye[1]) / sl];
+  const pruneCos = Math.cos(PRUNE_DEG * Math.PI / 180);
+  /* how nearly a direction heads toward or away from the viewer: |cos| of
+     its angle to the line of sight, on the ground; a limb going straight up
+     is not deep at all */
+  function depth(v) {
+    const h = Math.hypot(v[0], v[2]);
+    return h < 0.15 ? 0 : Math.abs(v[0] * sight[0] + v[2] * sight[1]) / h;
+  }
 
   function rand3() {
     let x, y, z;
@@ -99,7 +125,7 @@ function grow(r, opts) {
     if (order >= 2 && mr > 0.01 && mr < 0.06) {
       const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], L = Math.hypot(dx, dy, dz);
       if (L > 0 && Math.abs(dy / L) < 0.65) {
-        for (let s = 0.15; s < L; s += 0.22) {
+        for (let s = 0.12; s < L; s += 0.16) {
           const f = s / L;
           perches.push(a[0] + dx * f, a[1] + dy * f + mr + 0.07, a[2] + dz * f);
         }
@@ -143,7 +169,8 @@ function grow(r, opts) {
         const cr = rq * (order === 0 ? 0.55 + 0.25 * (1 - T.habit) : 0.5 + 0.2 * r());
         const clen = len * (order === 0 ? 0.75 + 0.45 * (1 - T.habit) : 0.5 + 0.25 * r()) * (1 - 0.55 * frac) * (0.8 + 0.4 * r());
         const ang = T.angle * (0.8 + 0.4 * r()) * (order === 0 ? 1.1 : 1);
-        branch(q, tilt(d, ang, azi), clen, cr, order + 1);
+        const cd = tilt(d, ang, azi);
+        if (order > BIG || depth(cd) < pruneCos) branch(q, cd, clen, cr, order + 1);
         nextLat += latEvery * (0.6 + 0.8 * r()) * (order === 0 ? 1 : Math.max(0.35, len / 6));
       }
       rr = rq; p = q;
@@ -154,7 +181,16 @@ function grow(r, opts) {
       const forkAng = T.angle * (0.6 + 0.4 * r());
       const share = order === 0 ? 0.5 + 0.35 * T.habit : 0.5 + 0.15 * r();
       const ra = rEnd * Math.sqrt(share) * 1.05, rb = rEnd * Math.sqrt(1 - share) * 1.05;
-      const az0 = r() * 6.283;
+      let az0 = r() * 6.283;
+      /* a big fork opens across the view: of a few turns, the one whose
+         deeper child is least deep */
+      if (order <= BIG) {
+        let best = 9;
+        for (let j = 0, a0 = az0; j < 8; j++, a0 += Math.PI / 8) {
+          const dm = Math.max(depth(tilt(d, forkAng * (1 - share), a0)), depth(tilt(d, forkAng * share, a0 + Math.PI)));
+          if (dm < best) { best = dm; az0 = a0; }
+        }
+      }
       const lenA = len * (order === 0 ? 0.55 + 0.25 * T.habit : 0.62 + 0.1 * r());
       branch(p, tilt(d, forkAng * (1 - share), az0), lenA, ra, order + 1);
       branch(p, tilt(d, forkAng * share, az0 + Math.PI), lenA * (0.75 + 0.2 * r()), rb, order + 1);
