@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v1.3 · 2026-09-24
+   wall.js · v1.9 · 2026-10-02
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,12 +39,19 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.9  murmuration.html joins the ring as 'Murmuration', after The Balance:
+           starlings at dusk, no text, a fresh flock and evening every 8 minutes
+     v1.8  baseball.html joins the ring as 'Ballgame', after Game Day: one whole
+           simulated game per visit (its source is the baseball-sim repository)
+     v1.7  noise_live.html in the ring, OFF by default: a test instrument that
+           is only ever brought up by a solo, but a solo needs a ring entry
+     v1.6  radio_yard.html joins the ring as 'Radio Yard', right after Three
+           Skies - the same antenna, turned round to look at the yard itself
+     v1.4  ring stop for gameday.html, kind:'time' def 240 so the stall
+           watchdog budgets a whole football game
      v1.3  ecology_closeup.html joins the ring, immediately before
            ecology.html: the same model with one animal followed decision by
            decision, then the whole world of them at full speed
-     v1.1  stallSecs() accepts WALL_SECONDS_ONCE - a page's one-time load,
-           counted once per visit rather than multiplied by the repeat count
-     v1.0  versioning starts here; this file predates the scheme
 */
 (function (global) {
   'use strict';
@@ -538,6 +545,25 @@
     { file:'ecology_closeup.html', name:'Selection, up close', kind:'time', unit:'minutes', def:15, loop:'time' },
     { file:'ecology.html',       name:'Selection',        kind:'time', unit:'minutes',    def:15, loop:'time'   },
     { file:'weatherclocks.html', name:'House Electricity',kind:'time', unit:'minutes',    def:4,  loop:'time'   },
+    /* Today's sky measured in three places within four miles, and - since
+       2026-09-29 - a fourth panel of winds and temperature ALOFT, decoded off
+       the air in this house from airliner position reports. Sits next to the
+       electricity clocks deliberately: both are the house measuring itself.
+
+       kind:'time' because nothing on it finishes. The builder refreshes every
+       ten minutes and the page reloads its own data on the same cadence, so a
+       longer dwell shows genuinely newer numbers rather than the same frame
+       held twice. */
+    { file:'wx_today.html',      name:'Three Skies',      kind:'time', unit:'minutes',    def:6,  loop:'time'   },
+    /* The same receiver, turned round: how loudly seven fixed transmitters
+       arrive over the last week, against the moisture on the path (Joe,
+       2026-09-30). Follows Three Skies because it is the same instrument. */
+    { file:'radio_yard.html',    name:'Radio Yard',       kind:'time', unit:'minutes',    def:5,  loop:'time'   },
+    /* A TEST INSTRUMENT, not a piece: the receiver's noise floor live, for
+       switching things on and off in the room (Joe, 2026-09-30). It is in
+       the ring only because soloNow() refuses a file that is not, and it
+       starts OFF so the rotation never wanders onto it by itself. */
+    { file:'noise_live.html',    name:'Noise Floor Live', kind:'time', unit:'minutes',    def:15, loop:'time', off:true },
     { file:'strata.html',        name:'Strata',           kind:'runs', unit:'landscapes', def:1,  loop:'reload' },
     { file:'race.html',          name:'The Race',         kind:'runs', unit:'races',      def:1,  loop:'reload' },
     { file:'flowers.html',       name:'Flowering',        kind:'runs', unit:'flowers',    def:2,  loop:'inside' },
@@ -556,6 +582,30 @@
        on a perfect binary tree. It never finishes, so it takes minutes
        (Joe, 2026-09-16). */
     { file:'mobile.html',        name:'The Balance',      kind:'time', unit:'minutes',    def:5,  loop:'time'   },
+    /* Starlings over a field at dusk (Joe, 2026-10-02). One bird at a time
+       flies a path of its own and the turn runs through the flock as a wave.
+       It never finishes - each eight-minute run fades into a new flock and a
+       new evening - so it takes minutes. No text on it at all, by design. */
+    { file:'murmuration.html',   name:'Murmuration',      kind:'time', unit:'minutes',    def:8,  loop:'time'   },
+    /* A live Vikings or Colorado State game, when there is one (Joe,
+       2026-09-27). The page decides for itself whether to stay: it holds the
+       wall for as long as the game is actually being played, keeps a finished
+       game up for five minutes after the whistle, and stands aside within half
+       a minute when there is nothing on - so on a Tuesday this stop costs the
+       rotation almost nothing.
+
+       kind:'time' with a four-hour dwell is not a viewing preference, it is
+       what stops the STALL WATCHDOG chopping a game back to the mosaic in the
+       middle of the third quarter: stallSecs() budgets a 'time' page by its
+       dwell, and a football game is much the longest thing on this wall. Four
+       hours covers an overtime game and stays under the six-hour STALL_CAP. */
+    { file:'gameday.html',       name:'Game Day',         kind:'time', unit:'minutes',    def:240,loop:'time'   },
+    /* Ballgame: the trait-driven baseball simulation. Its source lives in its
+       own repository (WorldByJoe/baseball-sim) and deploys straight to the Pi
+       with its four bb_*.js engine files, like tree_growth. One whole game
+       per visit, about an hour at 1x; it hands on at the final out and
+       declares its own length through WALL_SECONDS_PER_RUN. */
+    { file:'baseball.html',      name:'Ballgame',         kind:'runs', unit:'games',      def:1,  loop:'reload' },
   ];
   /* Pages that are not stops but doorways: they decide whether today is worth
      a word and then pass the viewer along to whatever ?next= says. The ring
@@ -590,7 +640,7 @@
     for (const r of RING) {
       const s = (saved.pages && saved.pages[r.file]) || {};
       out[r.file] = {
-        on:    s.on === undefined ? true : !!s.on,
+        on:    s.on === undefined ? !r.off : !!s.on,
         value: (typeof s.value === 'number' && s.value > 0) ? s.value : r.def,
         /* HOW OFTEN, when the order is shuffled. A weight, not a percentage:
            three is normal, so a piece at seven comes up a bit over twice as

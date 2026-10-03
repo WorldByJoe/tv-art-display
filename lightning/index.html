@@ -37,7 +37,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  lightning.html · v3.6 · 2026-09-26
+  lightning.html · v3.7 · 2026-09-26
 
   "Lantern": six minutes of real lightning over wherever the sky was busiest,
   replayed flash by flash and pulse by pulse.
@@ -73,6 +73,10 @@
 ==========================================================================
 
   CHANGED
+    v3.7  THE CAPTION FOLLOWS THE SKY. It was set once at boot and re-set only
+          by a 100-second timer, so a page holding live flashes after twenty
+          seconds still announced the cached capture's age for another eighty.
+          Re-stated on every append and every 20 s
     v3.6  THE BASEMAP IS THE CAPTURE'S OWN. The page asked for a filename
           nothing has written since the capture moved to <stem>_basemap.jpg, so
           a twelve-day-old map of somewhere else sat under every storm while
@@ -254,6 +258,22 @@ function agedWords(){
        + ' was doing ' + when + '.';
 }
 
+/* THE CAPTION IS A READOUT, NOT A SNAPSHOT. It was written once at boot and
+   re-written only inside sayTheScience(), which runs on a 100-SECOND TIMER - so
+   a page whose live flashes arrived after twenty seconds went on announcing the
+   cached capture's age for another eighty. That is the "many minutes old" Joe
+   read off the wall, and it was never about when the data arrived: the feed had
+   already delivered, and recordedWords() would have returned the right answer
+   at any moment. Nothing asked it.
+
+   Now it is re-stated whenever the held sky changes and on a slow timer besides,
+   because "1 min ago" stops being true a minute after it is written.
+   Wall.signature() only assigns textContent, so this is free. */
+function restateSignature(){
+  if (!SHOW) return;
+  Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble'
+                 + ' · ' + recordedWords());
+}
 function recordedWords(){
   if (!SHOW || !SHOW.t1) return 'recording time unknown';
   const d = new Date(SHOW.t1);
@@ -315,6 +335,7 @@ window.__glmAppend = function(list){
   /* The first append is what puts the page on the wall clock. Before that it
      replays the cached capture, which is what the published copy does for ever
      and what the wall does until the feed reaches it. */
+  restateSignature();        // the sky just changed; say so
   if (!liveFeed){
     liveFeed = true;
     Wall.lane('Live now — this sky is about a minute old, and stays that way. '
@@ -761,8 +782,8 @@ if (!SHOW){
      cached-only showing would otherwise be left mute. */
   Wall.after(100000, () => { if (!scienceSaid) sayTheScience(); });
 
-  Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble'
-                 + ' · ' + recordedWords());
+  restateSignature();
+  Wall.every(20000, restateSignature);
   requestAnimationFrame(draw);
 }
 
@@ -789,8 +810,7 @@ function sayTheScience(){
     + `channel at 30,000 K, five times the surface of the Sun.`));
   /* The signature carries the age of whatever sky is now on screen, so it is
      re-stated here as well as at boot: after a handoff the old one is a lie. */
-  Wall.signature('GOES Geostationary Lightning Mapper (NOAA) · basemap NASA GIBS Blue Marble'
-                 + ' · ' + recordedWords());
+  restateSignature();
 }
 </script>
 </body>
