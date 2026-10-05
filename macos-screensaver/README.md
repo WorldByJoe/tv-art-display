@@ -27,8 +27,8 @@ saver is selected without waiting for the idle timer.
 When the page changes: `git pull && ./build.sh --install`. To remove it:
 `./build.sh --uninstall`.
 
-The bundle is signed ad hoc, which is enough on the Mac that built it. A copy
-carried to another Mac will be refused as unsigned.
+A plain build is signed ad hoc, which is enough on the Mac that built it. To
+hand it to other people, see *Sharing it* below.
 
 ## What is in the bundle
 
@@ -41,6 +41,58 @@ Murmuration.saver/Contents/
 
 Each display gets its own instance and so its own evening. The version shown
 in System Settings is the date the page last changed in this repository.
+
+## Sharing it
+
+The thing to share is the bundle: someone who receives `Murmuration.saver`
+double-clicks it and System Settings offers to install it, with no tools and no
+terminal. Build it for sharing with
+
+```
+./build.sh --release
+```
+
+which compiles for both Apple silicon and Intel and leaves a zip in `build/`.
+What happens on the other Mac depends on how the bundle is signed.
+
+**Ad hoc, which is free.** macOS refuses anything downloaded that Apple has not
+notarized: the first attempt ends in "Apple could not verify Murmuration.saver
+is free of malware". The owner then opens System Settings > Privacy & Security,
+scrolls to the Security section, finds the note that Murmuration was blocked,
+and clicks Open Anyway; after that it installs and runs. No terminal, but one
+alarming dialog and one hidden button, and the exact sequence for a screen
+saver on macOS 15 and 26 has not been checked here.
+
+**Developer ID and notarization.** With an Apple Developer Program membership,
+US$99 a year, the bundle installs on any Mac with nothing but a double-click.
+One-time setup:
+
+1. Join at <https://developer.apple.com/programs/>.
+2. In Xcode > Settings > Accounts, add your Apple ID, then Manage Certificates
+   > + > Developer ID Application.
+3. Find the identity's exact name; it looks like
+   `Developer ID Application: Your Name (TEAMID)`:
+   ```
+   security find-identity -v -p codesigning
+   ```
+4. Make an app-specific password at <https://account.apple.com> and store it
+   for the notary service under a profile name; this prompts for the password:
+   ```
+   xcrun notarytool store-credentials murmuration --apple-id you@example.com --team-id TEAMID
+   ```
+
+Then, for each release:
+
+```
+MURMURATION_SIGN_ID="Developer ID Application: Your Name (TEAMID)" \
+MURMURATION_NOTARY_PROFILE=murmuration ./build.sh --release
+```
+
+The script signs with the hardened runtime, uploads the zip to Apple, waits
+for the verdict, usually a minute or two, staples the ticket to the bundle and
+re-zips it. Share `build/Murmuration-<version>.zip`. The receiver unzips it,
+double-clicks `Murmuration.saver`, chooses to install it for themselves, and
+picks it under Other in the Screen Saver settings.
 
 ## Tuning
 
