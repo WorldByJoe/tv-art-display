@@ -5,12 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Murmuration studio</title>
 <!--
-  index.html · v0.1 · 2026-10-06
+  index.html · v0.2 · 2026-10-06
   Murmuration studio: make your own video of a simulated starling
   murmuration, up to 100,000 birds at 4K. Everything runs in this browser:
   the flock (engine_exp.js), the scene (render.html, in the frame below),
   and the H.264 encoder (WebCodecs, via studio_rec.js).
   CHANGED
+    v0.2  the full model description and its evidence, behind a click
     v0.1  first build: simple settings, advanced panel, time estimate,
           streaming to a folder (Chrome/Edge) or in-memory download
 -->
@@ -42,7 +43,16 @@
   progress { width: 100%; height: 10px; margin-top: 10px; }
   #status { font-size: 14px; color: var(--muted); margin-top: 6px; min-height: 1.5em; }
   #result a { margin-right: 14px; }
-  .about p, .about li { font-size: 14px; } .about ul { padding-left: 20px; }
+  .about p, .about li { font-size: 14px; } .about ul, .about ol { padding-left: 20px; }
+  details.evidence { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+  details.evidence > summary { font-size: 15px; color: var(--accent); }
+  .evidence h3 { font-size: 16px; margin: 22px 0 8px; }
+  .evidence .asof { font-size: 13px; color: var(--muted); }
+  .tablewrap { overflow-x: auto; margin: 8px 0 12px; }
+  .evidence table { border-collapse: collapse; font-size: 13px; min-width: 560px; width: 100%; }
+  .evidence th, .evidence td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .evidence th { color: var(--muted); font-weight: 600; }
+  .evidence a { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -112,6 +122,112 @@
       <li>is drawn back toward the roost and a preferred height, as in StarDisplay (Hildenbrandt et al. 2010).</li>
     </ul>
     <p>At dusk each bird goes down at its own moment, sooner once two neighbours have. A settings file saved beside each video records every value used.</p>
+
+    <details class="evidence">
+      <summary>Read the full model description: every rule, its value and its evidence</summary>
+      <p class="asof">As of 6 October 2026</p>
+      <p>Nearly every rule in the model is measured in starlings or taken from published starling models (StarDisplay; Pearce et al. 2014); seven supporting details are our own assumptions, marked below, and two published findings are not yet reproduced.</p>
+
+      <h3>The model in brief</h3>
+      <p>There is no leader and no director: 100,000 identical-rule agents, each steering only by what it perceives. A bird never jumps to a new heading; every cue is a turning torque, so turns carry inertia (Attanasi et al. 2014). Each simulation step (1/120 s), every flying bird:</p>
+      <ol>
+        <li>finds its 6 or 7 nearest neighbours, ignoring any in a blind sector behind its head;</li>
+        <li>turns toward their mean heading, toward their centre when it drifts off, and away from any inside its personal space;</li>
+        <li>moves its speed toward theirs;</li>
+        <li>turns weakly toward the edges of the flock as it sees them, dark against the sky (Pearce et al. 2014);</li>
+        <li>is drawn back toward the roost beyond a free radius, and toward a preferred height;</li>
+        <li>adds a small private wobble, which is where flock-wide turns begin.</li>
+      </ol>
+      <p>At dusk each bird goes down at its own moment, or sooner once two of its neighbours have, and homes on its own perch in a copse of seven trees.</p>
+      <p>The studio's <b>Current</b> model uses the configuration below; <b>As first built</b> is the earlier column.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Setting</th><th>As first built</th><th>Current</th></tr>
+        <tr><td>Alignment stiffness (1/s²)</td><td>14–30</td><td>168–360 (×12)</td></tr>
+        <tr><td>Response time to a neighbour, 1/√stiffness (s)</td><td>0.18–0.27</td><td>0.05–0.08</td></tr>
+        <tr><td>Turn damping ratio</td><td>0.30–0.65</td><td>unchanged</td></tr>
+        <tr><td>Personal space (m)</td><td>0.6–1.0</td><td>1.2–2.0</td></tr>
+        <tr><td>Resulting nearest-neighbour distance (m)</td><td>0.6–0.7</td><td>0.8</td></tr>
+        <tr><td>Simulation step (s)</td><td>1/30</td><td>1/120</td></tr>
+        <tr><td>Pull toward roost and preferred height</td><td>as drawn</td><td>×√12, so the turn it produces is unchanged</td></tr>
+      </table></div>
+
+      <h3>Elements and evidence</h3>
+      <p>Each row says whether the rule is measured in starlings, borrowed from a published model (StarDisplay is Hildenbrandt et al. 2010), set by flight physics, or our own assumption. Values marked "per run" are drawn at random within the range for each simulated evening.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Element</th><th>Value in the model</th><th>Evidence</th><th>Status</th></tr>
+        <tr><td>Topological neighbours</td><td>6 or 7 nearest, per run</td><td>Each starling interacts with 6–7 neighbours whatever their distance, in flocks of up to 2,600 (Ballerini et al. 2008a)</td><td>Measured</td></tr>
+        <tr><td>Nearest-neighbour distance (an outcome)</td><td>0.8 m</td><td>0.7–1.5 m in Roman flocks (Ballerini et al. 2008b)</td><td>Measured; model tuned to it</td></tr>
+        <tr><td>Flock density vs flock size</td><td>about constant</td><td>Density independent of flock size (Ballerini et al. 2008b)</td><td>Measured</td></tr>
+        <tr><td>Cruise speed</td><td>9–11 m/s per run; birds differ by 3–7%</td><td>10 m/s in StarDisplay; real flocks 7–12 m/s (Attanasi et al. 2014)</td><td>Mean measured; spread between birds is an assumption</td></tr>
+        <tr><td>Speed matching</td><td>70–90% weight on neighbours' speed</td><td>Speed fluctuations in starling flocks are set by social interactions (Bialek et al. 2014)</td><td>Measured direction; weight is our choice</td></tr>
+        <tr><td>Turning inertia</td><td>every cue changes the turn rate, not the heading</td><td>Inertia is required for the linear, undamped turn waves seen in starlings (Attanasi et al. 2014)</td><td>Measured (theory fitted to field data)</td></tr>
+        <tr><td>Response time to a neighbour</td><td>0.05–0.08 s</td><td>StarDisplay reaction time 50 ms; manoeuvre waves outrun neighbour-by-neighbour reaction (Potts 1984)</td><td>Published model value</td></tr>
+        <tr><td>Turn damping</td><td>ratio 0.30–0.65, per run</td><td>Turn waves in real flocks are barely damped (Attanasi et al. 2014)</td><td>Assumption; lower damping gave fewer clumps</td></tr>
+        <tr><td>Alignment, cohesion, separation</td><td>three turning torques</td><td>Core rules of StarDisplay and most flocking models</td><td>Published model</td></tr>
+        <tr><td>Personal space</td><td>1.2–2.0 m, per bird</td><td>Set so nearest-neighbour distance falls in the measured range, as StarDisplay tuned its separation radius</td><td>Tuned to a measurement</td></tr>
+        <tr><td>Blind sector</td><td>30–60° behind the head, per run</td><td>Starlings have a rear blind area (Martin 1986); StarDisplay uses 90°</td><td>Exists; width is our choice</td></tr>
+        <tr><td>Projection rule (seeing the flock)</td><td>weight 0.1 of alignment</td><td>Weights 0.04–0.13 in Pearce et al. 2014</td><td>Published model</td></tr>
+        <tr><td>Bird silhouette for that rule</td><td>0.02 m²</td><td>Starling wing about 0.023 m²: span 38 cm, mean chord 6 cm (Ben-Gida et al. 2013)</td><td>Measured</td></tr>
+        <tr><td>Banking</td><td>bank angle from the turn, tan(bank) = speed × turn rate / g, at most 69°</td><td>Coordinated-turn physics; StarDisplay birds roll into turns</td><td>Physics</td></tr>
+        <tr><td>Maximum turn rate</td><td>2.2–3.2 rad/s, per run</td><td>What a 65–73° bank sustains at 10 m/s</td><td>Physics estimate</td></tr>
+        <tr><td>Private wobble</td><td>small random torque</td><td>Random force in StarDisplay</td><td>Published model</td></tr>
+        <tr><td>Roost attraction</td><td>free radius 130–250 m, pull beyond it</td><td>StarDisplay roost radius 150 m</td><td>Published model; scaling with flock size is an assumption</td></tr>
+        <tr><td>Preferred height</td><td>45–110 m</td><td>StarDisplay vertical attraction keeps flocks flat, as observed (Ballerini et al. 2008b)</td><td>Published model</td></tr>
+        <tr><td>Flock size</td><td>20,000–100,000</td><td>Murmurations average about 30,000 birds, up to 750,000 (Goodenough et al. 2017)</td><td>Measured</td></tr>
+        <tr><td>Descent at dusk</td><td>each bird at its own moment, sooner once two neighbours go</td><td>Murmurations often end with all birds going down en masse, especially when predators are present (Goodenough et al. 2017)</td><td>Pattern measured; the contagion rule is an assumption</td></tr>
+        <tr><td>Settle and flush at the roost</td><td>two flushes, spreading through perched neighbours</td><td>Observers' accounts only; no quantitative study found</td><td>Assumption</td></tr>
+        <tr><td>Camera pan, field walls, avoiding tree crowns</td><td>presentation only</td><td>Walls are rarely touched</td><td>Display</td></tr>
+      </table></div>
+
+      <h3>What this study changed, and why</h3>
+      <p>The first 100,000-bird runs shed stray clumps of tens of birds and split during sharp turns. Faster responses removed the clumps, and wider personal space restored realistic spacing.</p>
+      <p>Runs: 20,000 birds, 10 min of flight each, medians of 3 random evenings. A clump is 5–499 birds separated from the main body by more than 3 m; opacity is the share of a bird's view the flock blocks.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Configuration</th><th>Birds in clumps</th><th>Clumps at once</th><th>Time split</th><th>Heading agreement</th><th>Nearest neighbour (m)</th><th>Opacity</th></tr>
+        <tr><td>As first built</td><td>8.4%</td><td>46</td><td>68%</td><td>0.73</td><td>0.63</td><td>0.14</td></tr>
+        <tr><td>Responses 12× faster</td><td>1.2%</td><td>2.6</td><td>27%</td><td>0.87</td><td>0.55</td><td>0.34</td></tr>
+        <tr><td>+ steady roost and height steering</td><td>0.7%</td><td>1.6</td><td>25%</td><td>0.80</td><td>0.54</td><td>0.35</td></tr>
+        <tr><td>+ personal space ×1.5</td><td>0.2%</td><td>0.5</td><td>10%</td><td>0.91</td><td>0.71</td><td>0.31</td></tr>
+        <tr><td>+ personal space ×2 (current)</td><td>0.1%</td><td>0.4</td><td>1%</td><td>0.91</td><td>0.81</td><td>0.24</td></tr>
+        <tr><td>Faster, but whole-flock pull held at its old strength</td><td>12.7%</td><td>43</td><td>97%</td><td>0.74</td><td>0.70</td><td>0.12</td></tr>
+      </table></div>
+      <ul>
+        <li><b>Why the clumps formed.</b> Clumps were groups whose members' neighbours were all inside the clump, so they heard nothing from the flock. Across 88 earlier runs, clumping fell steeply as opacity rose (Spearman −0.88): see-through flocks give the projection rule too faint an edge to steer by. Doubling each bird's silhouette, with no bird moved, cut clumps on every evening tested.</li>
+        <li><b>Why faster responses.</b> As first built, a bird took 0.18–0.27 s to answer a neighbour's turn; StarDisplay uses a 50 ms reaction time. At 0.05–0.08 s the clumps nearly vanished on all 6 evenings tested (12× and 16×). The projection rule scales with alignment, as in Pearce's model; holding it back at its old strength brought the clumps back.</li>
+        <li><b>Why wider personal space.</b> Faster responses packed birds to 0.54 m, below the measured 0.7–1.5 m. Doubling personal space gave 0.81 m with no loss of cohesion.</li>
+        <li><b>Why steady environmental steering.</b> Faster responses came with proportionally more turn damping, which also weakened the turns produced by the roost and height pulls, and the flock wandered out of view. Scaling those pulls by the same factor restores their effect; it changes no biology.</li>
+        <li><b>The camera</b> now eases left, right or up when the flock drifts far from centre, and back when it returns; while the flock is near centre it does not move.</li>
+      </ul>
+
+      <h3>Departures from the literature: discoveries?</h3>
+      <p>Not yet. A departure first means the model is missing something. It becomes a finding only when the model matches other independent data, the departure survives many evenings and several measures, and it predicts something measurable in real flocks. This study produced two departures and two testable predictions.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Published finding</th><th>What the model did</th><th>Reading</th></tr>
+        <tr><td>Turns cross the flock at 20–40 m/s with negligible attenuation (Attanasi et al. 2014); manoeuvre waves outrun neighbour-by-neighbour reaction (Potts 1984)</td><td>Turns spread at 2–5.5 m/s and the flock took about 4.5 s to come round, with or without faster responses</td><td>A gap. The model's big turns are flock-wide steering by the roost and height pulls, which every bird feels at once, not turns started by a few birds. It also lacks the anticipation Potts described.</td></tr>
+        <tr><td>Density does not depend on flock size (Ballerini et al. 2008b); real flocks are marginally opaque, about 0.3 (Pearce et al. 2014)</td><td>With size-independent spacing, small flocks were see-through (opacity 0.05 at 2,000 birds) and fragmented under the projection rule; large ones held (0.33 at 100,000)</td><td>An open tension. Pearce's flocks reach marginal opacity by adjusting density; real density stays constant. Either small flocks hold together mainly by neighbour rules, or opacity was measured differently. Worth testing.</td></tr>
+      </table></div>
+      <p>Predictions that field data could test:</p>
+      <ol>
+        <li><b>Fast responses.</b> Cohesion of large flocks in the model required each bird to respond to a neighbour within about 50–80 ms. At roughly 1 m spacing, Attanasi's 20–40 m/s waves imply 25–50 ms per bird, consistent with this; turning delays between adjacent birds in 3D-tracked flocks would test it directly.</li>
+        <li><b>Opacity and splitting.</b> If starlings steer partly by the flock's silhouette, see-through flocks (small or sparse) should split and shed groups more often than dense, large ones. Counting splits against flock size in field video would test it.</li>
+      </ol>
+      <p>Not yet in the model: predators and the escape rolls that produce dark agitation waves (Hemelrijk et al. 2015); birds' visible roll as a cue; true starling-shaped silhouettes in the projection rule (built and tested, no consistent effect on cohesion at 20,000 birds).</p>
+
+      <h3>Sources</h3>
+      <ul>
+        <li>Attanasi A et al. 2014. <a href="https://doi.org/10.1038/nphys3035">Information transfer and behavioural inertia in starling flocks</a>. Nature Physics 10:691–696.</li>
+        <li>Ballerini M et al. 2008a. <a href="https://doi.org/10.1073/pnas.0711437105">Interaction ruling animal collective behavior depends on topological rather than metric distance</a>. PNAS 105:1232–1237.</li>
+        <li>Ballerini M et al. 2008b. <a href="https://arxiv.org/abs/0802.1667">Empirical investigation of starling flocks: a benchmark study in collective animal behaviour</a>. Animal Behaviour 76:201–215.</li>
+        <li>Ben-Gida H et al. 2013. <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC3838395/">Estimation of unsteady aerodynamics in the wake of a freely flying European starling</a>. PLoS ONE.</li>
+        <li>Bialek W et al. 2014. <a href="https://doi.org/10.1073/pnas.1324045111">Social interactions dominate speed control in poising natural flocks near criticality</a>. PNAS 111:7212–7217.</li>
+        <li>Goodenough AE, Little N, Carpenter WS, Hart AG 2017. <a href="https://doi.org/10.1371/journal.pone.0179277">Birds of a feather flock together: insights into starling murmuration behaviour revealed using citizen science</a>. PLoS ONE 12:e0179277.</li>
+        <li>Hemelrijk CK, van Zuidam L, Hildenbrandt H 2015. <a href="https://doi.org/10.1007/s00265-015-1891-3">What underlies waves of agitation in starling flocks</a>. Behavioral Ecology and Sociobiology 69:755–764.</li>
+        <li>Hildenbrandt H, Carere C, Hemelrijk CK 2010. <a href="https://www.rug.nl/research/gelifes/tres/_pdf/hi_eabeheco10.pdf">Self-organized aerial displays of thousands of starlings: a model</a>. Behavioral Ecology 21:1349–1359.</li>
+        <li>Martin GR 1986. <a href="https://doi.org/10.1007/BF00604174">The eye of a passeriform bird, the European starling: eye movement amplitude, visual fields and schematic optics</a>. Journal of Comparative Physiology A 159:545–557.</li>
+        <li>Pearce DJG, Miller AM, Rowlands G, Turner MS 2014. <a href="https://doi.org/10.1073/pnas.1402202111">Role of projection in the control of bird flocks</a>. PNAS 111:10422–10426.</li>
+        <li>Potts WK 1984. <a href="https://doi.org/10.1038/309344a0">The chorus-line hypothesis of manoeuvre coordination in avian flocks</a>. Nature 309:344–345.</li>
+      </ul>
+    </details>
   </section>
 </main>
 
