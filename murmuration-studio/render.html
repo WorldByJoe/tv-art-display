@@ -3,21 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Murmuration</title>
-<link rel="stylesheet" href="wall.css">
+<title>Murmuration render</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
   #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
   #fade { position: fixed; inset: 0; background: #000; opacity: 1; transition: opacity 2.5s ease; pointer-events: none; }
 </style>
-<script src="wall.js"></script>
-<script src="nav.js"></script>
 </head>
 <body>
 <canvas id="gl"></canvas>
 <div id="fade"></div>
 <script src="three.min.js"></script>
-<script src="murmuration_engine.js"></script>
+<script src="engine_exp.js"></script>
 <script src="murmuration_tree.js"></script>
 <script>
 'use strict';
@@ -81,7 +78,7 @@
           (engine v0.6); an opener tree in wood a shade lighter than the birds
 ========================================================================== */
 
-const CONFIG = { holdMin: 8, nextPage: '' /* standalone: nowhere to hand on to; start again */, runSec: 480, warmSec: 20 };
+const CONFIG = { holdMin: 8, nextPage: '', runSec: 480, warmSec: 20 };   // STUDIO: no TV ring to hand on to
 const Q = new URLSearchParams(location.search);
 const PINNED = Q.has('pin');
 const SOLO_MIN = parseFloat(Q.get('solo') || '0');
@@ -150,6 +147,26 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(FOV, 16 / 9, 0.3, 9000);
 camera.position.copy(EYE);
 camera.lookAt(0, 1.7 + 200 * Math.tan(13 * Math.PI / 180), 188);
+/* EXPERIMENT ?pan (Joe, 2026-10-05: "if it drifts far to the left then the camera should shift
+   left, and while in the center the camera should be in the center"). A dead zone: while the
+   flock's centre is within 15 deg of straight ahead (and below 23.5 deg up) the camera rests at
+   its home view; beyond that it eases round just far enough to hold the flock at the dead zone's
+   edge - a slow spring (about 3 s) capped at 6 deg/s, never more than 55 deg aside or 35 deg up. */
+const PAN = Q.has('pan'), PAN_P0 = 13 * Math.PI / 180, PAN_HH = Math.atan(Math.tan(FOV / 2 * Math.PI / 180) * 16 / 9), PAN_HV = FOV / 2 * Math.PI / 180;
+let panYaw = 0, panPitch = PAN_P0, panVy = 0, panVp = 0, panLive = false;
+function panCamera(dt) {
+  if (!PAN || !flock || flock.cmx === undefined) return;
+  const dx = flock.cmx - EYE.x, dy = flock.cmy - EYE.y, dz = flock.cmz - EYE.z;
+  const az = Math.atan2(dx, dz), el = Math.atan2(dy, Math.hypot(dx, dz));
+  const DBH = 0.45 * PAN_HH, DBV = 0.5 * PAN_HV, R = Math.PI / 180;
+  const tY = Math.abs(az) < DBH ? 0 : Math.sign(az) * Math.min(55 * R, Math.abs(az) - DBH);
+  const tP = Math.min(35 * R, Math.max(PAN_P0, el - DBV));
+  if (!panLive) { panYaw = tY; panPitch = tP; panLive = true; }
+  const w = 0.6, cap = 6 * R;
+  panVy += (w * w * (tY - panYaw) - 2 * w * panVy) * dt; panVy = Math.max(-cap, Math.min(cap, panVy)); panYaw += panVy * dt;
+  panVp += (w * w * (tP - panPitch) - 2 * w * panVp) * dt; panVp = Math.max(-cap, Math.min(cap, panVp)); panPitch += panVp * dt;
+  camera.lookAt(EYE.x + Math.sin(panYaw) * Math.cos(panPitch) * 200, EYE.y + Math.sin(panPitch) * 200, EYE.z + Math.cos(panYaw) * Math.cos(panPitch) * 200);
+}
 
 function resize() {
   const w = REC ? REC_W : Math.round(innerWidth * RS * DPR), h = REC ? REC_H : Math.round(innerHeight * RS * DPR);
@@ -385,7 +402,8 @@ function buildTree(r) {
 function buildCopse(r) {
   for (const m of treeMeshes) { scene.remove(m); m.geometry.dispose(); }
   treeMeshes = [];
-  const zc = 330 + r() * 90, side = r() < 0.5 ? -1 : 1, xc = side * (0.04 + r() * 0.12) * (zc + 12);
+  /* EXPERIMENT ?roostz=Z: the copse centred Z m out (+-20) instead of 330-420; same random draws */
+  const zc = Q.has('roostz') ? +Q.get('roostz') + (r() - 0.5) * 40 : 330 + r() * 90, side = r() < 0.5 ? -1 : 1, xc = side * (0.04 + r() * 0.12) * (zc + 12);
   const spots = [];
   for (let k = 0; spots.length < COPSE_N && k < 500; k++) {
     const a = r() * 6.283, d = Math.sqrt(r()) * 55;
@@ -556,6 +574,10 @@ function newRun() {
   if (BIG) Object.assign(opts, { scale: Math.max(1, Math.cbrt((N_FIX || 4000) / 4000)), field: BIG_FIELD, vision: true });
   if (Q.has('tune')) opts.tune = JSON.parse(Q.get('tune'));
   flock = new Murmuration.Flock(seed, opts);
+  { /* EXPERIMENT: ?set={...} absolute values on the flock's parameters; ?sub=k finer steps (wobble per second unchanged) */
+    if (Q.has('set')) Object.assign(flock.P, JSON.parse(Q.get('set')));
+    const SUB = parseInt(Q.get('sub') || '1', 10);
+    if (SUB > 1) { flock.P.noise *= Math.sqrt(SUB); const u = flock.update.bind(flock); flock.update = (dt) => { for (let k = 0; k < SUB; k++) u(dt / SUB); }; } }
   let thinnedFrom = 0;
   if (!CONFIG.nextPage && !N_FIX) {
     for (let k = 0; k < 10; k++) flock.update(DT);          // let the JIT settle first
@@ -570,7 +592,9 @@ function newRun() {
   }
   buildBirds(flock.N);
   /* the flock forms before anyone sees it */
-  for (let k = 0, n = Math.round((CONFIG.warmSec + START_T) / DT); k < n; k++) flock.update(DT);
+  /* STUDIO: the recorder runs the warm-up itself, in slices, so the app can show its progress */
+  window.WARM_STEPS = Math.round((CONFIG.warmSec + START_T) / DT);
+  for (let k = 0, n = Q.has('studio') ? 0 : window.WARM_STEPS; k < n; k++) flock.update(DT);
   runStart = performance.now() - START_T * 1000;
   acc = 0; last = performance.now();
   window.MURM = { seed, n: flock.N, thinnedFrom, params: flock.P, fps: 0, simMs: 0 };
@@ -607,6 +631,7 @@ function frame(now) {
   setLight(1 - (1 - eve.fadeTo) * Math.min(1, runT / CONFIG.runSec));
   sky.position.copy(camera.position);
   placeBirds(acc / DT);
+  panCamera(dtF);
   renderer.render(scene, camera);
   fpsN++;
   if (now - fpsT > 2000) {
@@ -660,7 +685,7 @@ placeBirds(0);
 renderer.render(scene, camera);                   // a first frame now, for captures
 if (REC) {                                        // the recorder drives every frame from here on
   const s = document.createElement('script');
-  s.src = 'murmuration_rec.js?v=' + Date.now();
+  s.src = 'studio_rec.js?v=' + Date.now();
   document.head.appendChild(s);
 } else requestAnimationFrame((t) => { last = t; document.getElementById('fade').style.opacity = 0; requestAnimationFrame(frame); });
 </script>

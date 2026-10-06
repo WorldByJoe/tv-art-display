@@ -113,7 +113,7 @@ function rng(seed) {                       /* mulberry32 */
 
 const FIELD = { x0: -200, x1: 200, z0: 0, z1: 250, top: 152.4 };
 const G = 9.81;
-const MAXNB = 8;
+const MAXNB = 16;
 
 /* Every behavioural number is DRAWN per run from a plausible range. */
 function drawParams(r, opts) {
@@ -190,6 +190,7 @@ function Flock(seed, opts) {
   this.flap = F32(); this.amp = F32(); this.glide = F32(); this.glideT = F32();
   this.landed = new Uint8Array(N);
   this.vision = !!(opts && opts.vision);                  // Pearce's projection rule in place of the pull to the centre
+  this.aniso = !!(opts && opts.shade === 'aniso');      // EXPERIMENT: a bird blocks sight by its wings and body as seen from that direction
   this.vdx = F32(); this.vdy = F32(); this.vdz = F32();   // each bird's delta: where the flock's edges lie in its view
   this.desc = new Uint8Array(N);                          // has decided to go down
   this.descAt = F32();                                    // its own moment
@@ -310,6 +311,7 @@ let VMID = null, VEDGES = null;
 })();
 
 Flock.prototype.buildSight = function () {
+  if (this.aniso) { this.sg = buildShadeGrid(this, SIGHT_CELL, this.sg); return; }
   const N = this.N, h = SIGHT_CELL;
   let x0 = 1e9, y0 = 1e9, z0 = 1e9, x1 = -1e9, y1 = -1e9, z1 = -1e9;
   for (let i = 0; i < N; i++) {
@@ -335,6 +337,7 @@ Flock.prototype.buildSight = function () {
 
 const OPQ = new Float32Array(VDIR);
 Flock.prototype.seeFlock = function (i) {
+  if (this.aniso) return this.seeFlockAniso(i);
   const g = this.sg;
   if (!g) { this.vdx[i] = this.vdy[i] = this.vdz[i] = 0; return; }
   const h = SIGHT_CELL, nx = g.nx, ny = g.ny, nz = g.nz, k = g.k;
@@ -365,6 +368,141 @@ Flock.prototype.seeFlock = function (i) {
   if (W > 0.05) { this.vdx[i] = sx / W; this.vdy[i] = sy / W; this.vdz[i] = sz / W; return; }
   if (dark / VDIR > 0.5) { this.vdx[i] = this.vdy[i] = this.vdz[i] = 0; return; }   // buried: dark all round
   const ex = this.cmx - px, ey = this.cmy - py, ez = this.cmz - pz, el = Math.hypot(ex, ey, ez) || 1;   // too far to resolve
+  this.vdx[i] = ex / el; this.vdy[i] = ey / el; this.vdz[i] = ez / el;
+};
+
+/* ---------------------------------------------------------------------------
+   EXPERIMENT (Joe, 2026-10-04): A STARLING IS NOT A ROUND SPECK. Seen from
+   below with its wings out it blocks several times the sky it blocks seen
+   edge-on from the side, and ten times what it blocks seen nose-on. When it
+   banks into a turn its wings tilt toward the vertical: views across the
+   flock darken, views up through it lighten. Hemelrijk et al. 2015 (Behav
+   Ecol Sociobiol) found the dark bands that sweep across murmurations come
+   from exactly this - birds rolling - not from bunching.
+   Here each bird is two parts, each with its own shadow:
+     wings   0.018 m2 outboard of the body (a real starling: span ~38 cm,
+             mean chord 6 cm, ~230 cm2 including the body strip - Ben-Gida
+             et al. 2013, PLoS ONE), tilted with the bird's bank exactly as
+             the page draws it, and swept through the page's own wingbeat
+             (+-49 deg flapping, nearly flat gliding). The beat is averaged
+             over a stroke: the birds' view is refreshed at 10 Hz, about the
+             wingbeat itself, and a single instant would alias.
+     body    an ellipsoid 21 x 5 x 6 cm: 24 cm2 nose-on, 99 side-on, 82 top.
+   The shadow of a part along a sight line d is sqrt(d.Q.d), Q a small
+   symmetric matrix (exact for the body; for the two flapping wings it stands
+   in for |d.n_left| + |d.n_right|). A grid cell stores its bird count and
+   the SUM of the birds' Q's; n birds sharing an orientation then shadow
+   sqrt(n * d.(sum Q).d) - exact for an aligned flock, close otherwise.
+   Seen from below a level, gliding bird blocks ~0.026 m2; side-on ~0.010;
+   nose-on ~0.002. The round speck it replaces blocked 0.02 every way.
+--------------------------------------------------------------------------- */
+const A_W = 0.018, B_A = 0.105, B_B = 0.025, B_C = 0.03;
+const A_TOP = Math.PI * B_A * B_B, A_SIDE = Math.PI * B_A * B_C, A_FRONT = Math.PI * B_B * B_C;
+const STROKE = (function () {                    // mean cos^2 and sin^2 of the wing's tilt over a stroke, by flap amplitude
+  const T = new Float32Array(66);
+  for (let k = 0; k <= 32; k++) {
+    const a = k / 32; let c2 = 0, s2 = 0;
+    for (let j = 0; j < 64; j++) { const b = a * (0.85 * Math.sin(j / 64 * 6.2832) + 0.12); c2 += Math.cos(b) ** 2; s2 += Math.sin(b) ** 2; }
+    T[2 * k] = c2 / 64; T[2 * k + 1] = s2 / 64;
+  }
+  return T;
+})();
+/* bird i's two shadow matrices, [xx yy zz xy xz yz] for the wings then the body */
+function birdShade(F, i, Q) {
+  let fx = F.fx[i], fy = F.fy[i], fz = F.fz[i];
+  let rx = fz, rz = -fx; const rl = Math.hypot(rx, rz);
+  if (rl < 1e-6) { rx = 1; rz = 0; } else { rx /= rl; rz /= rl; }               // right = up x forward (as the page draws it)
+  const ux = fy * rz, uy = fz * rx - fx * rz, uz = -fy * rx;                     // up = forward x right
+  const b = -F.bank[i], cb = Math.cos(b), sb = Math.sin(b);
+  const Rx = rx * cb + ux * sb, Ry = uy * sb, Rz = rz * cb + uz * sb;
+  const Ux = ux * cb - rx * sb, Uy = uy * cb, Uz = uz * cb - rz * sb;
+  const a = Math.max(0, Math.min(1, F.amp[i])) * 32, k = Math.min(31, Math.floor(a)), t = a - k;
+  const c2 = STROKE[2 * k] * (1 - t) + STROKE[2 * k + 2] * t, s2 = STROKE[2 * k + 1] * (1 - t) + STROKE[2 * k + 3] * t;
+  const wu = A_W * A_W * c2, wr = A_W * A_W * s2;
+  Q[0] = wu * Ux * Ux + wr * Rx * Rx; Q[1] = wu * Uy * Uy + wr * Ry * Ry; Q[2] = wu * Uz * Uz + wr * Rz * Rz;
+  Q[3] = wu * Ux * Uy + wr * Rx * Ry; Q[4] = wu * Ux * Uz + wr * Rx * Rz; Q[5] = wu * Uy * Uz + wr * Ry * Rz;
+  const bf = A_FRONT * A_FRONT, bs = A_SIDE * A_SIDE, bt = A_TOP * A_TOP;
+  Q[6] = bf * fx * fx + bs * Rx * Rx + bt * Ux * Ux; Q[7] = bf * fy * fy + bs * Ry * Ry + bt * Uy * Uy; Q[8] = bf * fz * fz + bs * Rz * Rz + bt * Uz * Uz;
+  Q[9] = bf * fx * fy + bs * Rx * Ry + bt * Ux * Uy; Q[10] = bf * fx * fz + bs * Rx * Rz + bt * Ux * Uz; Q[11] = bf * fy * fz + bs * Ry * Rz + bt * Uy * Uz;
+}
+/* The flying birds binned into cells of side h: a dense index grid (-1 =
+   empty) and, per occupied cell, [count, wing Q sum (6), body Q sum (6)]. */
+function buildShadeGrid(F, h, old) {
+  const N = F.N;
+  let x0 = 1e9, y0 = 1e9, z0 = 1e9, x1 = -1e9, y1 = -1e9, z1 = -1e9;
+  for (let i = 0; i < N; i++) {
+    if (F.landed[i]) continue;
+    const x = F.px[i], y = F.py[i], z = F.pz[i];
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z;
+  }
+  if (x0 > x1) return null;
+  const nx = Math.min(600, Math.ceil((x1 - x0) / h) + 2), ny = Math.min(300, Math.ceil((y1 - y0) / h) + 2), nz = Math.min(600, Math.ceil((z1 - z0) / h) + 2);
+  const g = old && old.idx ? old : { idx: new Int32Array(0), forms: new Float32Array(0) };
+  if (g.idx.length < nx * ny * nz) g.idx = new Int32Array(nx * ny * nz);
+  g.idx.fill(-1, 0, nx * ny * nz);
+  g.x0 = x0 - h * 0.5; g.y0 = y0 - h * 0.5; g.z0 = z0 - h * 0.5; g.nx = nx; g.ny = ny; g.nz = nz; g.h = h; g.aniso = true;
+  if (g.forms.length < 13 * N) g.forms = new Float32Array(13 * N);
+  const Q = new Float32Array(12); let used = 0;
+  const fm = g.forms;
+  for (let i = 0; i < N; i++) {
+    if (F.landed[i]) continue;
+    const ix = Math.floor((F.px[i] - g.x0) / h), iy = Math.floor((F.py[i] - g.y0) / h), iz = Math.floor((F.pz[i] - g.z0) / h);
+    if (ix < 0 || iy < 0 || iz < 0 || ix >= nx || iy >= ny || iz >= nz) continue;
+    const c = (ix * ny + iy) * nz + iz;
+    let m = g.idx[c];
+    if (m < 0) { m = g.idx[c] = used++; fm.fill(0, 13 * m, 13 * m + 13); }
+    birdShade(F, i, Q);
+    const o = 13 * m; fm[o]++;
+    for (let k = 0; k < 12; k++) fm[o + 1 + k] += Q[k];
+  }
+  g.used = used;
+  return g;
+}
+/* optical depth along a sight line from (x,y,z), direction d (unit), marched
+   as the birds march theirs. aniso false: the round speck of cross-section
+   sigma, from the same counts - so one grid measures both. */
+function gridTau(g, x, y, z, dx, dy, dz, aniso, sigma, maxTau) {
+  const h = g.h, nx = g.nx, ny = g.ny, nz = g.nz, idx = g.idx, fm = g.forms, ih2 = 1 / (h * h);
+  const a0 = dx * dx, a1 = dy * dy, a2 = dz * dz, a3 = 2 * dx * dy, a4 = 2 * dx * dz, a5 = 2 * dy * dz;
+  let tau = 0;
+  x += dx * h * 0.6; y += dy * h * 0.6; z += dz * h * 0.6;
+  for (let s = 0; s < 400; s++) {
+    const ix = Math.floor((x - g.x0) / h), iy = Math.floor((y - g.y0) / h), iz = Math.floor((z - g.z0) / h);
+    if (ix < 0 || iy < 0 || iz < 0 || ix >= nx || iy >= ny || iz >= nz) {
+      if ((ix < 0 && dx <= 0) || (ix >= nx && dx >= 0) || (iy < 0 && dy <= 0) || (iy >= ny && dy >= 0) || (iz < 0 && dz <= 0) || (iz >= nz && dz >= 0)) break;
+    } else {
+      const m = idx[(ix * ny + iy) * nz + iz];
+      if (m >= 0) {
+        const o = 13 * m, n = fm[o];
+        if (aniso) {
+          const qw = fm[o + 1] * a0 + fm[o + 2] * a1 + fm[o + 3] * a2 + fm[o + 4] * a3 + fm[o + 5] * a4 + fm[o + 6] * a5;
+          const qb = fm[o + 7] * a0 + fm[o + 8] * a1 + fm[o + 9] * a2 + fm[o + 10] * a3 + fm[o + 11] * a4 + fm[o + 12] * a5;
+          tau += (Math.sqrt(Math.max(0, n * qw)) + Math.sqrt(Math.max(0, n * qb))) * ih2;
+        } else tau += n * sigma * ih2;
+        if (tau > maxTau) break;
+      }
+    }
+    x += dx * h; y += dy * h; z += dz * h;
+  }
+  return tau;
+}
+Flock.prototype.seeFlockAniso = function (i) {
+  const g = this.sg;
+  if (!g) { this.vdx[i] = this.vdy[i] = this.vdz[i] = 0; return; }
+  const px = this.px[i], py = this.py[i], pz = this.pz[i];
+  let dark = 0;
+  for (let d = 0; d < VDIR; d++) {
+    OPQ[d] = 1 - Math.exp(-gridTau(g, px, py, pz, VDIRS[3 * d], VDIRS[3 * d + 1], VDIRS[3 * d + 2], true, 0, 4));
+    dark += OPQ[d];
+  }
+  let sx = 0, sy = 0, sz = 0, W = 0;
+  for (let e = 0; e < VEDGES.length / 2; e++) {
+    const w = Math.abs(OPQ[VEDGES[2 * e]] - OPQ[VEDGES[2 * e + 1]]);
+    if (w > 0) { sx += w * VMID[3 * e]; sy += w * VMID[3 * e + 1]; sz += w * VMID[3 * e + 2]; W += w; }
+  }
+  if (W > 0.05) { this.vdx[i] = sx / W; this.vdy[i] = sy / W; this.vdz[i] = sz / W; return; }
+  if (dark / VDIR > 0.5) { this.vdx[i] = this.vdy[i] = this.vdz[i] = 0; return; }
+  const ex = this.cmx - px, ey = this.cmy - py, ez = this.cmz - pz, el = Math.hypot(ex, ey, ez) || 1;
   this.vdx[i] = ex / el; this.vdy[i] = ey / el; this.vdz[i] = ez / el;
 };
 
@@ -497,7 +635,7 @@ function wallPush(x, y, z, floorY, out, FL, S) {
 }
 
 Flock.prototype.update = function (dt) {
-  const N = this.N, P = this.P, r = this.r, S = this.S;
+  const N = this.N, P = this.P, r = this.r, S = this.S, E = P.envScale || 1;   // EXPERIMENT envScale: roost, height, walls, crown, perch keep their turn rates when gamma is raised
   this.qx.set(this.px); this.qy.set(this.py); this.qz.set(this.pz);
   this.gx.set(this.fx); this.gy.set(this.fy); this.gz.set(this.fz);
   if (this.step % 3 === 0) {
@@ -532,10 +670,11 @@ Flock.prototype.update = function (dt) {
        otherwise neighbours still up there drag it round and round the tree */
     const soc = this.desc[i] && this.hasTree ? 0.3 : 1;
     if (m) {
-      let ax = 0, ay = 0, az = 0, cx = 0, cy = 0, cz = 0, sx = 0, sy = 0, sz = 0, sw = 0, vs = 0;
+      let ax = 0, ay = 0, az = 0, cx = 0, cy = 0, cz = 0, sx = 0, sy = 0, sz = 0, sw = 0, vs = 0, rx = 0, ry = 0, rz = 0;
       for (let s = 0; s < m; s++) {
         const j = this.nb[i * MAXNB + s];
         ax += this.fx[j]; ay += this.fy[j]; az += this.fz[j];
+        rx += this.wx[j]; ry += this.wy[j]; rz += this.wz[j];
         vs += this.sp[j];
         nDesc += this.desc[j];
         const ex = this.px[j] - x, ey = this.py[j] - y, ez = this.pz[j] - z;
@@ -545,6 +684,10 @@ Flock.prototype.update = function (dt) {
         if (d < rs && d > 1e-4) { const w = (rs - d) / rs; sx -= ex / d * w; sy -= ey / d * w; sz -= ez / d * w; sw += w; }
       }
       torque(ax / m, ay / m, az / m, P.K_align * soc);
+      /* EXPERIMENT P.K_roll (1/s): match the neighbours' TURNING, seen as their
+         roll into the turn - a bird banks before its heading swings, so this
+         passes a turn on before the heading has changed (Joe, 2026-10-04) */
+      if (P.K_roll) { const k = P.K_roll * soc; tx += k * (rx / m - this.wx[i]); ty += k * (ry / m - this.wy[i]); tz += k * (rz / m - this.wz[i]); }
       vNb = vs / m;
       cx /= m; cy /= m; cz /= m;
       const cl = Math.hypot(cx, cy, cz);
@@ -576,10 +719,10 @@ Flock.prototype.update = function (dt) {
       }
       /* the roost: free inside its radius, drawn back beyond it (StarDisplay) */
       const ex = RX - x, ez = RZ - z, hd = Math.hypot(ex, ez) || 1;
-      if (hd > P.roostR) torque(ex / hd, 0, ez / hd, P.K_roost * Math.min(1.5, (hd - P.roostR) / (40 * S)));
+      if (hd > P.roostR) torque(ex / hd, 0, ez / hd, E * P.K_roost * Math.min(1.5, (hd - P.roostR) / (40 * S)));
       /* and the preferred height */
       const dy = P.yPref - y;
-      if (Math.abs(dy) > 10 * S) torque(0, Math.sign(dy), 0, P.K_alt * Math.min(1.5, (Math.abs(dy) - 10 * S) / (25 * S)));
+      if (Math.abs(dy) > 10 * S) torque(0, Math.sign(dy), 0, E * P.K_alt * Math.min(1.5, (Math.abs(dy) - 10 * S) / (25 * S)));
     } else if (this.hasTree) {
       /* Going to roost: home on this bird's own perch, coming down in
          proportion to distance so the approach is a falling spiral; in the
@@ -591,7 +734,7 @@ Flock.prototype.update = function (dt) {
         const yT = this.ty[i] + 0.45 * Math.max(0, hd - 10);
         const ddx = ex / hd, ddy = Math.max(-0.7, Math.min(0.4, (yT - y) / 15)), ddz = ez / hd;
         const dl = Math.hypot(ddx, ddy, ddz);
-        torque(ddx / dl, ddy / dl, ddz / dl, 14);
+        torque(ddx / dl, ddy / dl, ddz / dl, E * 14);
       }
       /* inside 8 m the bird simply flies at its perch - applied AFTER the
          heading update below; applied here it was overwritten by it, and the
@@ -603,17 +746,17 @@ Flock.prototype.update = function (dt) {
       const yT = Math.max(0, 0.45 * (hd - 12));
       const ddx = ex / hd, ddy = Math.max(-0.7, Math.min(0.3, (yT - y) / 15)), ddz = ez / hd;
       const dl = Math.hypot(ddx, ddy, ddz);
-      torque(ddx / dl, ddy / dl, ddz / dl, 8);
+      torque(ddx / dl, ddy / dl, ddz / dl, E * 8);
     }
     /* the crown is not air: flying birds turn away from inside it */
     if (this.crown && !going) {
       const C = this.crown, qx = (x - C.cx) / (C.rx * 1.15), qy = (y - C.cy) / (C.ry * 1.15), qz = (z - C.cz) / (C.rz * 1.15);
       const q2 = qx * qx + qy * qy + qz * qz;
-      if (q2 < 1) { const ql = Math.sqrt(q2) || 1; torque(qx / ql, qy / ql, qz / ql, 10 * (1 - q2)); }
+      if (q2 < 1) { const ql = Math.sqrt(q2) || 1; torque(qx / ql, qy / ql, qz / ql, E * 10 * (1 - q2)); }
     }
     wallPush(x, y, z, going ? 0 : 8, wall, this.field, S);
     const wl = Math.hypot(wall[0], wall[1], wall[2]);
-    if (wl > 0) torque(wall[0] / wl, wall[1] / wl, wall[2] / wl, 9 * Math.min(1.5, wl));
+    if (wl > 0) torque(wall[0] / wl, wall[1] / wl, wall[2] / wl, E * 9 * Math.min(1.5, wl));
     /* private wobble: where every turn of the whole flock begins */
     torque(r() - 0.5, r() - 0.5, r() - 0.5, P.noise);
 
@@ -679,5 +822,5 @@ Flock.prototype.update = function (dt) {
   }
 };
 
-global.Murmuration = { Flock, drawParams, rng, FIELD };
+global.Murmuration = { Flock, drawParams, rng, FIELD, shade: { buildShadeGrid, gridTau, birdShade, VDIRS, VDIR } };
 })(typeof window !== 'undefined' ? window : this);

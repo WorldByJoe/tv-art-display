@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Murmuration studio</title>
+<!--
+  index.html · v0.1 · 2026-10-06
+  Murmuration studio: make your own video of a simulated starling
+  murmuration, up to 100,000 birds at 4K. Everything runs in this browser:
+  the flock (engine_exp.js), the scene (render.html, in the frame below),
+  and the H.264 encoder (WebCodecs, via studio_rec.js).
+  CHANGED
+    v0.1  first build: simple settings, advanced panel, time estimate,
+          streaming to a folder (Chrome/Edge) or in-memory download
+-->
+<style>
+  :root { --bg: #f7f6f3; --panel: #ffffff; --ink: #1d1d1f; --muted: #5f6368; --line: #dcdad5; --accent: #2f5d8a; --warn-bg: #fff4dc; --warn-ink: #6b4a00; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #141518; --panel: #1d1f23; --ink: #ececec; --muted: #a2a6ad; --line: #34373d; --accent: #8db8e3; --warn-bg: #3a2f14; --warn-ink: #f2d38a; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 28px; margin: 0 0 4px; } h2 { font-size: 18px; margin: 0 0 12px; }
+  .lead { color: var(--muted); margin: 0 0 16px; }
+  .note { background: var(--warn-bg); color: var(--warn-ink); border-radius: 8px; padding: 10px 14px; margin: 0 0 16px; font-size: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 0 0 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 16px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  select, input[type=number] { width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; }
+  .seed { display: flex; gap: 6px; } .seed input { flex: 1; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { button.primary { color: #0e1a26; } }
+  button:disabled { opacity: .5; cursor: default; }
+  details { margin-top: 14px; } summary { cursor: pointer; font-weight: 600; }
+  .help { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  #estimate { color: var(--muted); font-size: 14px; }
+  .frame { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; }
+  .frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .frame .idle { position: absolute; inset: 0; display: grid; place-items: center; color: #9aa0a6; font-size: 14px; }
+  progress { width: 100%; height: 10px; margin-top: 10px; }
+  #status { font-size: 14px; color: var(--muted); margin-top: 6px; min-height: 1.5em; }
+  #result a { margin-right: 14px; }
+  .about p, .about li { font-size: 14px; } .about ul { padding-left: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Murmuration studio</h1>
+  <p class="lead">Render your own video of a simulated starling murmuration: up to 100,000 birds, in 4K, entirely on this computer. Every bird follows the same rules, drawn from field studies of starlings; there is no leader.</p>
+  <p class="note" id="browserNote"><b>Best in Chrome or Edge on a desktop or laptop.</b> They can stream a large 4K video straight to a folder. Safari and Firefox can make videos too, but must hold the whole file in memory, so keep those to 1080p, under a minute and under 20,000 birds. Keep this tab open and in front while it renders: browsers slow down background tabs.</p>
+
+  <section class="card">
+    <h2>Settings</h2>
+    <div class="grid">
+      <div><label for="birds">Birds</label>
+        <select id="birds"><option>2000</option><option>5000</option><option selected>20000</option><option>50000</option><option>100000</option></select></div>
+      <div><label for="seed">Evening (random seed)</label>
+        <div class="seed"><input id="seed" type="number" min="1" max="999999" value="3"><button id="dice" title="Pick another evening">New</button></div>
+        <div class="help">Same seed, same settings: the same video.</div></div>
+      <div><label for="sec">Length</label>
+        <select id="sec"><option value="30">30 s</option><option value="60" selected>1 min</option><option value="120">2 min</option><option value="240">4 min</option></select></div>
+      <div><label for="res">Resolution</label>
+        <select id="res"><option value="1920x1080">1080p (1920 × 1080)</option><option value="3840x2160" selected>4K (3840 × 2160)</option></select></div>
+      <div><label for="start">Start the clip</label>
+        <select id="start"><option value="40" selected>Mid-murmuration</option><option value="185">Just before the descent to roost</option></select>
+        <div class="help">The descent begins 15 s into the second option.</div></div>
+    </div>
+
+    <details id="adv">
+      <summary>Advanced: the model</summary>
+      <div class="grid" style="margin-top:12px">
+        <div><label for="preset">Model</label>
+          <select id="preset"><option value="current" selected>Current (fast responses, wider spacing)</option><option value="first">As first built</option><option value="custom">Custom</option></select></div>
+        <div><label for="resp">Response speed (× as first built)</label><input id="resp" type="number" min="1" max="16" step="1" value="12">
+          <div class="help">12 ≈ 0.05–0.08 s to answer a neighbour; StarDisplay uses 50 ms.</div></div>
+        <div><label for="space">Personal space (×)</label><input id="space" type="number" min="1" max="2.5" step="0.1" value="2">
+          <div class="help">2 gives ~0.8 m between nearest neighbours (measured: 0.7–1.5 m).</div></div>
+        <div><label for="vis">Whole-flock vision weight</label><input id="vis" type="number" min="0" max="0.4" step="0.01" value="0.1">
+          <div class="help">Pearce et al. 2014 used 0.04–0.13 of alignment.</div></div>
+        <div><label for="roost">Roost distance from camera (m)</label><input id="roost" type="number" min="220" max="420" step="10" value="240"></div>
+        <div><label for="pan">Camera</label><select id="pan"><option value="1" selected>Follows the flock gently</option><option value="0">Fixed</option></select></div>
+        <div><label for="fps">Frame rate</label><select id="fps"><option>30</option><option>60</option></select></div>
+        <div><label for="mbps">Video bitrate (Mbit/s)</label><input id="mbps" type="number" min="5" max="120" step="5" value="40"></div>
+        <div><label for="stills">Save a still every (s; 0 = none)</label><input id="stills" type="number" min="0" max="60" step="5" value="0"></div>
+      </div>
+    </details>
+
+    <div class="row">
+      <button id="est">Estimate time</button>
+      <button id="go" class="primary">Render video…</button>
+      <button id="stop" disabled>Cancel</button>
+      <span id="estimate"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="frame"><div class="idle" id="idle">The video renders here, frame by frame.</div></div>
+    <progress id="bar" max="1" value="0"></progress>
+    <div id="status"></div>
+    <div id="result"></div>
+  </section>
+
+  <section class="card about">
+    <h2>About the model</h2>
+    <p>Each bird steers only by what it perceives. Every cue is a turning torque, so turns carry inertia. Each step, a bird:</p>
+    <ul>
+      <li>matches the heading and speed of its 6 or 7 nearest neighbours, ignoring any in a blind sector behind it (Ballerini et al. 2008; Bialek et al. 2014);</li>
+      <li>keeps its personal space and closes on neighbours that drift off;</li>
+      <li>turns gently toward the edges of the flock as it sees it against the sky (Pearce et al. 2014);</li>
+      <li>is drawn back toward the roost and a preferred height, as in StarDisplay (Hildenbrandt et al. 2010).</li>
+    </ul>
+    <p>At dusk each bird goes down at its own moment, sooner once two neighbours have. A settings file saved beside each video records every value used.</p>
+  </section>
+</main>
+
+<script src="engine_exp.js"></script>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const QS = new URLSearchParams(location.search);
+const SELFTEST = QS.has('selftest');                                   // testing: stream to the local rec_server
+const PICK = typeof window.showDirectoryPicker === 'function' && !QS.has('memory');   // ?memory tests the Safari/Firefox path
+if (!PICK) $('browserNote').insertAdjacentHTML('afterbegin', '<b>This browser cannot write to a folder:</b> the video will be built in memory and offered as a download. ');
+
+/* presets fill the advanced fields; touching a field makes it Custom */
+const PRESETS = { current: { resp: 12, space: 2, vis: 0.1, roost: 240 }, first: { resp: 1, space: 1, vis: 0.1, roost: 375 } };
+$('preset').onchange = () => { const p = PRESETS[$('preset').value]; if (p) for (const k in p) $(k).value = p[k]; };
+for (const k of ['resp', 'space', 'vis', 'roost']) $(k).oninput = () => { $('preset').value = 'custom'; };
+$('dice').onclick = () => { $('seed').value = 1 + Math.floor(Math.random() * 999998); };
+
+function settings() {
+  const [w, h] = $('res').value.split('x').map(Number);
+  return { birds: +$('birds').value, seed: Math.max(1, Math.round(+$('seed').value || 1)), seconds: +$('sec').value, width: w, height: h,
+           startAt: +$('start').value, model: $('preset').value, response: +$('resp').value, personalSpace: +$('space').value,
+           visionWeight: +$('vis').value, roostDistance: +$('roost').value, cameraFollows: $('pan').value === '1',
+           fps: +$('fps').value, mbps: +$('mbps').value, stills: +$('stills').value };
+}
+/* the model settings as the engine takes them */
+function engineSettings(s) {
+  const f = s.response, g = Math.sqrt(f);
+  return { tune: { K_align: f, gamma: g, rSep: s.personalSpace }, set: { envScale: g, visW: s.visionWeight }, sub: f <= 2 ? 1 : f <= 6 ? 2 : 4 };
+}
+function renderURL(s) {
+  const e = engineSettings(s), q = new URLSearchParams();
+  q.set('rec', ''); q.set('studio', ''); q.set('stage', 'big'); q.set('n', s.birds); q.set('seed', s.seed); q.set('t', s.startAt);
+  q.set('sec', s.seconds); q.set('w', s.width); q.set('h', s.height); q.set('fps', s.fps); q.set('mbps', s.mbps); q.set('stills', s.stills);
+  q.set('tune', JSON.stringify(e.tune)); q.set('set', JSON.stringify(e.set)); q.set('sub', e.sub); q.set('roostz', s.roostDistance);
+  if (s.cameraFollows) q.set('pan', '');
+  if (SELFTEST) q.set('selftest', '');
+  q.set('out', fileName(s));
+  return 'render.html?' + q.toString();
+}
+const fileName = (s) => `murmuration_${s.birds}birds_seed${s.seed}_${s.height}p.mp4`;
+const fmtMin = (m) => m < 1 ? 'under a minute' : m < 90 ? `about ${Math.round(m)} minutes` : `about ${(m / 60).toFixed(1)} hours`;
+
+/* ESTIMATE: time a small flock with the same settings on this machine and
+   scale by the number of birds (the cost per bird is close to constant from
+   2,000 to 100,000), plus a per-frame allowance for drawing and encoding. */
+async function estimate() {
+  const s = settings(), e = engineSettings(s), nb = Math.min(s.birds, 2000);
+  $('estimate').textContent = 'Timing this computer…';
+  await new Promise((r) => setTimeout(r, 30));
+  const F = new Murmuration.Flock(s.seed, { nMin: nb, nMax: nb, roostAt: 1e9, roost: { x: 0, z: s.roostDistance }, scale: 1,
+    field: { x0: -600, x1: 600, z0: 30, z1: 720, top: 450 }, vision: true, tune: e.tune });
+  Object.assign(F.P, e.set); if (e.sub > 1) F.P.noise *= Math.sqrt(e.sub);
+  const step = () => { for (let k = 0; k < e.sub; k++) F.update(1 / 30 / e.sub); };
+  for (let k = 0; k < 60; k++) { step(); if (k % 10 === 0) await new Promise((r) => setTimeout(r, 0)); }
+  const t0 = performance.now(); let n = 0;
+  while (performance.now() - t0 < 1500) { step(); n++; if (n % 5 === 0) await new Promise((r) => setTimeout(r, 0)); }
+  const perBirdStep = (performance.now() - t0) / n / nb;
+  const steps = (20 + s.startAt + s.seconds) * 30, frames = s.seconds * s.fps;
+  const drawMs = s.height >= 2160 ? 12 : 5;
+  const min = (perBirdStep * s.birds * steps + drawMs * frames) / 60000;
+  $('estimate').textContent = `${fmtMin(min)} on this computer (rough).`;
+  return min;
+}
+$('est').onclick = () => estimate();
+
+/* RENDER */
+let job = null;
+function setStatus(t) { $('status').textContent = t; }
+$('go').onclick = async () => {
+  const s = settings();
+  if (!PICK && !SELFTEST && (s.height >= 2160 && s.seconds > 60 || s.birds > 20000)) {
+    if (!confirm('This browser builds the video in memory. A 4K video longer than a minute, or more than 20,000 birds, may run out of memory and fail near the end. Continue anyway?')) return;
+  }
+  let dir = null;
+  if (PICK && !SELFTEST) {
+    try { dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'murmuration' }); } catch (e) { return; }   // cancelled
+  }
+  $('go').disabled = true; $('stop').disabled = false; $('result').textContent = ''; $('bar').value = 0;
+  const frame = document.createElement('iframe');
+  frame.src = renderURL(s); frame.title = 'Render preview';
+  $('idle').hidden = true; document.querySelector('.frame').appendChild(frame);
+  job = { frame, dir, s, t0: performance.now() };
+  setStatus('Building the scene…');
+};
+$('stop').onclick = () => finish('Cancelled. ' + (job && job.dir ? 'A partial file may remain in the folder.' : ''));
+function finish(msg) {
+  if (job) { job.frame.remove(); job = null; }
+  $('idle').hidden = false; $('go').disabled = false; $('stop').disabled = true; setStatus(msg);
+}
+addEventListener('message', (e) => {
+  if (e.origin !== location.origin || !job || e.source !== job.frame.contentWindow) return;
+  const m = e.data;
+  if (m.type === 'ready') job.frame.contentWindow.postMessage({ type: 'start', dir: job.dir, settings: job.s }, location.origin);
+  else if (m.type === 'warm') { $('bar').value = 0.15 * m.done / m.total; setStatus(`Letting the flock form before the clip starts: ${Math.round(100 * m.done / m.total)}%`); }
+  else if (m.type === 'progress') {
+    const f = m.i / m.total, left = f > 0.01 ? m.el / f - m.el : null;
+    $('bar').value = 0.15 + 0.85 * f;
+    setStatus(`Frame ${m.i} of ${m.total}` + (left != null ? ` · ${fmtMin(left / 60)} left` : '') + (m.perched > 0.01 ? ` · ${Math.round(100 * m.perched)}% perched` : '') + (m.bytes ? ` · ${(m.bytes / 1e6).toFixed(0)} MB written` : ''));
+  } else if (m.type === 'done') {
+    const mins = ((performance.now() - job.t0) / 60000).toFixed(1);
+    $('bar').value = 1;
+    if (m.mp4) {
+      const a = (blob, name, text) => { const l = document.createElement('a'); l.href = URL.createObjectURL(blob); l.download = name; l.textContent = text; $('result').appendChild(l); };
+      a(m.mp4, m.meta.file, `Download the video (${(m.mp4.size / 1e6).toFixed(0)} MB)`);
+      a(new Blob([m.json], { type: 'application/json' }), m.meta.file.replace(/\.mp4$/, '.json'), 'Download the settings file');
+    }
+    const name = m.meta.file;
+    job.frame.remove(); job = null; $('idle').hidden = false; $('go').disabled = false; $('stop').disabled = true;
+    setStatus(`Done in ${mins} minutes: ${name}` + (m.mp4 ? ' (download below).' : SELFTEST ? ' (test copy on the local server).' : ' and its settings file are in the folder you chose.'));
+  } else if (m.type === 'fail') finish('Failed: ' + m.msg);
+});
+document.addEventListener('visibilitychange', () => { if (job && document.hidden) document.title = 'Rendering… keep this tab in front'; else document.title = 'Murmuration studio'; });
+</script>
+</body>
+</html>

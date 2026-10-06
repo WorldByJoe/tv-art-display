@@ -29,6 +29,7 @@ no keys, no dependency on each other. Open the HTML file.
 | [**artworks**](artworks/) | Five public-domain works drawn live from the Art Institute of Chicago's open collection, one at a time, each with what the museum knows about it and a paragraph on the artist from Wikipedia. Nothing is stored in the page: every visit is a different five, out of a collection that runs to tens of thousands. |
 | [**reading**](reading/) | One passage from one book, pulled from the public-domain library at Standard Ebooks as the page loads, cut to fit the screen, and revealed a line at a time. Who wrote it, and when, are withheld until the words have been up long enough to be read on their own. |
 | [**descent**](descent/) | A fresh trail is invented for every run - a bench cut traversing a hillside, switchbacking and plunging through changing dirt, with jumps built into it - and a rider is simulated down it. Nothing is scripted: a planner chooses where to be across the trail and when to brake, out of physics, and then the bike has to actually follow that plan. |
+| [**murmuration-studio**](murmuration-studio/) | Make your own video of a simulated starling murmuration, up to 100,000 birds in 4K, rendered in your browser. A simple front for the settings, an advanced panel for the model, and a settings file beside every video so any flock can be made again. |
 
 ## The idea
 
