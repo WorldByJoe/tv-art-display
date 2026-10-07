@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   ripples_engine.js · v0.1 · 2026-10-07
+   ripples_engine.js · v0.2 · 2026-10-07
    The water in a rectangular pool with vertical walls, for ripples.html.
    Pure JavaScript (no DOM), so it can be timed and tested in a shell.
 
@@ -44,7 +44,18 @@
    complex FFT of the same length, Makhoul 1980); new cavities are added in
    space and moved into the modes with the forward transform (DCT-II).
 
+   POOLS THAT ARE NOT RECTANGLES (v0.2). A round, hexagonal, elliptical or
+   egg-shaped pool has no ready-made list of standing waves, so it is placed
+   inside the rectangle and its wall is enforced in space: after each step
+   the water BEYOND the wall is overwritten with the mirror image of the
+   water inside it (height and its rate of change, reflected across the
+   nearest point of the wall). A mirrored field has no slope across the
+   wall, which is the condition a vertical wall imposes (no flow through it),
+   so waves reflect from it as from a real wall. Inside, the propagation is
+   still exact. It costs four transforms a step instead of one.
+
    CHANGED
+     v0.2  any pool shape: opts.inside + opts.boundary, mirrored walls
      v0.1  first build
 --------------------------------------------------------------------------- */
 (function (global) {
@@ -149,8 +160,13 @@
     this.tmp = new Float64Array(M);
     this.src = new Float64Array(M); this.srcPending = false;
     this.dctX = makeDCT(NX); this.dctZ = makeDCT(NZ);
-    this.t = 0;
+    this.t = 0; this.nstep = 0; this.etaAt = -1;
     this.setDamping(opts.floorDamp === undefined ? FLOOR_DAMP : opts.floorDamp);
+    /* a shaped pool: inside(x, z) in metres from the box corner, and the
+       wall as a closed polyline [[x, z], ...] in the same frame */
+    this.inside = opts.inside || null;
+    this.mirrorEvery = opts.mirrorEvery || 1;
+    if (this.inside) this.buildMirror(opts.boundary);
   }
 
   /* the exact one-step propagator of every mode, for a fixed DT */
@@ -175,36 +191,112 @@
     return { omega: w, phase: w / k };
   };
 
-  /* advance every mode one DT, exactly */
+  /* advance every mode one DT, exactly; a shaped pool then has its wall
+     re-imposed (every mirrorEvery steps, and whenever a stone lands) */
   Pool.prototype.step = function () {
-    if (this.srcPending) this.flushSources();
+    if (!this.inside && this.srcPending) this.flushSources();
     const a = this.a, v = this.v, m11 = this.m11, m12 = this.m12, m21 = this.m21, m22 = this.m22;
     for (let i = 0, M = a.length; i < M; i++) {
       const ai = a[i], vi = v[i];
       a[i] = m11[i] * ai + m12[i] * vi;
       v[i] = m21[i] * ai + m22[i] * vi;
     }
-    this.t += this.DT;
+    this.t += this.DT; this.nstep++;
+    if (this.inside && (this.srcPending || this.nstep % this.mirrorEvery === 0)) this.reflect();
   };
 
-  /* the height field on the grid: a 2-D DCT-III of the mode amplitudes,
-     along x two rows at a time, then along z two columns at a time */
-  Pool.prototype.synth = function () {
-    const { NX, NZ, a, tmp, eta, dctX, dctZ } = this;
-    for (let n = 0; n < NZ; n += 2) { tmp.set(a.subarray(n * NX, n * NX + 2 * NX), n * NX); }
+  /* coefficients -> grid (2-D DCT-III), x rows two at a time, then z columns */
+  Pool.prototype.synthInto = function (coef, out) {
+    const { NX, NZ, tmp, dctX, dctZ } = this;
+    tmp.set(coef);
     for (let n = 0; n < NZ; n += 2) dctX.inv(tmp, tmp, n * NX, (n + 1) * NX, 1);
-    for (let i = 0; i < NX; i += 2) dctZ.inv(tmp, eta, i, i + 1, NX);
-    return eta;
+    for (let i = 0; i < NX; i += 2) dctZ.inv(tmp, out, i, i + 1, NX);
+    return out;
+  };
+  /* grid -> coefficients (2-D DCT-II), z columns then x rows */
+  Pool.prototype.fwdInto = function (field, out) {
+    const { NX, NZ, tmp, dctX, dctZ } = this;
+    for (let i = 0; i < NX; i += 2) dctZ.fwd(field, tmp, i, i + 1, NX);
+    for (let n = 0; n < NZ; n += 2) dctX.fwd(tmp, out, n * NX, (n + 1) * NX, 1);
+    return out;
   };
 
-  /* move pending cavities (in space) into the modes: the forward transform,
-     z first then x, into tmp, added to the amplitudes */
+  /* the height field on the grid (cached when reflect() just made it) */
+  Pool.prototype.synth = function () {
+    if (this.etaAt === this.nstep) return this.eta;
+    this.etaAt = this.nstep;
+    return this.synthInto(this.a, this.eta);
+  };
+
+  /* move pending cavities (in space) into the modes: rectangular pools */
   Pool.prototype.flushSources = function () {
-    const { NX, NZ, src, tmp, a, dctX, dctZ } = this;
-    for (let i = 0; i < NX; i += 2) dctZ.fwd(src, tmp, i, i + 1, NX);
-    for (let n = 0; n < NZ; n += 2) dctX.fwd(tmp, tmp, n * NX, (n + 1) * NX, 1);
+    const { src, tmp, a } = this;
+    this.fwdInto(src, tmp);
     for (let i = 1, M = a.length; i < M; i++) a[i] += tmp[i];
-    src.fill(0); this.srcPending = false;
+    src.fill(0); this.srcPending = false; this.etaAt = -1;
+  };
+
+  /* SHAPED POOLS: the wall, re-imposed in space (see the header) */
+  Pool.prototype.reflect = function () {
+    const { eta, etat, src, a, v, mIdx, mW, outIdx } = this;
+    this.synthInto(a, eta); this.synthInto(v, etat);
+    if (this.srcPending) { for (let i = 0, M = eta.length; i < M; i++) eta[i] += src[i]; src.fill(0); this.srcPending = false; }
+    for (let q = 0, n = outIdx.length; q < n; q++) {
+      const c = outIdx[q], o = 4 * q;
+      eta[c] = mW[o] * eta[mIdx[o]] + mW[o + 1] * eta[mIdx[o + 1]] + mW[o + 2] * eta[mIdx[o + 2]] + mW[o + 3] * eta[mIdx[o + 3]];
+      etat[c] = mW[o] * etat[mIdx[o]] + mW[o + 1] * etat[mIdx[o + 1]] + mW[o + 2] * etat[mIdx[o + 2]] + mW[o + 3] * etat[mIdx[o + 3]];
+    }
+    this.fwdInto(eta, a); this.fwdInto(etat, v);
+    this.etaAt = this.nstep;                       // eta is exactly synth(a) now
+  };
+
+  /* For every cell beyond the wall: the nearest point b of the wall, the
+     mirror m = 2b - p, and four inside cells to interpolate there. Where the
+     mirror falls outside again (far corners of the box, a pointed tip) it is
+     pulled back toward the wall until it is inside. Done once per pool. */
+  Pool.prototype.buildMirror = function (poly) {
+    const { NX, NZ, dx } = this, M = NX * NZ, ins = this.inside;
+    const mask = this.mask = new Uint8Array(M);
+    for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) mask[j * NX + i] = ins((i + 0.5) * dx, (j + 0.5) * dx) ? 1 : 0;
+    this.etat = new Float64Array(M);
+    const out = []; for (let c = 0; c < M; c++) if (!mask[c]) out.push(c);
+    this.outIdx = Int32Array.from(out);
+    this.mIdx = new Int32Array(4 * out.length); this.mW = new Float32Array(4 * out.length);
+    const P = poly.length, px = new Float64Array(P), pz = new Float64Array(P);
+    for (let k = 0; k < P; k++) { px[k] = poly[k][0]; pz[k] = poly[k][1]; }
+    const cellIn = (x, z) => { const i = Math.floor(x / dx), j = Math.floor(z / dx); return i >= 0 && j >= 0 && i < NX && j < NZ && mask[j * NX + i] === 1; };
+    const setW = (q, x, z) => {                   // bilinear over inside cells only
+      const fx = x / dx - 0.5, fz = z / dx - 0.5, i0 = Math.floor(fx), j0 = Math.floor(fz), tx = fx - i0, tz = fz - j0;
+      const cs = [[i0, j0, (1 - tx) * (1 - tz)], [i0 + 1, j0, tx * (1 - tz)], [i0, j0 + 1, (1 - tx) * tz], [i0 + 1, j0 + 1, tx * tz]];
+      let sum = 0;
+      for (let k = 0; k < 4; k++) {
+        const [ci, cj, w] = cs[k], ok = ci >= 0 && cj >= 0 && ci < NX && cj < NZ && mask[cj * NX + ci] === 1;
+        this.mIdx[4 * q + k] = ok ? cj * NX + ci : 0; this.mW[4 * q + k] = ok ? w : 0; if (ok) sum += w;
+      }
+      if (sum < 1e-6) return false;
+      for (let k = 0; k < 4; k++) this.mW[4 * q + k] /= sum;
+      return true;
+    };
+    for (let q = 0; q < out.length; q++) {
+      const c = out[q], x = (c % NX + 0.5) * dx, z = (Math.floor(c / NX) + 0.5) * dx;
+      let best = 1e18, bx = 0, bz = 0;
+      for (let k = 0; k < P; k++) {               // nearest point on the wall
+        const k2 = (k + 1) % P, ex = px[k2] - px[k], ez = pz[k2] - pz[k], L2 = ex * ex + ez * ez || 1e-12;
+        let t = ((x - px[k]) * ex + (z - pz[k]) * ez) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const qx = px[k] + t * ex, qz = pz[k] + t * ez, d = (qx - x) * (qx - x) + (qz - z) * (qz - z);
+        if (d < best) { best = d; bx = qx; bz = qz; }
+      }
+      let ok = false;
+      for (let f = 1; f > 0.04 && !ok; f *= 0.8) {  // the mirror, pulled in until it lands inside
+        const mx = bx + f * (bx - x), mz = bz + f * (bz - z);
+        if (cellIn(mx, mz)) ok = setW(q, mx, mz);
+      }
+      if (!ok) {                                   // last resort: the nearest inside cell
+        let bd = 1e18, bc = 0;
+        for (let k = 0; k < M; k++) if (mask[k]) { const d = ((k % NX + 0.5) * dx - x) ** 2 + ((Math.floor(k / NX) + 0.5) * dx - z) ** 2; if (d < bd) { bd = d; bc = k; } }
+        this.mIdx[4 * q] = bc; this.mW[4 * q] = 1;
+      }
+    }
   };
 
   /* A cavity at (x, z) in pool metres from the corner: depth A (m) at the
@@ -260,7 +352,7 @@
   Pool.prototype.light = function (rgba, sun, fb, ss) {
     const { NX, NZ, dx, depth, eta } = this;
     if (!this.acc || this.acc.length !== NX * NZ) { this.acc = new Float32Array(NX * NZ); this.sx = new Float32Array(NX * NZ); this.sz = new Float32Array(NX * NZ); this.acc2 = new Float32Array(NX * NZ); }
-    const acc = this.acc, sx = this.sx, sz = this.sz, acc2 = this.acc2;
+    const acc = this.acc, sx = this.sx, sz = this.sz, acc2 = this.acc2, mask = this.mask || null;
     const inv2 = 1 / (2 * dx);
     for (let j = 0; j < NZ; j++) {
       const jm = j ? j - 1 : 0, jp = j < NZ - 1 ? j + 1 : NZ - 1;
@@ -290,6 +382,11 @@
       for (let i = 0; i < NX; i++) for (let p = 0; p < ss; p++) {
         const fx = i + (p + 0.5) / ss - 0.5, xq = (fx + 0.5) * dx;
         if (xq + offX < 0 || xq + offX > this.Lx) continue;
+        if (mask) {                               // only water lets light down, and only past the coping
+          if (!mask[j * NX + i]) continue;
+          const bi = Math.floor((xq + offX) / dx), bj = Math.floor((zq + offZ) / dx);
+          if (bi < 0 || bj < 0 || bi >= NX || bj >= NZ || !mask[bj * NX + bi]) continue;
+        }
         let gx, gz;
         if (ss === 1) { gx = sx[j * NX + i]; gz = sz[j * NX + i]; }
         else {
@@ -310,6 +407,7 @@
         const px = (xq + tX * L) / dx - 0.5, pz = (zq + tZ * L) / dx - 0.5;
         const pi = Math.floor(px), pj = Math.floor(pz);
         if (pi < -1 || pj < -1 || pi >= NX || pj >= NZ) continue;
+        if (mask) { const ci = Math.round(px), cj = Math.round(pz); if (ci < 0 || cj < 0 || ci >= NX || cj >= NZ || !mask[cj * NX + ci]) continue; }
         const ux = px - pi, uz = pz - pj;
         if (pj >= 0) {
           if (pi >= 0) acc[pj * NX + pi] += flux * (1 - ux) * (1 - uz);

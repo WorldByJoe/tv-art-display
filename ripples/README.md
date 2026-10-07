@@ -7,7 +7,7 @@ Pebbles dropped into a garden pool, seen from above, with the water worked out f
 Open `index.html` in a browser. That is the whole of it - one file, no build,
 no server, no keys. It is written for a 4K screen and scales down.
 
-There is no text on screen, by design. The up arrow (or the on-screen `i`) shows this scene's numbers, `n` for a new scene; add `?seed=` with any number to repeat a sequence of scenes.
+There is no text on screen, by design. The up arrow (or the on-screen `i`) shows this scene's numbers, and while that card is open the left and right arrows change the pool's shape (or add `?shape=round`, `square`, `hexagon`, `ellipse`, `egg` to the URL). Press `n` for a new scene, or add `?seed=` with any number to repeat a sequence of scenes.
 
 ## What it is doing
 
@@ -16,6 +16,7 @@ There is no text on screen, by design. The up arrow (or the on-screen `i`) shows
 - Ripples die by viscosity, fastest the shortest (a 1 cm ripple in about a second), and long sloshing waves by friction at the floor and a small allowance for the walls and the surface film.
 - The floor is lit by tracing the sun's light through the rippled surface by Snell's law: where the surface curves, light converges into the bright lines every pool floor shows, and the coping casts its shadow when the sun is low. You see the floor through the same surface, refracted, with the sky reflected in proportion to Fresnel's law.
 - Each scene draws a new view (straight down to 45 degrees), sun (overhead to 10 degrees up), sky (cool to warm), depth and floor; stones of 8-50 mm fall at random from 20-150 cm.
+- Six pool shapes: rectangle (the default), square, round, hexagon, ellipse and an egg made of two parabolas facing each other with one shared focus. Rectangle and square are solved exactly. The others sit inside a rectangle, and after every step the water beyond their wall is replaced by the mirror image of the water inside it, which is what a wall does to a wave. The curved ones focus: in the round pool a ripple from the centre comes back to the centre, and in the ellipse a ripple from one focus gathers at the other.
 - Not simulated: the splash. The hole a stone opens is sized by eye from the stone (it hands the waves about 0.5-1.5 percent of the stone's energy), and the droplets and the jet are thrown on ballistic paths; each droplet that falls back makes a small ripple of its own.
 
 ## Credits

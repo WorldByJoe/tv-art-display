@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v1.1 · 2026-10-07
+   about.js · v1.2 · 2026-10-07
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,6 +35,7 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v1.2  Ripples: the pool shape, chosen with left/right, and its own hint line
      v1.1  ripples.html (pebbles in a pool)
      v1.0  first build: every ring stop
 --------------------------------------------------------------------------- */
@@ -70,19 +71,21 @@
   }
 
   /* ===== ripples.html ===== */
+  /* While this card is open, left/right choose the pool's shape (the page
+     claims them), so the hint line says that instead of "other pieces". */
   ABOUT['index.html'] = {
-    what: 'Pebbles dropped into a garden pool, with the water worked out from physics. Every standing wave the pool can hold is followed exactly, using the real relation between a wave’s length and its speed: ripples shorter than 1.7 cm are pulled back by surface tension and outrun the rest, longer ones by gravity. So each ring spreads into a train of ripples, bounces off the walls and crosses the others. The bright web on the floor is sunlight focused by the curved surface, traced ray by ray. The splash itself is drawn, not simulated.',
+    what: 'Pebbles dropped into a garden pool, with the water worked out from physics. Every standing wave the pool can hold is followed exactly, using the real link between a wave’s length and its speed: ripples shorter than 1.7 cm are pulled back by surface tension and outrun the rest, longer ones by gravity, so each ring spreads into a train that bounces off the walls. The bright web on the floor is sunlight focused by the curved surface. The splash itself is drawn, not simulated.',
+    hint: (ring) => '▲ close  ·  ◀ ▶ pool shape' + (ring ? '  ·  menu: settings' : ''),
     params: () => [
-      A('Scene', () => POOL.scene + ' (seed ' + POOL.seed + ')'),
-      A('View', () => n(POOL.tilt) + '° from straight down'),
-      A('Sun', () => n(POOL.sunEl) + '° above the horizon'),
-      A('Sky', () => POOL.warm < 0.33 ? 'cool' : POOL.warm < 0.67 ? 'between' : 'warm'),
-      A('Pool', () => '2.56 × 1.28 m, ' + n(POOL.depth * 100) + ' cm deep, ' + POOL.floorKind + ' floor'),
-      A('Grid', () => NX + ' × ' + NZ + ' cells of ' + n(CELL * 1000, 0) + ' mm, so the shortest wave is ' + n(2 * CELL * 100, 0) + ' cm'),
-      A('Slowest ripple', () => { const w = pool.waveSpeed(0.0171); return '1.7 cm long, ' + n(w.phase * 100) + ' cm/s'; }),
+      A('Pool shape', () => '◀  ' + (POOL.shapeNext || POOL.shape) + '  ▶'),
+      A('Pool', () => n(POOL.area, 2) + ' m², ' + n(POOL.depth * 100) + ' cm deep, ' + POOL.floorKind + ' floor'),
+      A('Its walls', () => ({ Round: 'a ripple from the centre comes back to the centre',
+                              Ellipse: 'a ripple from one focus gathers at the other',
+                              Egg: 'two parabolas sharing one focus' })[POOL.shape]),
+      A('View and light', () => n(POOL.tilt) + '° from straight down, sun ' + n(POOL.sunEl) + '° up, ' + (POOL.warm < 0.33 ? 'cool' : POOL.warm < 0.67 ? 'mild' : 'warm') + ' sky'),
+      A('Grid', () => pool.NX + ' × ' + pool.NZ + ' cells of ' + n(pool.dx * 1000, Math.round(pool.dx * 1e4) % 10 ? 1 : 0) + ' mm'),
       A('Stones so far', () => n(POOL.stones)),
-      A('Last stone', () => POOL.last && (n(POOL.last.R * 2000) + ' mm across, from ' + n(POOL.last.H * 100) + ' cm, hit at ' + n(POOL.last.U, 1) + ' m/s')),
-      A('Its energy into waves', () => POOL.last && pct(POOL.last.share, 1)),
+      A('Last stone', () => POOL.last && (n(POOL.last.R * 2000) + ' mm across, hit at ' + n(POOL.last.U, 1) + ' m/s; ' + pct(POOL.last.share, 1) + ' of its energy into waves')),
       A('Frame rate', () => POOL.fps ? n(POOL.fps) + ' fps' : null),
     ],
   };
