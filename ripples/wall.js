@@ -1,0 +1,1177 @@
+/* ---------------------------------------------------------------------------
+   wall.js · v2.1 · 2026-10-07
+   the wall's shared language layer.
+
+   WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
+   own title card and its own scrim, and the result was thirteen dialects of
+   the same idea sitting in thirteen slightly different places. That is what
+   "the HUDs came about piecemeal" actually meant. wall.css gave the wall type
+   tokens but nothing to hang them on, and the seven role classes it defines
+   were used by no page at all.
+
+   More importantly the old captions were PERMANENT, and a permanent sentence
+   on a changing picture is a sentence about nothing in particular. tree said
+   the same words three metres of growth apart. surnames said "Eight names
+   left" directly above a line reading "3 surnames". descent said OFF THE
+   BRAKES while its own panel read 4 mph on a 2% grade.
+
+   So language here belongs to an EPISODE, not to a page. It arrives, says one
+   true thing about the picture underneath it, and dissolves. Two thirds of
+   every minute the wall is only the artwork.
+
+   THE FOUR CALLS, and there are no others:
+
+     Wall.lane(text, opts)      one or two sentences, bottom centre, fitted
+                                plate, timed hold, then gone.
+     Wall.moment(text, opts)    four words or fewer on something that just
+                                happened, placed against its subject.
+     Wall.signature(text, opts) legal attribution, on the pages that owe one.
+     Wall.instrument(spec)      the page's permanent live readout panel. Call
+                                it every frame; it only touches the DOM when
+                                a value actually changes.
+     Wall.after / Wall.every    timers that are remembered, so a page can tear
+                                its whole schedule down in one call.
+
+   LAW 1 IS ENFORCED HERE, NOT BY CONVENTION. At most one region of running
+   prose may be lit in any frame. lane() and moment() share a single lock:
+   whichever speaks second silences the first. A page cannot violate it by
+   accident, which is the only kind of violation that has ever happened.
+---------------------------------------------------------------------------
+
+   CHANGED
+     v2.1  ripples.html joins the ring as 'Ripples', after Murmuration: pebbles
+           dropped in a pool, the water solved mode by mode, a new scene every 2.5 min
+     v2.0  THE D-PAD IS THE WALL'S: left/right change piece and up opens the
+           piece's card (about.js) on EVERY page, in the capture phase - five
+           pages ignored the arrows and Ballgame could not be left at all
+     v1.9  murmuration.html joins the ring as 'Murmuration', after The Balance:
+           starlings at dusk, no text, a fresh flock and evening every 8 minutes
+     v1.8  baseball.html joins the ring as 'Ballgame', after Game Day: one whole
+           simulated game per visit (its source is the baseball-sim repository)
+     v1.7  noise_live.html in the ring, OFF by default: a test instrument that
+           is only ever brought up by a solo, but a solo needs a ring entry
+*/
+(function (global) {
+  'use strict';
+
+  /* --- how long a sentence holds ------------------------------------------
+     Proportional to its length rather than fixed. Fourteen seconds is right
+     for weather's two-line mechanism paragraph and much too long for
+     reaction's five-word pattern line - and reaction fires thirteen times in
+     a turn, so a fixed hold would make the shortest page the most talkative.
+     About 1.1 s per ten characters, floored and capped.
+
+     Joe has not ruled on this yet; it is open question 1 in the review. The
+     numbers live here so there is one place to change them. */
+  const MS_PER_CHAR   = 110;     // 1.1 s per ten characters
+  const HOLD_MIN      = 8000;
+  const HOLD_MAX      = 16000;
+  const FADE_IN       = 600;
+  const FADE_OUT      = 1200;
+
+  const MOMENT_HOLD   = 4000;    // a Moment is an interjection, not a caption
+  const MOMENT_GAP    = 6000;    // minimum silence between two Moments
+
+  /* --- timer registry ------------------------------------------------------
+     Pages used to scatter bare setTimeouts and then have no way to cancel the
+     schedule when an episode ended early or the page handed off. A stale timer
+     firing after a hand-off writes into a dead DOM; a stale timer firing after
+     a reseed narrates the previous episode. Both were observed. */
+  const timers = new Set();
+  function after(ms, fn) {
+    const id = setTimeout(() => { timers.delete(id); fn(); }, ms);
+    timers.add(id);
+    return id;
+  }
+  function every(ms, fn) {
+    const id = setInterval(fn, ms);
+    timers.add(id);
+    return id;
+  }
+  function clearTimers() {
+    for (const id of timers) { clearTimeout(id); clearInterval(id); }
+    timers.clear();
+  }
+
+  /* --- elements, made once and reused -------------------------------------
+     Creating them lazily means a page that never speaks never grows a node,
+     and a page that speaks often does not churn the DOM. */
+  let laneEl = null, laneSpan = null, momentEl = null, sigEl = null;
+  function lane_() {
+    if (laneEl) return laneEl;
+    laneEl = document.createElement('div');
+    laneEl.className = 'lane';
+    laneSpan = document.createElement('span');
+    laneEl.appendChild(laneSpan);
+    document.body.appendChild(laneEl);
+    return laneEl;
+  }
+  function moment_() {
+    if (momentEl) return momentEl;
+    momentEl = document.createElement('div');
+    momentEl.className = 'moment';
+    document.body.appendChild(momentEl);
+    return momentEl;
+  }
+
+  /* --- Law 1: one voice at a time ----------------------------------------- */
+  let voice = null;              // 'lane' | 'moment' | null
+  let laneTimer = null, momentTimer = null, lastMomentAt = -1e9;
+
+  function hideLane(immediate) {
+    if (!laneEl) return;
+    laneEl.classList.remove('show');
+    document.body.classList.remove('lane-lit');
+    if (voice === 'lane') voice = null;
+    if (laneTimer) { clearTimeout(laneTimer); timers.delete(laneTimer); laneTimer = null; }
+    if (immediate) laneEl.style.transitionDuration = '0s';
+  }
+  function hideMoment() {
+    if (!momentEl) return;
+    momentEl.classList.remove('show');
+    if (voice === 'moment') voice = null;
+    if (momentTimer) { clearTimeout(momentTimer); timers.delete(momentTimer); momentTimer = null; }
+  }
+
+  function holdFor(text) {
+    return Math.max(HOLD_MIN, Math.min(HOLD_MAX, (text || '').length * MS_PER_CHAR));
+  }
+
+  /* --- THE LANE ------------------------------------------------------------
+     opts: { hold  ms, overriding the proportional default
+             figures  true for the numeric close-of-episode beat
+             light    true on a light ground (tree, hike, pale reaction)
+             onDone   called after the sentence has fully dissolved }
+
+     Returns the total ms the sentence will occupy, so a caller can schedule
+     what follows without duplicating the arithmetic. */
+  function lane(text, opts) {
+    opts = opts || {};
+    if (!text) { hideLane(); return 0; }
+    /* #info and the Lane are never both wanted: one is for the sofa and the
+       other is for somebody at a keyboard, and they occupy the same corner. */
+    if (document.body.classList.contains('showinfo') ||
+        document.body.classList.contains('showabout')) return 0;
+
+    hideMoment();
+    const el = lane_();
+    el.style.transitionDuration = '';
+    el.classList.toggle('figures', !!opts.figures);
+    el.classList.toggle('on-light', !!opts.light);
+    laneSpan.textContent = text;
+
+    const hold = opts.hold != null ? opts.hold : holdFor(text);
+    voice = 'lane';
+    /* One frame between attaching the text and lighting it, or the browser
+       coalesces the two and the fade never runs. */
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (voice === 'lane') {
+        el.classList.add('show');
+        document.body.classList.add('lane-lit');
+      }
+    }));
+
+    laneTimer = after(FADE_IN + hold, () => {
+      laneTimer = null;
+      hideLane();
+      if (opts.onDone) after(FADE_OUT, opts.onDone);
+    });
+    return FADE_IN + hold + FADE_OUT;
+  }
+
+  /* --- clear-space search --------------------------------------------------
+     Lifted from plume's peak call-out routine, which offers seven candidate
+     positions around a marker and takes the first that does not collide. It
+     was the best-behaved label code on the wall and it becomes the shared
+     primitive, so Moments and Marks place themselves the same way everywhere.
+
+     Candidates are tried in order of how little they obscure: above first,
+     because on every page in the rotation the interesting thing is below or
+     beside the subject rather than above it. */
+  const CANDIDATES = [
+    [ 0,  -1.15], [ 1.05, -0.75], [-1.05, -0.75],
+    [ 1.20,  0.10], [-1.20,  0.10],
+    [ 0.90,  0.85], [-0.90,  0.85],
+  ];
+  function place(subject, w, h, avoid) {
+    const W = innerWidth || 1920, H = innerHeight || 1080;
+    const pad = Math.max(24, W * 0.012);
+    if (!subject) return { x: W / 2, y: H * 0.42 };
+    const hits = (x, y) => {
+      if (x - w / 2 < pad || x + w / 2 > W - pad) return true;
+      if (y - h / 2 < pad || y + h / 2 > H - pad) return true;
+      for (const a of (avoid || [])) {
+        if (Math.abs(a.x - x) < (a.r || 0) + w / 2 &&
+            Math.abs(a.y - y) < (a.r || 0) + h / 2) return true;
+      }
+      return false;
+    };
+    for (const [dx, dy] of CANDIDATES) {
+      const x = subject.x + dx * (w / 2 + pad * 2);
+      const y = subject.y + dy * (h / 2 + pad * 2);
+      if (!hits(x, y)) return { x, y };
+    }
+    return { x: W / 2, y: H * 0.42 };   // give up honestly rather than overlap
+  }
+
+  /* --- THE MOMENT ----------------------------------------------------------
+     opts: { exact  place at `at` verbatim, no clear-space search
+             at     {x,y} of the subject in CSS pixels; omit on pages whose
+                    subject is not a place (surnames, reaction, physarum,
+                    kiosk, occasion) and it falls back to upper centre
+             avoid  [{x,y,r}] regions to keep clear
+             light  true on a light ground
+             force  fire even if the gap has not elapsed }
+
+     Returns true if it fired. A Moment that is refused is not an error - the
+     silence is the design. */
+  function moment(text, opts) {
+    opts = opts || {};
+    if (!text) return false;
+    if (document.body.classList.contains('showinfo') ||
+        document.body.classList.contains('showabout')) return false;
+    const now = performance.now();
+    if (!opts.force && now - lastMomentAt < MOMENT_GAP) return false;
+
+    hideLane();
+    const el = moment_();
+    el.classList.toggle('on-light', !!opts.light);
+    el.textContent = text;
+    /* Measure after the text is in, before it is lit, so the placement search
+       works on the real box rather than a guess. */
+    el.style.left = '-9999px'; el.style.top = '-9999px';
+    const r = el.getBoundingClientRect();
+    /* opts.exact puts the Moment exactly where the caller says, with no
+       search. descent needs it: its chase camera holds the rider near frame
+       centre all run, so its Moments are bound to the empty sky above the
+       ridgeline rather than offset from a subject. Searching around a fixed
+       point would only push them back down toward the rider. */
+    const p = opts.exact && opts.at ? opts.at
+            : place(opts.at, r.width, r.height, opts.avoid);
+    el.style.left = p.x + 'px';
+    el.style.top  = p.y + 'px';
+
+    lastMomentAt = now;
+    voice = 'moment';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (voice === 'moment') el.classList.add('show');
+    }));
+    momentTimer = after(MOMENT_HOLD, () => { momentTimer = null; hideMoment(); });
+    return true;
+  }
+
+  /* --- THE SIGNATURE -------------------------------------------------------
+     Legal attribution and nothing else. Permanent, on the five pages that owe
+     one: plume, weather, precip, reading, hike.
+     opts: { plated true where the ground under the bottom-left corner is busy
+                    - hike's cream topo and precip's radar cores both defeat an
+                      unplated line
+             light  true on a light ground } */
+  function signature(text, opts) {
+    opts = opts || {};
+    if (!sigEl) {
+      sigEl = document.createElement('div');
+      sigEl.className = 'signature';
+      document.body.appendChild(sigEl);
+    }
+    sigEl.textContent = text || '';
+    sigEl.classList.toggle('plated', !!opts.plated);
+    sigEl.classList.toggle('on-light', !!opts.light);
+    sigEl.style.display = text ? '' : 'none';
+    return sigEl;
+  }
+
+  /* --- THE INSTRUMENT ------------------------------------------------------
+     Permanent, continuously visible, and recomputed every frame. The review
+     that removed these was wrong about why the old captions failed: they
+     failed because they were STATIC, not because they were permanent. On
+     surnames and on descent the permanent LIVE readout was the layer telling
+     the truth while the prose was the layer lying.
+
+     spec = {
+       hero  {v, u}          the one number the page is most about
+       rows  [{k, v}]        label / value pairs, laid out in two columns
+       keys  [{c, v, n}]     a colour key: swatch, value, note
+       strip {k, items[{c,label}]}   a compact one-row colour ramp
+       cap   string          one small caption line, e.g. "PASS 1 / 2"
+       cols  1 | 2           default 2
+       light true on a light ground
+       place 'tl' | 'tr' | 'bl'   default 'tl'
+     }
+     Pass null to hide it.
+
+     CALL THIS EVERY FRAME. It rebuilds the DOM only when the SHAPE changes -
+     a different set of row labels, a key appearing - and otherwise writes
+     only the values that actually differ from what is already on screen. A
+     page that re-rendered eight rows sixty times a second would spend more
+     time in layout than in its own simulation. */
+  /* A page may run more than one panel - plume reserves a rail down the
+     right for its leak table and a band along the bottom for the survey
+     scalars, two separate pieces of furniture with different shapes. Each
+     spec.id gets its own element, shape cache and diff state; the default id
+     keeps the old single-panel behaviour.
+
+     spec.mount names a container (a selector or an element). A mounted panel
+     drops its own plate, border and fixed position - the container IS the
+     furniture, and a plate inside a plate is how the old wall got its
+     piecemeal look. spec.flow lays the rows out in one wrapping line instead
+     of the two-column grid, which is what a wide flat band wants. */
+  const instrs = {};
+
+  function instrument(spec) {
+    const id = (spec && spec.id) || 'main';
+    let inst = instrs[id];
+    if (!spec) { if (inst && inst.el) inst.el.style.display = 'none'; return; }
+    if (!inst) inst = instrs[id] = { el: null, shape: '', nodes: null, last: null };
+    if (!inst.el) {
+      inst.el = document.createElement('div');
+      inst.el.className = 'instr';
+      let host = document.body;
+      if (spec.mount) {
+        const m = typeof spec.mount === 'string' ? document.querySelector(spec.mount) : spec.mount;
+        if (m) { host = m; inst.el.classList.add('mounted'); }
+      }
+      host.appendChild(inst.el);
+    }
+    const instrEl = inst.el;
+    instrEl.style.display = '';
+    instrEl.classList.toggle('on-light', !!spec.light);
+    instrEl.classList.toggle('tr', spec.place === 'tr');
+    instrEl.classList.toggle('bl', spec.place === 'bl');
+
+    const rows = spec.rows || [], keys = spec.keys || [];
+    const shape = [
+      spec.hero ? 'H' + (spec.hero.u || '') : '-',
+      rows.map(r => r.k).join('|'),
+      'k' + keys.length,
+      (spec.strips || (spec.strip ? [spec.strip] : []))
+        .map(sp => 's' + (sp.items || []).length + (sp.k || '')).join('~') || '-',
+      spec.cap != null ? (spec.capTop ? 'C' : 'c') : '-',
+      spec.cols === 1 ? '1' : '2',
+    ].join('/');
+
+    if (shape !== inst.shape) {
+      instrEl.textContent = '';
+      inst.nodes = { hero: null, heroU: null, rows: [], keys: [], cap: null, strip: null };
+      inst.last  = { hero: null, rows: [], keys: [], cap: null };
+      const instrNodes = inst.nodes;
+
+      if (spec.hero) {
+        const h = el('div', 'hero');
+        instrNodes.hero  = h.appendChild(el('span', 'hv'));
+        instrNodes.heroU = h.appendChild(el('span', 'hu'));
+        instrNodes.heroU.textContent = spec.hero.u || '';
+        instrEl.appendChild(h);
+      }
+      if (rows.length) {
+        const g = el('div', 'grid' + (spec.cols === 1 ? ' one' : '') + (spec.flow ? ' flow' : ''));
+        for (const r of rows) {
+          const row = el('div', 'row');
+          row.appendChild(el('span', 'k')).textContent = r.k;
+          instrNodes.rows.push(row.appendChild(el('span', 'v')));
+          g.appendChild(row);
+        }
+        instrEl.appendChild(g);
+      }
+      if (keys.length) {
+        if (rows.length || spec.hero) instrEl.appendChild(el('div', 'sep'));
+        const kw = el('div', 'keys');
+        for (const k of keys) {
+          const kr = el('div', 'keyrow');
+          const sw = kr.appendChild(el('span', 'sw'));
+          sw.style.background = k.c || 'transparent';
+          /* Value and note stack vertically beside the swatch: side by side
+             they need ~700 px, which a 595 px rail does not have. */
+          const kt = kr.appendChild(el('span', 'kt'));
+          const kv = kt.appendChild(el('span', 'kv'));
+          const kn = kt.appendChild(el('span', 'kn'));
+          instrNodes.keys.push({ sw: sw, v: kv, n: kn, row: kr });
+          kw.appendChild(kr);
+        }
+        instrEl.appendChild(kw);
+      }
+      /* A page may need more than one colour ramp - plume keys both its
+         clean-air passes and its leak-evidence heat. spec.strips is the
+         list; spec.strip stays as sugar for one. */
+      const stripSpecs = spec.strips || (spec.strip ? [spec.strip] : []);
+      if (stripSpecs.length) {
+        if (rows.length || keys.length || spec.hero) instrEl.appendChild(el('div', 'sep'));
+        for (const sp of stripSpecs) {
+          const st = el('div', 'strip');
+          st.appendChild(el('span', 'k')).textContent = sp.k || '';
+          const sws = st.appendChild(el('div', 'sws'));
+          for (const it of (sp.items || [])) {
+            const cell = sws.appendChild(el('div', 'st'));
+            const sw = cell.appendChild(document.createElement('i'));
+            /* ring:true keys a map MARKER (plume's indication circle):
+               same slot, drawn hollow the way it appears on the ground. */
+            if (it.ring) sw.className = 'ring', sw.style.borderColor = it.c || 'transparent';
+            else sw.style.background = it.c || 'transparent';
+            const lb = cell.appendChild(document.createElement('b'));
+            lb.textContent = it.label == null ? '' : String(it.label);
+          }
+          instrEl.appendChild(st);
+        }
+      }
+      /* capTop puts the caption ABOVE its content - a heading rather than a
+         footnote. Wanted where the caption names a LIST (Joe, 2026-08-29:
+         "move the most common species title to the top of the column"),
+         since a label under eight rows reads as belonging to nothing. */
+      if (spec.cap != null) {
+        instrNodes.cap = el('div', spec.capTop ? 'cap top' : 'cap');
+        if (spec.capTop) instrEl.insertBefore(instrNodes.cap, instrEl.firstChild);
+        else instrEl.appendChild(instrNodes.cap);
+      }
+      inst.shape = shape;
+    }
+    const instrNodes = inst.nodes, instrLast = inst.last;
+
+    /* --- write only what changed ------------------------------------- */
+    if (instrNodes.hero && spec.hero) {
+      const v = String(spec.hero.v);
+      if (v !== instrLast.hero) { instrNodes.hero.textContent = v; instrLast.hero = v; }
+    }
+    for (let i = 0; i < instrNodes.rows.length; i++) {
+      const v = String(rows[i] ? rows[i].v : '');
+      if (v !== instrLast.rows[i]) { instrNodes.rows[i].textContent = v; instrLast.rows[i] = v; }
+    }
+    for (let i = 0; i < instrNodes.keys.length; i++) {
+      const k = keys[i] || {}, n = instrNodes.keys[i];
+      const sig = (k.c || '') + '\x1f' + (k.v || '') + '\x1f' + (k.n || '') + '\x1f' + (k.bg || '');
+      if (sig !== instrLast.keys[i]) {
+        n.sw.style.background = k.c || 'transparent';
+        n.v.textContent = k.v == null ? '' : String(k.v);
+        n.n.textContent = k.n == null ? '' : String(k.n);
+        /* A row may carry a VERDICT ground - plume tints its leak table
+           green/red at the close of a survey. Only rows that ask get one. */
+        n.row.style.background = k.bg || '';
+        n.row.classList.toggle('verdict', !!k.bg);
+        instrLast.keys[i] = sig;
+      }
+    }
+    if (instrNodes.cap) {
+      const c = String(spec.cap);
+      if (c !== instrLast.cap) { instrNodes.cap.textContent = c; instrLast.cap = c; }
+    }
+  }
+  function el(tag, cls) { const e = document.createElement(tag); e.className = cls; return e; }
+
+  /* --- the episode helper --------------------------------------------------
+     Most pages want exactly this: at the start of an episode, wait a beat so
+     the picture establishes alone, then say one sentence. Pulling it here
+     stops thirteen pages each choosing their own opening delay. */
+  const ARRIVE_MS = 2000;
+  function episode(text, opts) {
+    opts = opts || {};
+    clearEpisode();
+    if (!text) return;
+    after(opts.arrive != null ? opts.arrive : ARRIVE_MS, () => lane(text, opts));
+  }
+  /* Cancel only the language schedule, leaving a page's own timers alone. */
+  function clearEpisode() { hideLane(); hideMoment(); }
+
+  /* =====================================================================
+     THE RING, AND WHAT THE VIEWER HAS ASKED OF IT     (Joe, 2026-09-10)
+
+     Until now the rotation was a fact about the code: seventeen pages, each
+     naming the next in its own CONFIG, each deciding for itself how many runs
+     or how many minutes it was worth. Turning one off meant editing a file.
+
+     Now it is a fact about the SETTINGS, and setup.html lets a viewer change
+     them from the sofa. Three questions, which is exactly what Joe asked for:
+       - is this piece on at all?
+       - for a piece that ENDS - a hike arrives, a race finishes, a survey is
+         scored - how many times round before the wall moves on?
+       - for a piece that never ends - the ecology, the clocks - how long to
+         let it run, with "leave it on" as a real answer.
+
+     WHERE THE SETTINGS LIVE. localStorage, which every page on this wall
+     already shares: verified on the Pi that kiosk.html can read the keys
+     hike.html, plume.html, weather.html and reading.html wrote, because
+     Chromium treats file:// pages as one origin for storage. No server, no
+     file the browser cannot write, nothing to keep in step.
+
+     WHAT A PAGE HAS TO DO. Two small things, and they are the same two on
+     every page: ask repeats() instead of its own per-turn constant, and hand
+     on to nextPage() instead of its own nextPage string. A page that does
+     neither still works exactly as it did.
+     ===================================================================== */
+  const SETTINGS_KEY = 'wall:settings';
+
+  /* kind 'runs' = the piece has a discrete end and repeats a whole number of
+     times. kind 'time' = it never ends, so it is given minutes. `unit` is the
+     word the setup screen puts next to the number, and it has to be the RIGHT
+     word - "3 surveys" and "3 runs" are different promises. */
+  /* `loop` says HOW a piece repeats, and the two ways are genuinely different.
+
+     'inside' - the page already runs several episodes per visit and counts
+       them itself. It just needs to be told the number, so it reads
+       Wall.repeats() where it used to read its own constant. Nothing reloads,
+       so there is no flash between episodes.
+
+     'reload' - the page does exactly one thing per visit and then leaves. The
+       only way to have it twice is to send the viewer back to it, so the count
+       is kept here, across the navigation, and nextPage() returns the page
+       itself until it has been seen enough times. The page needs no code at
+       all for this, which is why five pieces got the feature for free. */
+  const RING = [
+    { file:'kiosk.html',         name:'Mosaic Wall',      kind:'runs', unit:'works',      def:3,  loop:'inside' },
+    { file:'gravity.html',       name:'Accretion',        kind:'runs', unit:'runs',       def:1,  loop:'inside' },
+    { file:'surnames.html',      name:'Patriline',        kind:'runs', unit:'cycles',     def:1,  loop:'inside' },
+    { file:'physarum.html',      name:'Slime Network',    kind:'time', unit:'minutes',    def:6,  loop:'time'   },
+    /* Both of these used to show a fixed preset for 46 s and hand on. They now
+       settle and then WANDER their parameters, so neither has a discrete end
+       any more and the setup screen gives them minutes (Joe, 2026-09-13). */
+    { file:'reaction.html',      name:'Turing Patterns',  kind:'time', unit:'minutes',    def:6,  loop:'time'   },
+    { file:'weather.html',       name:'Sun and Wind',     kind:'runs', unit:'tours',      def:1,  loop:'reload' },
+    { file:'plume.html',         name:'Finding the Leak', kind:'runs', unit:'surveys',    def:2,  loop:'inside' },
+    { file:'hike.html',          name:'The Long Walk',    kind:'runs', unit:'walks',      def:1,  loop:'reload' },
+    /* ONE MAPLE, NOT TWO (Joe, 2026-09-12). tree.html - "Heartwood", the
+       pen-and-ink tree that grew its own geometry in JS - is retired from the
+       ring in favour of tree_growth.html, which replays the real MATLAB model's
+       output. The file is still on disk and still reachable by typing its URL;
+       it is simply not a stop any more, so it never comes round and never
+       appears on the setup screen. */
+    { file:'tree_growth.html',   name:'Sugar Maple',      kind:'runs', unit:'runs',       def:1,  loop:'inside' },
+    { file:'descent.html',       name:'The Fastest Line', kind:'runs', unit:'descents',   def:1,  loop:'reload' },
+    { file:'reading.html',       name:'Reading',          kind:'runs', unit:'passages',   def:1,  loop:'reload' },
+    { file:'artworks.html',      name:'Open Gallery',     kind:'runs', unit:'works',      def:5,  loop:'inside' },
+    { file:'voyage.html',        name:'The Voyage',       kind:'runs', unit:'tours',      def:1,  loop:'reload' },
+    /* THE SAME MODEL, ONE ANIMAL AT A TIME - a hunter then a grazer, each step
+       played out as SEE / TAKE STOCK / WEIGH / ACT so a decision can be read
+       rather than inferred. Deliberately the stop IMMEDIATELY BEFORE the full
+       simulation (Joe, 2026-09-24): learn what one animal is doing, then watch
+       a world of them do it at eight steps a second. */
+    { file:'ecology_closeup.html', name:'Selection, up close', kind:'time', unit:'minutes', def:15, loop:'time' },
+    { file:'ecology.html',       name:'Selection',        kind:'time', unit:'minutes',    def:15, loop:'time'   },
+    { file:'weatherclocks.html', name:'House Electricity',kind:'time', unit:'minutes',    def:4,  loop:'time'   },
+    /* Today's sky measured in three places within four miles, and - since
+       2026-09-29 - a fourth panel of winds and temperature ALOFT, decoded off
+       the air in this house from airliner position reports. Sits next to the
+       electricity clocks deliberately: both are the house measuring itself.
+
+       kind:'time' because nothing on it finishes. The builder refreshes every
+       ten minutes and the page reloads its own data on the same cadence, so a
+       longer dwell shows genuinely newer numbers rather than the same frame
+       held twice. */
+    { file:'wx_today.html',      name:'Three Skies',      kind:'time', unit:'minutes',    def:6,  loop:'time'   },
+    /* The same receiver, turned round: how loudly seven fixed transmitters
+       arrive over the last week, against the moisture on the path (Joe,
+       2026-09-30). Follows Three Skies because it is the same instrument. */
+    { file:'radio_yard.html',    name:'Radio Yard',       kind:'time', unit:'minutes',    def:5,  loop:'time'   },
+    /* A TEST INSTRUMENT, not a piece: the receiver's noise floor live, for
+       switching things on and off in the room (Joe, 2026-09-30). It is in
+       the ring only because soloNow() refuses a file that is not, and it
+       starts OFF so the rotation never wanders onto it by itself. */
+    { file:'noise_live.html',    name:'Noise Floor Live', kind:'time', unit:'minutes',    def:15, loop:'time', off:true },
+    { file:'strata.html',        name:'Strata',           kind:'runs', unit:'landscapes', def:1,  loop:'reload' },
+    { file:'race.html',          name:'The Race',         kind:'runs', unit:'races',      def:1,  loop:'reload' },
+    { file:'flowers.html',       name:'Flowering',        kind:'runs', unit:'flowers',    def:2,  loop:'inside' },
+    /* The family pictures, ordered by something the pictures themselves
+       measure - colour, compressibility, or the sun's real altitude - and
+       panned as one strip with the seams dissolved (Joe, 2026-09-13). One
+       show per visit; the page advances the theme itself. */
+    { file:'photos.html',        name:'Photographs',      kind:'runs', unit:'shows',      def:1,  loop:'reload' },
+    /* Six minutes of real GOES lightning over wherever the sky was busiest
+       when glm_show.py last looked, replayed pulse by pulse (Joe,
+       2026-09-13). One storm per visit; the run length is the capture's
+       own length, so the page sets WALL_SECONDS_PER_RUN itself. */
+    { file:'lightning.html',     name:'Lantern',          kind:'runs', unit:'storms',     def:1,  loop:'reload' },
+    /* A hanging balance, and what it balances changes with the evening: seven
+       mammals drawn from a stable of twenty-eight, or a fleet of small boats
+       on a perfect binary tree. It never finishes, so it takes minutes
+       (Joe, 2026-09-16). */
+    { file:'mobile.html',        name:'The Balance',      kind:'time', unit:'minutes',    def:5,  loop:'time'   },
+    /* Starlings over a field at dusk (Joe, 2026-10-02). One bird at a time
+       flies a path of its own and the turn runs through the flock as a wave.
+       It never finishes - each eight-minute run fades into a new flock and a
+       new evening - so it takes minutes. No text on it at all, by design. */
+    { file:'murmuration.html',   name:'Murmuration',      kind:'time', unit:'minutes',    def:8,  loop:'time'   },
+    /* Pebbles dropped into a garden pool (Joe, 2026-10-07). Linear water-wave
+       theory solved exactly mode by mode; a new view, sun and sky every 2.5
+       minutes. It never finishes, so it takes minutes. No text on it. */
+    { file:'ripples.html',       name:'Ripples',          kind:'time', unit:'minutes',    def:5,  loop:'time'   },
+    /* A live Vikings or Colorado State game, when there is one (Joe,
+       2026-09-27). The page decides for itself whether to stay: it holds the
+       wall for as long as the game is actually being played, keeps a finished
+       game up for five minutes after the whistle, and stands aside within half
+       a minute when there is nothing on - so on a Tuesday this stop costs the
+       rotation almost nothing.
+
+       kind:'time' with a four-hour dwell is not a viewing preference, it is
+       what stops the STALL WATCHDOG chopping a game back to the mosaic in the
+       middle of the third quarter: stallSecs() budgets a 'time' page by its
+       dwell, and a football game is much the longest thing on this wall. Four
+       hours covers an overtime game and stays under the six-hour STALL_CAP. */
+    { file:'gameday.html',       name:'Game Day',         kind:'time', unit:'minutes',    def:240,loop:'time'   },
+    /* Ballgame: the trait-driven baseball simulation. Its source lives in its
+       own repository (WorldByJoe/baseball-sim) and deploys straight to the Pi
+       with its four bb_*.js engine files, like tree_growth. One whole game
+       per visit, about an hour at 1x; it hands on at the final out and
+       declares its own length through WALL_SECONDS_PER_RUN. */
+    { file:'baseball.html',      name:'Ballgame',         kind:'runs', unit:'games',      def:1,  loop:'reload' },
+  ];
+  /* Pages that are not stops but doorways: they decide whether today is worth
+     a word and then pass the viewer along to whatever ?next= says. The ring
+     must route THROUGH them, not around them, or a birthday goes unsaid. */
+  const PASSTHROUGH = ['occasion.html', 'precip.html'];
+
+  const FOREVER = 1e9;            // "leave it on" - minutes, not a sentinel to test for
+  /* The three frequencies the setup screen offers, as weights. Words on screen,
+     numbers here: "rare" and "often" are things a person can choose from a
+     sofa, 1 and 7 are not. */
+  const WEIGHTS = [1, 3, 7], WEIGHT_DEF = 3;
+  const WEIGHT_WORD = w => (w <= 1 ? 'seldom' : w >= 7 ? 'often' : 'normal');
+
+  function here() {
+    return (location.pathname.split('/').pop() || 'kiosk.html');
+  }
+  function ringIndex(file) {
+    file = (file || '').split('?')[0];
+    for (let i = 0; i < RING.length; i++) if (RING[i].file === file) return i;
+    return -1;
+  }
+
+  let cache = null, optCache = null;
+  function readRaw() {
+    try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}; }
+    catch (e) { return {}; }                        /* a corrupt blob is not worth a dead wall */
+  }
+  function settings() {
+    if (cache) return cache;
+    const saved = readRaw();
+    const out = {};
+    for (const r of RING) {
+      const s = (saved.pages && saved.pages[r.file]) || {};
+      out[r.file] = {
+        on:    s.on === undefined ? !r.off : !!s.on,
+        value: (typeof s.value === 'number' && s.value > 0) ? s.value : r.def,
+        /* HOW OFTEN, when the order is shuffled. A weight, not a percentage:
+           three is normal, so a piece at seven comes up a bit over twice as
+           often as its neighbours and one at one comes up seldom. */
+        weight: (typeof s.weight === 'number' && s.weight > 0) ? s.weight : WEIGHT_DEF,
+      };
+    }
+    cache = out;
+    return out;
+  }
+
+  /* Settings that belong to the WALL rather than to any one piece. Kept in the
+     same blob so there is still one thing to read, one thing to write, and one
+     thing to clear. */
+  function wallOpts() {
+    if (optCache) return optCache;
+    const o = readRaw().opts || {};
+    optCache = {
+      /* Shuffled by default, Joe 2026-09-13. The wall ran in a fixed circuit
+         for a month and the order became part of the furniture; you knew what
+         was coming next, which is the opposite of what the thing is for. */
+      shuffle: o.shuffle === undefined ? true : !!o.shuffle,
+      solo: (o.solo && typeof o.solo.file === 'string' &&
+             typeof o.solo.until === 'number') ? o.solo : null,
+    };
+    return optCache;
+  }
+  function saveSettings(next) {
+    const raw = readRaw();
+    cache = null;
+    try { localStorage.setItem(SETTINGS_KEY,
+            JSON.stringify({ v: 1, pages: next, opts: raw.opts || {} })); }
+    catch (e) { /* private mode, full disk: the wall still runs on the defaults */ }
+  }
+  function saveOpts(next) {
+    const raw = readRaw();
+    optCache = null;
+    try { localStorage.setItem(SETTINGS_KEY,
+            JSON.stringify({ v: 1, pages: raw.pages || {}, opts: next })); }
+    catch (e) {}
+  }
+  function setShuffle(on) { const o = wallOpts(); saveOpts({ shuffle: !!on, solo: o.solo }); }
+
+  /* ---- ONE PIECE, FOR AN HOUR (Joe, 2026-09-13) -------------------------
+     Not a switch that has to be undone: it carries its own expiry, so the wall
+     returns to normal on its own whether or not anybody comes back to the
+     menu. Held as an absolute time rather than a countdown because nothing on
+     this wall is running while it waits - every page navigation is a reload,
+     and a counter would start again each time. */
+  function startSolo(file, minutes) {
+    const o = wallOpts();
+    saveOpts({ shuffle: o.shuffle,
+               solo: { file: file, until: Date.now() + (minutes || 60) * 60000 } });
+  }
+  function clearSolo() { const o = wallOpts(); saveOpts({ shuffle: o.shuffle, solo: null }); }
+  function soloNow() {
+    const o = wallOpts();
+    if (!o.solo) return null;
+    if (Date.now() >= o.solo.until) { clearSolo(); return null; }   /* self-clearing */
+    if (ringIndex(o.solo.file) < 0) { clearSolo(); return null; }
+    return o.solo;
+  }
+  function resetSettings() {
+    cache = null; optCache = null;      /* the options live in the same blob */
+    try { localStorage.removeItem(SETTINGS_KEY); } catch (e) {}
+  }
+
+  /* How many times THIS page should go round before handing on. `fallback` is
+     whatever the page used to use, so a page whose entry is missing - or whose
+     stored value is nonsense - behaves exactly as it always did. */
+  function repeats(fallback) {
+    const r = settings()[here().split('?')[0]];
+    return (r && r.value) ? r.value : fallback;
+  }
+  /* Milliseconds a never-ending page should run. Infinity is deliberately NOT
+     used: it would poison any arithmetic a page does with the result. */
+  function holdMs(fallbackMinutes) {
+    const r = settings()[here().split('?')[0]];
+    const mins = (r && r.value) ? r.value : fallbackMinutes;
+    return mins >= FOREVER ? Number.MAX_SAFE_INTEGER : mins * 60000;
+  }
+  function forever(fallbackMinutes) {
+    const r = settings()[here().split('?')[0]];
+    return ((r && r.value) ? r.value : fallbackMinutes) >= FOREVER;
+  }
+
+  /* =====================================================================
+     HOW LONG THIS PAGE MAY LEGITIMATELY SIT ON THE SAME URL
+
+     watchdog.sh restarts the kiosk when the URL has not changed for
+     STUCK_SECS, on the reasoning that the hand-off chain must have stopped.
+     That reasoning was sound when the number was written and the longest turn
+     on the wall was a few minutes. It is not sound now, and the setup screen
+     is what broke it: it offers dwells of 30, 45, 60, 90, 120, 180 and 240
+     minutes and "leave it on", every one of which is longer than the watchdog
+     tolerates. So the indefinite option Joe asked for could not work, and a
+     piece set to two hours was being chopped back to the mosaic every 25
+     minutes. Nobody noticed because nothing was set that long until now.
+
+     The page is the only thing that knows the answer, so the page is asked.
+     For a piece that never ends, the answer is the dwell the viewer chose.
+     For a piece that ENDS, only the page knows how long one turn takes, so it
+     declares it:
+
+         window.WALL_SECONDS_PER_RUN = 1043;   // ONE run
+
+     and the REPEAT COUNT is applied here, not there - a page cannot know how
+     many times the viewer asked for it, and asking it to guess is how you get
+     two components each half-applying the same multiplier.
+
+     Returning 0 means "no opinion, use your own number", which is the right
+     answer for every page that has not declared anything: nothing regresses.
+
+     WHY THIS IS STILL SAFE. The dangerous case is a page that wedges and then
+     claims a long budget. It cannot: this runs in the page's own JavaScript,
+     so a page with a hung main thread never answers at all, the watchdog's
+     query times out, and the old flat limit applies. What survives is a page
+     that is alive but whose show has quietly stalled - and that is what the
+     cap is for.
+     ===================================================================== */
+  const STALL_CAP = 6 * 3600;     /* Six hours. Long enough that "leave it on"
+                                     means the whole evening - the set is off
+                                     22:00 to 06:00 anyway - and short enough
+                                     that an indefinite page which has silently
+                                     died still recovers the same day. */
+  function stallSecs() {
+    const me = here().split('?')[0];
+    const i = ringIndex(me);
+    if (i < 0) return 0;                       /* not a stop: no opinion */
+    const spec = RING[i], s = settings()[me];
+    /* Under a solo hour the page reloads itself, so the URL never changes and
+       the watchdog would otherwise chop the hour in the middle. Ask for what
+       is left of it. A piece being soloed is deliberately exempt from the
+       switched-off test below: the viewer chose it just now. */
+    const solo = soloNow();
+    if (solo && solo.file === me) {
+      return Math.min(STALL_CAP, Math.max(60, Math.round((solo.until - Date.now()) / 1000)));
+    }
+    if (!s || !s.on) return 0;
+    let secs;
+    if (spec.kind === 'time') {
+      secs = s.value >= FOREVER ? STALL_CAP : Math.round(s.value * 60);
+    } else {
+      const per = Number(global.WALL_SECONDS_PER_RUN) || 0;
+      if (!per) return 0;                      /* has not declared: no opinion */
+      /* WALL_SECONDS_ONCE: what a page spends ONCE per visit however many runs
+         it does - fetching and parsing before the first frame, mostly.
+
+         The budget is wall-clock on one URL, and a page owns that URL from the
+         moment it opens, not from its first frame. tree_growth.html declared
+         only its animation and was killed twice on 2026-09-13 for sitting
+         1,621 s against a declared 1,043 s: it had understated itself by
+         exactly its own load, now 90 s for the largest tree and climbing as
+         the trees get older. Folding that into the PER-RUN figure instead
+         would multiply a one-time cost by the repeat count and hand a
+         genuinely wedged page grace it never earned.
+
+         Optional and additive: absent or zero this is exactly the old sum, so
+         every other stop is unaffected. STALL_CAP still bounds the total. */
+      const once = Math.max(0, Number(global.WALL_SECONDS_ONCE) || 0);
+      secs = Math.round(once + per * (s.value || 1));
+    }
+    return Math.min(STALL_CAP, Math.max(0, secs));
+  }
+
+  /* The next page that is actually switched on.
+
+     Walks the ring forward from wherever we are. If every piece has been
+     turned off - which a viewer is perfectly entitled to do - the wall does
+     NOT stop: it reloads the current page, because a black screen with no way
+     back is not a setting anyone meant to choose.
+
+     A pass-through keeps its place in the chain and has its ?next= rewritten,
+     so turning a piece off cannot silently cost you the birthday greeting. */
+  const RUN_KEY = 'wall:runs';
+  function runCount(file) {
+    try { return (JSON.parse(localStorage.getItem(RUN_KEY) || '{}') || {})[file] || 0; }
+    catch (e) { return 0; }
+  }
+  function setRunCount(file, n) {
+    try {
+      const all = JSON.parse(localStorage.getItem(RUN_KEY) || '{}') || {};
+      if (n) all[file] = n; else delete all[file];
+      localStorage.setItem(RUN_KEY, JSON.stringify(all));
+    } catch (e) {}
+  }
+
+  /* The next piece round the circuit, in the order the RING lists them. */
+  function nextInTurn(from) {
+    const s = settings();
+    for (let k = 1; k <= RING.length; k++) {
+      const cand = RING[(from + k) % RING.length];
+      if (s[cand.file] && s[cand.file].on) return cand.file;
+    }
+    return null;
+  }
+
+  /* The next ENABLED piece in EITHER direction, for the remote's D-pad.
+
+     Joe, 2026-09-13: "if I try to skip to the next one it goes to the next one
+     in the ring, regardless if that one is turned on or not." The wall's own
+     hand-off has always honoured the switches - nextInTurn() has skipped
+     switched-off pieces since the setup screen existed. The arrow keys did
+     not, because every page carried its own flat ROTATION list that knew
+     nothing about the settings. This is the one place that knowledge lives,
+     so the pages can stop guessing.
+
+     Returns null when the current page is not a ring stop at all (a published
+     copy, or the setup screen), and null again when every piece is switched
+     off - in both cases the caller keeps whatever it was going to do. */
+  function step(dir) {
+    const from = ringIndex(here());
+    if (from < 0) return null;
+    const s = settings(), d = dir < 0 ? -1 : 1, n = RING.length;
+    for (let k = 1; k <= n; k++) {
+      const cand = RING[(((from + d * k) % n) + n) % n];
+      if (s[cand.file] && s[cand.file].on) return cand.file;
+    }
+    return null;
+  }
+
+  /* A piece drawn at random, with the frequencies the viewer set.
+
+     NEVER THE SAME PIECE TWICE RUNNING, which is Joe's rule and also the only
+     thing that makes a shuffle feel like a shuffle: a fair draw from nineteen
+     pieces repeats about one time in nineteen, and the one time it does is the
+     only draw anybody notices. The exception is when it is the only piece left
+     switched on, because then the alternative is a black screen. */
+  function pickWeighted(exclude) {
+    const s = settings();
+    let pool = RING.filter(r => s[r.file] && s[r.file].on);
+    if (!pool.length) return null;
+    const others = pool.filter(r => r.file !== exclude);
+    if (others.length) pool = others;
+    let total = 0;
+    for (const r of pool) total += (s[r.file].weight || WEIGHT_DEF);
+    let x = Math.random() * total;
+    for (const r of pool) {
+      x -= (s[r.file].weight || WEIGHT_DEF);
+      if (x <= 0) return r.file;
+    }
+    return pool[pool.length - 1].file;
+  }
+
+  function nextPage(fallback) {
+    /* AN EMPTY nextPage IS NOT A MISSING ONE. The published copies are built
+       by rewriting nextPage to '' to mean "standalone: there is nowhere else",
+       and the pages test it before navigating. Returning a real ring page here
+       would send a visitor on GitHub to a file that repository does not have. */
+    if (fallback === '') return '';
+
+    const me = here().split('?')[0];
+    const s = settings();
+    const from = ringIndex(me);
+    const spec = from >= 0 ? RING[from] : null;
+
+    /* ONE PIECE FOR AN HOUR outranks everything below, including the rule
+       against repeating: repeating is the whole point of it. */
+    const solo = soloNow();
+    if (solo) {
+      if (solo.file === me) return me;
+      const soloBase = (fallback || '').split('?')[0];
+      return PASSTHROUGH.indexOf(soloBase) >= 0 ? soloBase + '?next=' + solo.file : solo.file;
+    }
+
+    /* A piece that does one thing per visit repeats by being visited again. */
+    if (spec && spec.loop === 'reload' && s[me] && s[me].on) {
+      const done = runCount(me) + 1;
+      if (done < s[me].value) { setRunCount(me, done); return me; }
+      setRunCount(me, 0);
+    }
+
+    let target = null;
+    if (from >= 0) {
+      target = wallOpts().shuffle ? pickWeighted(me) : nextInTurn(from);
+    }
+    if (!target) {
+      /* A page that is not a ring stop at all - a pass-through, or something
+         opened by hand - keeps whatever it was going to do. */
+      if (from < 0) return fallback || me;
+      /* Otherwise every single piece is switched off, which a viewer is
+         entitled to do. The wall does not go black: it stays on what it is
+         showing, which is exactly what the setup screen warns will happen. */
+      return me;
+    }
+    const base = (fallback || '').split('?')[0];
+    if (PASSTHROUGH.indexOf(base) >= 0) return base + '?next=' + target;
+    return target;
+  }
+
+  /* Is the piece the viewer is looking at switched off? A page reached by the
+     remote, or left open when its switch was thrown, should not be trapped -
+     it finishes what it is showing and the ring carries on without it. */
+  function enabled(file) {
+    const r = settings()[(file || here()).split('?')[0]];
+    return r ? r.on : true;
+  }
+
+  /* --- the way in --------------------------------------------------------
+     Installed here so all seventeen pages get it without knowing about it.
+     The Fm4 remote's MENU button arrives as ContextMenu; `s` is for anyone at
+     a keyboard. The remote also flips itself into air-mouse mode from time to
+     time (see nav.js), and in that mode no key of any kind arrives - which is
+     why nav.js grows a third on-screen button rather than this being the only
+     door. */
+  function openSetup() {
+    /* ONLY ON THE WALL. The published copies are one page called index.html
+       with no setup screen beside it, so a stray keypress on GitHub must not
+       navigate a visitor into a 404. A page that is not a ring stop is either
+       a published copy or the setup screen itself; neither has anywhere to go. */
+    if (ringIndex(here()) < 0) return;
+    location.href = 'setup.html?back=' + encodeURIComponent(here());
+  }
+  global.addEventListener('keydown', (e) => {
+    if (e.key === 'ContextMenu' || e.key === 's' || e.key === 'S') openSetup();
+  });
+  /* The remote's menu button can also arrive as a contextmenu EVENT rather
+     than a key, depending on which of its two modes it is in. */
+  global.addEventListener('contextmenu', (e) => { e.preventDefault(); openSetup(); });
+
+  /* =====================================================================
+     THE REMOTE'S D-PAD, ONE GRAMMAR FOR EVERY PIECE      (Joe, 2026-10-03)
+
+       left / right   the previous / next piece that is switched on
+       up             the card that says what this piece is, and what was
+                      drawn for this run of it; up again (or down, OK, back)
+                      puts it away
+       down, OK       the piece's own, where it has a use for them
+
+     Until now every page carried its own keydown handler, and five did not
+     carry one at all - Murmuration, Game Day, Three Skies, Radio Yard and the
+     noise instrument ignored the arrows completely, so the remote could not
+     leave them. Ballgame used the four arrows for its own controls and could
+     not be left either. Fixing that page by page is how it broke in the first
+     place, and two of the pages belong to other sessions whose deploys
+     overwrite anything patched in here. So the grammar lives in this file,
+     which every piece loads, and runs in the CAPTURE phase: it hears the key
+     before the page does and, when it acts, the page never sees it.
+
+     A page that needs a key for a moment says so with Wall.claimKeys(fn): fn
+     gets the event and returns true to keep it. The mosaic's rating dial uses
+     it - while the dial is open, up and down move the score.
+
+     Not on the setup screen, which uses the arrows to move between its rows,
+     and left/right do nothing on a page that is not a ring stop (a published
+     copy), where the page keeps whatever it did before. */
+  let keyClaim = null;
+  function claimKeys(fn) { keyClaim = typeof fn === 'function' ? fn : null; }
+
+  function onRemoteKey(e) {
+    if (here() === 'setup.html') return;
+    try { if (keyClaim && keyClaim(e)) return; } catch (err) {}
+    const k = e.key;
+    if (k === 'ArrowUp') {
+      e.preventDefault(); e.stopImmediatePropagation();
+      toggleCard();
+      return;
+    }
+    if (cardOpen && (k === 'ArrowDown' || k === 'Escape' || k === 'Backspace' ||
+                     k === 'Enter' || k === 'NumpadEnter' || k === 'BrowserBack')) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      closeCard();
+      return;
+    }
+    if (k === 'ArrowRight' || k === 'ArrowLeft') {
+      const to = step(k === 'ArrowRight' ? 1 : -1);
+      if (!to) return;                         /* not a ring stop: the page decides */
+      e.preventDefault(); e.stopImmediatePropagation();
+      location.href = to;
+    }
+  }
+  global.addEventListener('keydown', onRemoteKey, true);
+
+  /* ---- THE CARD ----------------------------------------------------------
+     What this piece is, in two or three plain sentences, and the parameters
+     of THIS run - the seed, the drawn traits, the place, the data's date -
+     read live from the page, so a second press a minute later shows the run
+     a minute later. The words live in about.js, one entry per file, so they
+     are written and checked in one place; it is fetched the first time up is
+     pressed, so no page pays for it on load. A piece with no entry still gets
+     its name and what the menu has it set to.
+
+     A CARD surface (DESIGN_STANDARDS §6), sofa tiers only - the sentences at
+     T3, keys at T4 above values at T3. Its plate is .94, denser than
+     --plate-solid's .88: the card lies over whole pages of text (Radio Yard's
+     titles read straight through .88) and has to win outright. It puts itself away after
+     a minute, so a card summoned and forgotten does not sit on the art all
+     evening. */
+  const CARD_MS = 60000;
+  let cardEl = null, cardOpen = false, cardTick = null, cardTimer = null, aboutState = 0;
+
+  function cardCss() {
+    const css = document.createElement('style');
+    /* Tokens with fallbacks: two pieces (Ballgame, Sugar Maple) do not load
+       wall.css, and the card must read the same on them. */
+    css.textContent = `
+      .wallcard{ --cw: calc(100vw / 3840);
+        position:fixed; left:50%; top:50%; transform:translate(-50%,-48%); z-index:10001;
+        width:calc(2300 * var(--cw)); max-height:calc(100vh - 160 * var(--cw)); overflow:hidden;
+        box-sizing:border-box; padding:calc(70 * var(--cw)) calc(96 * var(--cw)) calc(56 * var(--cw));
+        background:rgba(8,11,18,.94); border:1px solid var(--edge, rgba(255,255,255,.16));
+        border-radius:var(--r, calc(16 * var(--cw)));
+        box-shadow:0 calc(10 * var(--cw)) calc(50 * var(--cw)) rgba(0,0,0,.55);
+        color:var(--ink, rgba(238,244,252,.95)); font-family:var(--font-ui, ui-sans-serif, system-ui, sans-serif);
+        opacity:0; pointer-events:none; transition:opacity .45s ease, transform .45s ease; }
+      .wallcard.show{ opacity:1; transform:translate(-50%,-50%); }
+      .wallcard .wc-name{ font:italic 400 var(--t1, calc(108 * var(--cw)))/1.1 Georgia, 'Times New Roman', serif; }
+      .wallcard .wc-set{ margin-top:calc(14 * var(--cw)); font:500 var(--t4, calc(43 * var(--cw)))/1.3 var(--font-num, ui-monospace, Menlo, monospace);
+        letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2, rgba(206,220,240,.80)); }
+      .wallcard .wc-what{ margin-top:calc(40 * var(--cw)); font:300 var(--t3, calc(60 * var(--cw)))/1.42 var(--font-ui, ui-sans-serif, system-ui, sans-serif);
+        max-width:60ch; }
+      .wallcard .wc-rule{ height:1px; background:var(--edge, rgba(255,255,255,.16)); margin:calc(48 * var(--cw)) 0 calc(36 * var(--cw)); }
+      .wallcard .wc-params{ display:grid; grid-template-columns:repeat(3, 1fr); gap:calc(30 * var(--cw)) calc(60 * var(--cw)); }
+      .wallcard .wc-k{ font:500 var(--t4, calc(43 * var(--cw)))/1.3 var(--font-num, ui-monospace, Menlo, monospace);
+        letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2, rgba(206,220,240,.80)); }
+      .wallcard .wc-v{ font:300 var(--t3, calc(60 * var(--cw)))/1.2 var(--font-ui, ui-sans-serif, system-ui, sans-serif);
+        font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+      .wallcard .wc-hint{ white-space:pre; margin-top:calc(46 * var(--cw)); font:400 var(--t4, calc(43 * var(--cw)))/1.3 var(--font-num, ui-monospace, Menlo, monospace);
+        letter-spacing:.08em; color:var(--ink-2, rgba(206,220,240,.80)); opacity:.75; }
+    `;
+    document.head.appendChild(css);
+  }
+
+  /* about.js, fetched once. The cache-buster is the wall's usual one: file://
+     otherwise serves a stale copy for the life of the browser. */
+  function withAbout(cb) {
+    if (aboutState === 2) return cb();
+    if (aboutState === 1) { setTimeout(() => withAbout(cb), 60); return; }
+    aboutState = 1;
+    const s = document.createElement('script');
+    s.src = 'about.js?v=' + Date.now();
+    s.onload = s.onerror = () => { aboutState = 2; cb(); };
+    document.head.appendChild(s);
+  }
+
+  /* What the menu has this piece set to, in the menu's own words. */
+  function menuLine(file) {
+    const i = ringIndex(file);
+    if (i < 0) return '';
+    const spec = RING[i], s = settings()[file] || {};
+    const solo = soloNow();
+    if (solo && solo.file === file) {
+      return 'held on this piece for ' + Math.max(1, Math.round((solo.until - Date.now()) / 60000)) + ' more minutes';
+    }
+    const parts = [];
+    if (s.on === false) parts.push('switched off in the menu');
+    if (spec.kind === 'time') {
+      parts.push(s.value >= FOREVER ? 'left on until you move on' : 'on the wall for ' + s.value + ' ' + (s.value === 1 ? 'minute' : 'minutes'));
+    } else {
+      parts.push(s.value + ' ' + (s.value === 1 ? singular(spec.unit) : spec.unit) + ' per visit');
+    }
+    return parts.join(' · ');
+  }
+  function singular(u) {
+    const irregular = { passages: 'passage', landscapes: 'landscape', surveys: 'survey', descents: 'descent' };
+    return irregular[u] || u.replace(/s$/, '');
+  }
+
+  function fillCard() {
+    const file = here().split('?')[0];
+    const ab = (global.ABOUT && global.ABOUT[file]) || null;
+    const i = ringIndex(file);
+    const name = (ab && ab.title) || (i >= 0 ? RING[i].name : document.title || file);
+    let rows = [];
+    if (ab && typeof ab.params === 'function') {
+      try { rows = (ab.params() || []).filter(r => r && r.k && r.v != null && String(r.v) !== ''); }
+      catch (err) { rows = []; }
+    }
+    const sig = JSON.stringify([name, ab && ab.what, rows, menuLine(file)]);
+    if (sig === cardEl.dataset.sig) return;              /* nothing changed: leave the DOM alone */
+    cardEl.dataset.sig = sig;
+    cardEl.textContent = '';
+    const add = (cls, text) => { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; cardEl.appendChild(d); return d; };
+    add('wc-name', name);
+    const ml = menuLine(file);
+    if (ml) add('wc-set', ml);
+    if (ab && ab.what) add('wc-what', ab.what);
+    if (rows.length) {
+      add('wc-rule');
+      const g = add('wc-params');
+      for (const r of rows.slice(0, 12)) {
+        const cell = document.createElement('div');
+        const kk = document.createElement('div'); kk.className = 'wc-k'; kk.textContent = r.k;
+        const vv = document.createElement('div'); vv.className = 'wc-v'; vv.textContent = String(r.v);
+        cell.appendChild(kk); cell.appendChild(vv); g.appendChild(cell);
+      }
+    }
+    add('wc-hint', i >= 0 ? '▲ close  ·  ◀ ▶ other pieces  ·  menu: settings'
+                          : '▲ close');
+  }
+
+  function openCard() {
+    if (!cardEl) {
+      cardCss();
+      cardEl = document.createElement('div');
+      cardEl.className = 'wallcard';
+      document.body.appendChild(cardEl);
+    }
+    withAbout(() => {
+      fillCard();
+      cardOpen = true;
+      document.body.classList.add('showabout');
+      hideLane(true); hideMoment();
+      requestAnimationFrame(() => requestAnimationFrame(() => { if (cardOpen) cardEl.classList.add('show'); }));
+      clearInterval(cardTick); cardTick = setInterval(() => { if (cardOpen) fillCard(); }, 1000);
+      clearTimeout(cardTimer); cardTimer = setTimeout(closeCard, CARD_MS);
+    });
+  }
+  function closeCard() {
+    cardOpen = false;
+    document.body.classList.remove('showabout');
+    clearInterval(cardTick); cardTick = null;
+    clearTimeout(cardTimer); cardTimer = null;
+    if (cardEl) cardEl.classList.remove('show');
+  }
+  function toggleCard() { if (cardOpen) closeCard(); else openCard(); }
+
+  global.Wall = {
+    lane, moment, signature, instrument, episode, clearEpisode,
+    after, every, clearTimers, holdFor, place,
+    hideLane, hideMoment,
+    RING, PASSTHROUGH, FOREVER, WEIGHTS, WEIGHT_DEF, WEIGHT_WORD,
+    settings, saveSettings, resetSettings, stallSecs,
+    wallOpts, setShuffle, startSolo, clearSolo, soloNow,
+    repeats, holdMs, forever, nextPage, step, enabled, here, openSetup,
+    runCount, setRunCount,
+    claimKeys, openCard, closeCard, toggleCard,
+    ARRIVE_MS, FADE_IN, FADE_OUT, MOMENT_HOLD,
+  };
+})(window);

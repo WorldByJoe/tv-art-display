@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ripples</title>
+<link rel="stylesheet" href="wall.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #fade { position: fixed; inset: 0; background: #000; opacity: 1; transition: opacity 1.5s ease; pointer-events: none; }
+</style>
+<script src="wall.js"></script>
+<script src="nav.js"></script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="fade"></div>
+<script src="three.min.js"></script>
+<script src="ripples_engine.js"></script>
+<script>
+'use strict';
+/* ==========================================================================
+  ripples.html · v0.1 · 2026-10-07
+
+  Pebbles dropped into a garden pool, seen from above (Joe, 2026-10-07: "a
+  pool of water and drop stones into it ... mostly a physics engine to
+  characterize the water behavior"). No text on screen; the up key's card
+  says what this scene drew.
+
+  THE WATER is ripples_engine.js: linear water-wave theory in a 2.56 x 1.28 m
+  pool with vertical walls, every standing-wave mode an exact damped
+  oscillator with the capillary-gravity dispersion relation. Ripples spread,
+  disperse, reflect off the walls and interfere, and nothing here is
+  animated by hand. This file only drops the stones and looks at the water.
+
+  WHAT EACH SCENE DRAWS (a new one every CONFIG.sceneSec):
+    the view, from straight down to 45 degrees off vertical;
+    the sun, from overhead down to 10 degrees above the horizon, any bearing;
+    the sky, from cool blue to warm;
+    the pool's depth (18-45 cm) and floor (limestone, tile or plaster);
+    how often stones fall (one every 2-7 s on average, at random) and, for
+    each, its size (4-25 mm radius), the height it falls from (0.2-1.5 m)
+    and where in the pool it lands.
+
+  HOW THE WATER IS SEEN. The surface is a slope map (the engine's light());
+  each pixel reflects the sky with Fresnel's ratio, glints where it mirrors
+  the sun, and refracts by Snell's law down to the floor or a wall. The floor
+  is lit by the sun's light traced through the same surface, which is what
+  draws the moving bright network on its tiles, and shadowed where the
+  coping blocks the sun. Water absorbs red light faster than blue along both
+  paths.
+
+  WHAT IS NOT PHYSICS. The splash: droplets and the jet are thrown on drawn
+  ballistic paths sized to the stone, and the cavity a stone opens is sized
+  by eye (see the engine). A stone that has sunk is painted onto the floor.
+
+  URL: ?seed=S repeats a sequence of scenes · ?pin stays · ?solo=N holds the
+       wall here N minutes · ?grid=512 cells along the long side ·
+       ?rs=0.5 draws smaller and lets the browser scale up.
+
+  CHANGED
+    v0.1  first draft
+========================================================================== */
+
+const CONFIG = { holdMin: 6, nextPage: '' /* standalone: nowhere to hand on to; start again */, sceneSec: 150 };
+const Q = new URLSearchParams(location.search);
+const PINNED = Q.has('pin');
+const SOLO_MIN = parseFloat(Q.get('solo') || '0');
+/* The wall's Pi and a real computer differ (as in Murmuration): the GitHub
+   build empties nextPage, and a computer gets a 5 mm grid, its own screen
+   resolution and antialiasing; the Pi a 1 cm grid drawn at half size. */
+const STANDALONE = !CONFIG.nextPage;
+const DPR = STANDALONE ? Math.min(2, window.devicePixelRatio || 1) : 1;
+const RS = Math.min(1, Math.max(0.3, parseFloat(Q.get('rs') || (STANDALONE ? '1' : '0.5'))));
+const NX = parseInt(Q.get('grid') || (STANDALONE ? '512' : '256'), 10), NZ = NX / 2;
+const LX = 2.56, LZ = 1.28, CELL = LX / NX;
+const FB = 0.04;                                  // coping above the water, m
+const SEED0 = Q.has('seed') ? parseInt(Q.get('seed'), 10) : (Date.now() % 1e9);
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const lerp = (a, b, t) => a + (b - a) * t;
+const lin = (c) => Math.pow(c, 2.2);              // display value -> linear light
+const rgbLin = (r, g, b) => new THREE.Color(lin(r), lin(g), lin(b));
+
+/* ------------------------------------------------------------- renderer */
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: STANDALONE, powerPreference: 'high-performance' });
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 16 / 9, 0.05, 60);
+
+/* ------------------------------------------------------------- the water */
+const waveData = new Uint8Array(NX * NZ * 4);
+const waveTex = new THREE.DataTexture(waveData, NX, NZ, THREE.RGBAFormat, THREE.UnsignedByteType);
+waveTex.magFilter = waveTex.minFilter = THREE.LinearFilter;
+waveTex.wrapS = waveTex.wrapT = THREE.ClampToEdgeWrapping;
+waveTex.generateMipmaps = false;
+
+const floorCan = document.createElement('canvas');
+floorCan.width = STANDALONE ? 2048 : 1024; floorCan.height = floorCan.width / 2;
+const floorCtx = floorCan.getContext('2d');
+const floorTex = new THREE.CanvasTexture(floorCan);
+floorTex.flipY = false;                            // canvas row 0 is the pool's z = -LZ/2 edge
+floorTex.minFilter = THREE.LinearMipmapLinearFilter; floorTex.anisotropy = 4;
+
+const waterMat = new THREE.ShaderMaterial({
+  uniforms: {
+    waveTex: { value: waveTex }, floorTex: { value: floorTex },
+    halfL: { value: new THREE.Vector2(LX / 2, LZ / 2) }, depth: { value: 0.3 },
+    sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color(1, 1, 1) },
+    sunT: { value: new THREE.Vector3(0, -1, 0) }, E0: { value: 1 },
+    skyZen: { value: new THREE.Color() }, skyHor: { value: new THREE.Color() },
+    ambient: { value: new THREE.Color() }, wallCol: { value: new THREE.Color() },
+    absorb: { value: new THREE.Vector3(0.45, 0.09, 0.05) }, murk: { value: 0.35 },
+  },
+  vertexShader: `
+    varying vec3 vW;
+    void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `
+    uniform sampler2D waveTex, floorTex;
+    uniform vec2 halfL; uniform float depth, E0, murk;
+    uniform vec3 sunDir, sunCol, sunT, skyZen, skyHor, ambient, wallCol, absorb;
+    varying vec3 vW;
+    vec3 sky(vec3 d) { float u = clamp(d.y, 0.0, 1.0); return mix(skyHor, skyZen, pow(u, 0.55)); }
+    void main() {
+      vec2 uv = (vW.xz + halfL) / (2.0 * halfL);
+      vec4 w = texture2D(waveTex, uv);
+      vec2 sl = (w.rg * 255.0 - 128.0) / 254.0;            // d(eta)/dx, d(eta)/dz
+      vec3 n = normalize(vec3(-sl.x, 1.0, -sl.y));
+      vec3 V = normalize(vW - cameraPosition);
+      float ci = clamp(dot(-V, n), 0.0, 1.0);
+      float F = 0.02 + 0.98 * pow(1.0 - ci, 5.0);            // Fresnel (Schlick)
+      vec3 Rd = reflect(V, n);
+      float sd = max(dot(Rd, sunDir), 0.0);
+      vec3 refl = sky(Rd) + sunCol * (pow(sd, 6000.0) * 40.0 + pow(sd, 400.0) * 1.2);
+      /* under the surface: Snell to the floor, or to a wall if it comes first */
+      vec3 T = refract(V, n, 1.0 / 1.333);
+      float tf = depth / max(-T.y, 1e-3);
+      float tw = 1e9; vec3 wn = vec3(0.0);
+      if (T.x > 1e-5) { float t = (halfL.x - vW.x) / T.x; if (t < tw) { tw = t; wn = vec3(-1.0, 0.0, 0.0); } }
+      if (T.x < -1e-5) { float t = (-halfL.x - vW.x) / T.x; if (t < tw) { tw = t; wn = vec3(1.0, 0.0, 0.0); } }
+      if (T.z > 1e-5) { float t = (halfL.y - vW.z) / T.z; if (t < tw) { tw = t; wn = vec3(0.0, 0.0, -1.0); } }
+      if (T.z < -1e-5) { float t = (-halfL.y - vW.z) / T.z; if (t < tw) { tw = t; wn = vec3(0.0, 0.0, 1.0); } }
+      float sunPath = depth / max(-sunT.y, 0.05);
+      vec3 sunAtt = exp(-(absorb + murk) * sunPath);
+      vec3 under; float path;
+      if (tw < tf) {
+        path = tw;
+        float dd = clamp((vW.y + T.y * tw) / -depth, 0.0, 1.0);
+        under = wallCol * (ambient * (1.0 - 0.35 * dd) + sunCol * sunAtt * 0.8 * max(dot(-sunT, wn), 0.0));
+      } else {
+        path = tf;
+        vec2 fuv = (vW.xz + T.xz * tf + halfL) / (2.0 * halfL);
+        vec3 alb = pow(texture2D(floorTex, fuv).rgb, vec3(2.2));
+        float caus = texture2D(waveTex, fuv).b * (255.0 / 64.0);
+        under = alb * (sunCol * sunAtt * E0 * caus + ambient);
+      }
+      vec3 ext = exp(-(absorb + murk) * path);
+      under = under * ext + (1.0 - ext) * (ambient * 0.9 + sunCol * E0 * 0.12) * vec3(0.30, 0.55, 0.60);
+      vec3 col = mix(under, refl, F);
+      #ifdef TONE_MAPPING
+        col = toneMapping(col);
+      #endif
+      gl_FragColor = linearToOutputTexel(vec4(col, 1.0));
+    }`,
+});
+const water = new THREE.Mesh(new THREE.PlaneGeometry(LX, LZ).rotateX(-Math.PI / 2), waterMat);
+scene.add(water);
+
+/* ------------------------------------------------------------- the deck */
+const deckCan = document.createElement('canvas'); deckCan.width = deckCan.height = 512;
+const deckTex = new THREE.CanvasTexture(deckCan);
+deckTex.wrapS = deckTex.wrapT = THREE.RepeatWrapping; deckTex.repeat.set(1 / 1.2, 1 / 1.2); deckTex.encoding = THREE.sRGBEncoding; deckTex.anisotropy = 4;
+const deckShape = new THREE.Shape();
+deckShape.moveTo(-8, -8); deckShape.lineTo(8, -8); deckShape.lineTo(8, 8); deckShape.lineTo(-8, 8); deckShape.lineTo(-8, -8);
+const hole = new THREE.Path();
+hole.moveTo(-LX / 2, -LZ / 2); hole.lineTo(-LX / 2, LZ / 2); hole.lineTo(LX / 2, LZ / 2); hole.lineTo(LX / 2, -LZ / 2); hole.lineTo(-LX / 2, -LZ / 2);
+deckShape.holes.push(hole);
+const deckMat = new THREE.MeshLambertMaterial({ map: deckTex });
+const deck = new THREE.Mesh(new THREE.ShapeGeometry(deckShape).rotateX(-Math.PI / 2), deckMat);
+deck.position.y = FB; scene.add(deck);
+/* the strip of wall between the coping and the water */
+const lipMat = new THREE.MeshLambertMaterial({ color: 0xcccccc, side: THREE.DoubleSide });
+for (const [w, x, z, ry] of [[LX, 0, -LZ / 2, 0], [LX, 0, LZ / 2, 0], [LZ, -LX / 2, 0, Math.PI / 2], [LZ, LX / 2, 0, Math.PI / 2]]) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, FB), lipMat);
+  m.position.set(x, FB / 2, z); m.rotation.y = ry; scene.add(m);
+}
+const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+const skyLight = new THREE.HemisphereLight(0xffffff, 0x887766, 0.4);
+scene.add(sunLight, sunLight.target, skyLight);
+
+/* ------------------------------------------------------------- droplets */
+const DROPS_MAX = 2000;
+const dropPos = new Float32Array(DROPS_MAX * 3), dropSize = new Float32Array(DROPS_MAX);
+const dropGeo = new THREE.BufferGeometry();
+dropGeo.setAttribute('position', new THREE.BufferAttribute(dropPos, 3));
+dropGeo.setAttribute('size', new THREE.BufferAttribute(dropSize, 1));
+const dropMat = new THREE.ShaderMaterial({
+  uniforms: { scale: { value: 1000 }, tint: { value: new THREE.Color(1, 1, 1) } },
+  vertexShader: `
+    attribute float size; uniform float scale;
+    void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = max(2.0, size * scale / -mv.z); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `
+    uniform vec3 tint;
+    void main() { vec2 p = gl_PointCoord * 2.0 - 1.0; float r = dot(p, p); if (r > 1.0) discard;
+      vec3 c = tint * (0.55 + 0.45 * (1.0 - r)) + vec3(1.6) * pow(max(0.0, 1.0 - length(p - vec2(-0.35, -0.35)) * 2.2), 3.0);
+      #ifdef TONE_MAPPING
+        c = toneMapping(c);
+      #endif
+      gl_FragColor = linearToOutputTexel(vec4(c, 1.0)); }`,
+});
+const dropPts = new THREE.Points(dropGeo, dropMat);
+dropPts.frustumCulled = false; scene.add(dropPts);
+let drops = [];                                   // {x,y,z, vx,vy,vz, r}
+
+/* ------------------------------------------------------------- stones */
+const STONE_COLS = [[0.52, 0.50, 0.47], [0.62, 0.55, 0.45], [0.30, 0.29, 0.29], [0.80, 0.78, 0.74], [0.55, 0.36, 0.30], [0.42, 0.45, 0.40]];
+let falling = [], sunk = [];
+function makeStone(R, r) {
+  const g = new THREE.SphereGeometry(1, 18, 12);
+  const p = g.attributes.position, sy = 0.55 + 0.3 * r(), sz = 0.75 + 0.25 * r();
+  const ph = [r() * 6, r() * 6, r() * 6];
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const bump = 1 + 0.08 * Math.sin(3.1 * x + ph[0]) * Math.sin(2.7 * y + ph[1]) + 0.06 * Math.sin(4.3 * z + ph[2]);
+    p.setXYZ(i, x * bump * R, y * bump * R * sy, z * bump * R * sz);
+  }
+  g.computeVertexNormals();
+  const c = STONE_COLS[Math.floor(r() * STONE_COLS.length)], v = 0.85 + 0.3 * r();
+  const mat = new THREE.MeshLambertMaterial({ color: rgbLin(c[0] * v, c[1] * v, c[2] * v) });
+  const mesh = new THREE.Mesh(g, mat);
+  mesh.userData.col = c.map((x) => Math.min(1, x * v)); mesh.userData.sy = sy; mesh.userData.sz = sz;
+  return mesh;
+}
+
+/* ------------------------------------------------------------- painting */
+function hex(c) { return 'rgb(' + c.map((x) => Math.round(255 * Math.min(1, Math.max(0, x)))).join(',') + ')'; }
+function paintFloor(kind, r) {
+  const W = floorCan.width, H = floorCan.height, ppm = W / LX, ctx = floorCtx;
+  if (kind === 'limestone') {
+    const base = [0.84, 0.81, 0.74], s = 0.40 * ppm, g = Math.max(1, 0.004 * ppm);
+    ctx.fillStyle = hex(base.map((x) => x * 0.74)); ctx.fillRect(0, 0, W, H);
+    for (let row = 0, y = 0; y < H; row++, y += s) for (let x = (row % 2) * -s / 2; x < W; x += s) {
+      const v = 0.94 + 0.1 * r();
+      ctx.fillStyle = hex([base[0] * v, base[1] * v, base[2] * (v - 0.02 * r())]);
+      ctx.fillRect(x + g / 2, y + g / 2, s - g, s - g);
+    }
+    speckle(ctx, W, H, r, 9000, 0.06);
+  } else if (kind === 'tile') {
+    const s = 0.05 * ppm, g = Math.max(1, 0.003 * ppm);
+    ctx.fillStyle = hex([0.86, 0.88, 0.86]); ctx.fillRect(0, 0, W, H);
+    for (let y = 0; y < H; y += s) for (let x = 0; x < W; x += s) {
+      const v = 0.9 + 0.15 * r();
+      ctx.fillStyle = hex([0.36 * v, 0.62 * v, 0.76 * v]);
+      ctx.fillRect(x + g / 2, y + g / 2, s - g, s - g);
+    }
+  } else {
+    ctx.fillStyle = hex([0.78, 0.84, 0.84]); ctx.fillRect(0, 0, W, H);
+    speckle(ctx, W, H, r, 60000, 0.16);
+  }
+}
+function speckle(ctx, W, H, r, n, a) {
+  for (let i = 0; i < n; i++) {
+    const v = r();
+    ctx.fillStyle = v < 0.5 ? 'rgba(40,50,60,' + a + ')' : 'rgba(255,255,255,' + a + ')';
+    const d = 1 + r() * 2.2; ctx.fillRect(r() * W, r() * H, d, d);
+  }
+}
+function paintDeck(r) {
+  const ctx = deckCan.getContext('2d'), W = 512, s = W / 4;   // 30 cm pavers, four to a 1.2 m repeat
+  const base = [[0.72, 0.64, 0.52], [0.66, 0.66, 0.64], [0.74, 0.70, 0.62]][Math.floor(r() * 3)];
+  ctx.fillStyle = hex(base.map((x) => x * 0.7)); ctx.fillRect(0, 0, W, W);
+  for (let y = 0; y < W; y += s) for (let x = 0; x < W; x += s) {
+    const v = 0.9 + 0.15 * r();
+    ctx.fillStyle = hex(base.map((c) => c * v)); ctx.fillRect(x + 3, y + 3, s - 6, s - 6);
+  }
+  speckle(ctx, W, W, r, 6000, 0.08);
+  deckTex.needsUpdate = true;
+}
+/* a stone at rest on the floor, with its contact shadow away from the sun */
+function paintSunk(st) {
+  const ppm = floorCan.width / LX, ctx = floorCtx;
+  const u = (st.x + LX / 2) * ppm, v = (st.z + LZ / 2) * ppm, R = st.R * ppm;
+  const sh = 0.6 * st.R * ppm * Math.min(3, Math.hypot(S.sunT.x, S.sunT.z) / Math.max(0.2, -S.sunT.y));
+  const ang = Math.atan2(-S.sunT.z, -S.sunT.x);
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(u - Math.cos(ang) * sh, v - Math.sin(ang) * sh, R * 1.05, R * st.sz * 1.05, st.rot, 0, 2 * Math.PI); ctx.fill();
+  const gr = ctx.createRadialGradient(u + Math.cos(ang) * R * 0.35, v + Math.sin(ang) * R * 0.35, R * 0.1, u, v, R * 1.1);
+  gr.addColorStop(0, hex(st.col.map((x) => x * 1.25))); gr.addColorStop(1, hex(st.col.map((x) => x * 0.6)));
+  ctx.fillStyle = gr;
+  ctx.beginPath(); ctx.ellipse(u, v, R, R * st.sz, st.rot, 0, 2 * Math.PI); ctx.fill();
+  ctx.restore();
+  floorTex.needsUpdate = true;
+}
+
+/* ------------------------------------------------------------- a scene */
+let pool = null, S = null, sceneNo = -1;
+window.POOL = {};
+function newScene() {
+  sceneNo++;
+  const seed = (SEED0 + sceneNo * 7919) >>> 0, r = mulberry32(seed);
+  const tilt = 45 * r(), sunEl = 10 + 80 * r(), sunAz = 360 * r(), warm = r();
+  const depth = 0.18 + 0.27 * r();
+  const floorKind = ['limestone', 'tile', 'plaster'][Math.floor(r() * 3)];
+  const meanGap = 2 + 5 * r();
+  const e = sunEl * Math.PI / 180, az = sunAz * Math.PI / 180;
+  const sun = new THREE.Vector3(Math.cos(e) * Math.sin(az), Math.sin(e), Math.cos(e) * Math.cos(az));
+  /* the sun's ray once it is in the water (flat surface) */
+  const ci = sun.y, eta = 1 / 1.333, k = 1 - eta * eta * (1 - ci * ci);
+  const sunT = new THREE.Vector3(-eta * sun.x, -eta * sun.y + (eta * ci - Math.sqrt(k)), -eta * sun.z).normalize();
+  S = { seed, r, tilt, sunEl, sunAz, warm, depth, floorKind, meanGap, sun, sunT, t: 0, nextDrop: 1.2, stones: 0, last: null };
+  pool = new Ripples.Pool({ nx: NX, nz: NZ, dx: CELL, depth });
+  for (const f of falling) { scene.remove(f.mesh); f.mesh.geometry.dispose(); f.mesh.material.dispose(); }
+  falling = []; sunk = []; drops = [];
+
+  /* light and sky: cool is a clear blue day, warm a low golden one; the sun
+     dims a little toward the horizon (more air on the way) */
+  const sunCol = rgbLin(1.0, lerp(0.97, 0.76, warm), lerp(0.93, 0.52, warm)).multiplyScalar(lerp(2.2, 1.6, 1 - Math.min(1, sunEl / 40)));
+  const skyZen = rgbLin(lerp(0.22, 0.42, warm), lerp(0.42, 0.42, warm), lerp(0.78, 0.60, warm));
+  const skyHor = rgbLin(lerp(0.66, 0.98, warm), lerp(0.78, 0.76, warm), lerp(0.92, 0.58, warm));
+  const amb = skyZen.clone().lerp(skyHor, 0.5).multiplyScalar(0.55);
+  const U = waterMat.uniforms;
+  U.depth.value = depth; U.sunDir.value.copy(sun); U.sunT.value.copy(sunT); U.sunCol.value.copy(sunCol).multiplyScalar(0.62);   // a pale floor in full sun washed out to white at 1.0
+  U.skyZen.value.copy(skyZen); U.skyHor.value.copy(skyHor); U.ambient.value.copy(amb);
+  U.wallCol.value.copy(floorKind === 'tile' ? rgbLin(0.40, 0.64, 0.76) : floorKind === 'limestone' ? rgbLin(0.80, 0.77, 0.70) : rgbLin(0.76, 0.82, 0.82));
+  lipMat.color.copy(U.wallCol.value);
+  sunLight.color.copy(sunCol).multiplyScalar(0.55); sunLight.position.copy(sun).multiplyScalar(10);
+  skyLight.color.copy(skyZen.clone().lerp(skyHor, 0.6)); skyLight.intensity = 0.55;
+  dropMat.uniforms.tint.value.copy(skyHor).lerp(new THREE.Color(1, 1, 1), 0.5);
+  scene.background = skyHor;
+  paintFloor(floorKind, r); floorTex.needsUpdate = true;
+  paintDeck(r);
+  placeCamera();
+  /* first light: flat water */
+  pool.synth(); pool.light(waveData, [sun.x, sun.y, sun.z], FB, 1); waveTex.needsUpdate = true;
+  U.E0.value = pool.E0;
+  Object.assign(window.POOL, { scene: sceneNo + 1, seed, tilt, sunEl, sunAz, warm, depth, floorKind, meanGap, stones: 0, last: null });
+}
+
+/* the whole pool and a strip of coping in frame, looking down at tilt
+   degrees from vertical with the far side at the top of the screen */
+const _v = new THREE.Vector3();
+function placeCamera() {
+  const th = S.tilt * Math.PI / 180, dir = new THREE.Vector3(0, Math.cos(th), -Math.sin(th));
+  camera.up.set(0, 0, 1);
+  const M = 0.12, pts = [[-LX / 2 - M, -LZ / 2 - M], [LX / 2 + M, -LZ / 2 - M], [LX / 2 + M, LZ / 2 + M], [-LX / 2 - M, LZ / 2 + M]];
+  let lo = 0.5, hi = 40;
+  for (let it = 0; it < 40; it++) {
+    const d = (lo + hi) / 2;
+    camera.position.copy(dir).multiplyScalar(d); camera.lookAt(0, 0, 0); camera.updateMatrixWorld();
+    let ok = true;
+    for (const [x, z] of pts) { _v.set(x, FB, z).project(camera); if (Math.abs(_v.x) > 1 || Math.abs(_v.y) > 1) { ok = false; break; } }
+    if (ok) hi = d; else lo = d;
+  }
+  camera.position.copy(dir).multiplyScalar(hi); camera.lookAt(0, 0, 0); camera.updateMatrixWorld();
+  window.POOL.camDist = hi;
+}
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setPixelRatio(DPR * RS);
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  dropMat.uniforms.scale.value = (h * DPR * RS) / (2 * Math.tan(camera.fov * Math.PI / 360));
+  if (S) placeCamera();
+}
+
+/* ------------------------------------------------------------- events */
+function dropStone() {
+  const r = S.r;
+  const R = 0.004 * Math.pow(25 / 4, r());                 // 4-25 mm, log-uniform
+  const H = 0.2 + 1.3 * r();
+  const m = 0.06 + R;                                       // keep clear of the walls
+  const x = (r() - 0.5) * (LX - 2 * m), z = (r() - 0.5) * (LZ - 2 * m);
+  const mesh = makeStone(R, r);
+  mesh.position.set(x, H, z); mesh.rotation.set(r() * 6, r() * 6, r() * 6);
+  scene.add(mesh);
+  falling.push({ mesh, R, x, z, vy: 0, spin: [(r() - 0.5) * 8, (r() - 0.5) * 8, (r() - 0.5) * 8], H, rot: r() * Math.PI });
+}
+function impact(f) {
+  const r = S.r, U = -f.vy, R = f.R;
+  const cav = pool.stone(f.x + LX / 2, f.z + LZ / 2, R, U);
+  /* the crown: droplets thrown from the cavity's rim */
+  const n = Math.min(160, Math.round(10 + 90 * (R / 0.02) * Math.sqrt(U / 4)));
+  for (let i = 0; i < n && drops.length < DROPS_MAX; i++) {
+    const a = r() * 2 * Math.PI, vr = U * (0.08 + 0.25 * r()), vy = U * (0.15 + 0.45 * r()) * (0.4 + 0.6 * Math.min(1, R / 0.012));
+    drops.push({ x: f.x + Math.cos(a) * cav.s, y: 0.002, z: f.z + Math.sin(a) * cav.s, vx: Math.cos(a) * vr, vy, vz: Math.sin(a) * vr, r: 0.0006 + 0.0018 * r() * r() });
+  }
+  /* the jet: when the cavity closes, a column shoots up the middle and breaks into drops */
+  const jets = R > 0.006 ? 1 + Math.floor(r() * 3) : 0, delay = 0.05 + 0.6 * Math.sqrt(R);
+  for (let i = 0; i < jets; i++) pendingJet.push({ t: S.t + delay + 0.02 * i, x: f.x, z: f.z, vy: (0.9 + 1.2 * r()) * Math.sqrt(U / 4) * (1 - 0.18 * i), r: Math.min(0.004, R * (0.25 + 0.15 * r())) });
+  const vt = Math.sqrt(1.65 * 9.81 * 2 * R * 1.33 / 0.47);  // terminal speed of a pebble in water
+  sunk.push({ t: S.t + 0.15 + S.depth / vt, x: f.x + (r() - 0.5) * 0.02, z: f.z + (r() - 0.5) * 0.02, R, sz: f.mesh.userData.sz, col: f.mesh.userData.col, rot: f.rot });
+  S.stones++;
+  const mass = 2650 * 4 / 3 * Math.PI * R * R * R * f.mesh.userData.sy * f.mesh.userData.sz;   // granite, the stone's own shape
+  S.last = { R, H: f.H, U, s: cav.s, A: cav.A, share: cav.E / (0.5 * mass * U * U) };
+  window.POOL.stones = S.stones; window.POOL.last = S.last;
+}
+let pendingJet = [];
+
+function stepWorld(dt) {
+  S.t += dt;
+  const g = 9.81;
+  if (S.t >= S.nextDrop) { dropStone(); S.nextDrop = S.t + Math.max(0.5, -Math.log(1 - S.r()) * S.meanGap); }
+  for (let i = falling.length - 1; i >= 0; i--) {
+    const f = falling[i];
+    f.vy -= g * dt; f.mesh.position.y += f.vy * dt;
+    f.mesh.rotation.x += f.spin[0] * dt; f.mesh.rotation.y += f.spin[1] * dt; f.mesh.rotation.z += f.spin[2] * dt;
+    if (f.mesh.position.y - f.R * 0.6 <= 0) {
+      impact(f); scene.remove(f.mesh); f.mesh.geometry.dispose(); f.mesh.material.dispose(); falling.splice(i, 1);
+    }
+  }
+  for (let i = pendingJet.length - 1; i >= 0; i--) {
+    const j = pendingJet[i];
+    if (S.t >= j.t) { drops.push({ x: j.x, y: 0.004, z: j.z, vx: (S.r() - 0.5) * 0.06, vy: j.vy, vz: (S.r() - 0.5) * 0.06, r: j.r }); pendingJet.splice(i, 1); }
+  }
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i];
+    d.vy -= g * dt; d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
+    if (d.y <= 0 && d.vy < 0) {
+      if (Math.abs(d.x) < LX / 2 && Math.abs(d.z) < LZ / 2) pool.cavity(d.x + LX / 2, d.z + LZ / 2, 0.22 * d.r * Math.sqrt(-d.vy), 2.2 * d.r);
+      drops.splice(i, 1);
+    }
+  }
+  for (let i = sunk.length - 1; i >= 0; i--) if (S.t >= sunk[i].t) { paintSunk(sunk[i]); sunk.splice(i, 1); }
+}
+
+function drawDrops() {
+  const n = Math.min(DROPS_MAX, drops.length);
+  for (let i = 0; i < n; i++) {
+    const d = drops[i]; dropPos[3 * i] = d.x; dropPos[3 * i + 1] = d.y; dropPos[3 * i + 2] = d.z; dropSize[i] = 2 * d.r;
+  }
+  dropGeo.setDrawRange(0, n);
+  dropGeo.attributes.position.needsUpdate = true; dropGeo.attributes.size.needsUpdate = true;
+}
+
+/* ------------------------------------------------------------- loop */
+let last = 0, acc = 0, sceneStart = 0, fading = false, fpsN = 0, fpsT = performance.now(), simAcc = 0;
+function frame(now) {
+  const dtF = Math.min(0.1, (now - last) / 1000); last = now;
+  acc += dtF;
+  const s0 = performance.now();
+  let steps = 0;
+  while (acc >= pool.DT && steps < 4) { stepWorld(pool.DT); pool.step(); acc -= pool.DT; steps++; }
+  if (steps === 4) acc = 0;
+  if (steps) {
+    pool.synth();
+    pool.light(waveData, [S.sun.x, S.sun.y, S.sun.z], FB, 1);
+    waveTex.needsUpdate = true;
+  }
+  simAcc += performance.now() - s0;
+  drawDrops();
+  renderer.render(scene, camera);
+  fpsN++;
+  if (now - fpsT > 2000) {
+    window.POOL.fps = Math.round(fpsN * 1000 / (now - fpsT)); window.POOL.simMs = +(simAcc / fpsN).toFixed(2);
+    fpsN = 0; simAcc = 0; fpsT = now;
+  }
+  if (!fading && (now - sceneStart) / 1000 > CONFIG.sceneSec) endScene();
+  requestAnimationFrame(frame);
+}
+
+function holding() {
+  if (PINNED || !CONFIG.nextPage) return true;
+  const so = window.Wall && Wall.soloNow && Wall.soloNow();
+  return !!(so && so.file === 'ripples.html');
+}
+function endScene() {
+  fading = true;
+  document.getElementById('fade').style.opacity = 1;
+  setTimeout(() => {
+    if (!holding() && shownFor() >= dwell()) return handOff();
+    newScene(); sceneStart = performance.now(); fading = false;
+    document.getElementById('fade').style.opacity = 0;
+  }, 1700);
+}
+const shownAt = Date.now();
+const shownFor = () => Date.now() - shownAt;
+const dwell = () => (window.Wall && Wall.holdMs) ? Wall.holdMs(CONFIG.holdMin) : CONFIG.holdMin * 60000;
+let handedOff = false;
+function handOff() {
+  if (handedOff) return; handedOff = true;
+  location.href = (window.Wall && Wall.nextPage) ? Wall.nextPage(CONFIG.nextPage) : CONFIG.nextPage;
+}
+setInterval(() => {
+  if (holding() || fading || handedOff) return;
+  if (shownFor() >= dwell()) { fading = true; document.getElementById('fade').style.opacity = 1; setTimeout(handOff, 1700); }
+}, 5000);
+addEventListener('keydown', (e) => { if (e.key === 'n' && !fading) endScene(); });   // desk testing: next scene
+
+/* ------------------------------------------------------------- boot */
+if (SOLO_MIN > 0 && window.Wall && Wall.startSolo) Wall.startSolo('ripples.html', SOLO_MIN);
+addEventListener('resize', resize);
+resize();
+newScene();
+renderer.render(scene, camera);
+requestAnimationFrame((t) => { last = t; sceneStart = t; document.getElementById('fade').style.opacity = 0; requestAnimationFrame(frame); });
+</script>
+</body>
+</html>
