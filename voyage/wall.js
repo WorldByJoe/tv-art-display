@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v2.0 · 2026-10-03
+   wall.js · v2.3 · 2026-10-07
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,17 +39,18 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.3  a page opened by its folder (every GitHub piece: .../ripples/) is
+           index.html, not the mosaic - the arrows sent published pieces to a
+           ring file that is not there, and the card showed 'Mosaic Wall'
+     v2.2  a card may carry its own hint line (about.js `hint`), for a page that
+           claims keys while its card is open - Ripples' left/right pick a pool shape
+     v2.1  ripples.html joins the ring as 'Ripples', after Murmuration: pebbles
+           dropped in a pool, the water solved mode by mode, a new scene every 2.5 min
      v2.0  THE D-PAD IS THE WALL'S: left/right change piece and up opens the
            piece's card (about.js) on EVERY page, in the capture phase - five
            pages ignored the arrows and Ballgame could not be left at all
      v1.9  murmuration.html joins the ring as 'Murmuration', after The Balance:
            starlings at dusk, no text, a fresh flock and evening every 8 minutes
-     v1.8  baseball.html joins the ring as 'Ballgame', after Game Day: one whole
-           simulated game per visit (its source is the baseball-sim repository)
-     v1.7  noise_live.html in the ring, OFF by default: a test instrument that
-           is only ever brought up by a solo, but a solo needs a ring entry
-     v1.6  radio_yard.html joins the ring as 'Radio Yard', right after Three
-           Skies - the same antenna, turned round to look at the yard itself
 */
 (function (global) {
   'use strict';
@@ -587,6 +588,10 @@
        It never finishes - each eight-minute run fades into a new flock and a
        new evening - so it takes minutes. No text on it at all, by design. */
     { file:'murmuration.html',   name:'Murmuration',      kind:'time', unit:'minutes',    def:8,  loop:'time'   },
+    /* Pebbles dropped into a garden pool (Joe, 2026-10-07). Linear water-wave
+       theory solved exactly mode by mode; a new view, sun and sky every 2.5
+       minutes. It never finishes, so it takes minutes. No text on it. */
+    { file:'ripples.html',       name:'Ripples',          kind:'time', unit:'minutes',    def:5,  loop:'time'   },
     /* A live Vikings or Colorado State game, when there is one (Joe,
        2026-09-27). The page decides for itself whether to stay: it holds the
        wall for as long as the game is actually being played, keeps a finished
@@ -619,8 +624,11 @@
   const WEIGHTS = [1, 3, 7], WEIGHT_DEF = 3;
   const WEIGHT_WORD = w => (w <= 1 ? 'seldom' : w >= 7 ? 'often' : 'normal');
 
+  /* The wall always opens a page by its file name. A published piece is
+     opened by its FOLDER (.../ripples/), which serves index.html; calling
+     that kiosk.html made every published page think it was the mosaic. */
   function here() {
-    return (location.pathname.split('/').pop() || 'kiosk.html');
+    return (location.pathname.split('/').pop() || 'index.html');
   }
   function ringIndex(file) {
     file = (file || '').split('?')[0];
@@ -1128,8 +1136,10 @@
         cell.appendChild(kk); cell.appendChild(vv); g.appendChild(cell);
       }
     }
-    add('wc-hint', i >= 0 ? '▲ close  ·  ◀ ▶ other pieces  ·  menu: settings'
-                          : '▲ close');
+    /* a page that claims keys while its card is open says so in its own hint */
+    const hint = ab && (typeof ab.hint === 'function' ? ab.hint(i >= 0) : ab.hint);
+    add('wc-hint', hint || (i >= 0 ? '▲ close  ·  ◀ ▶ other pieces  ·  menu: settings'
+                                   : '▲ close'));
   }
 
   function openCard() {
