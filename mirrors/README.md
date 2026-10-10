@@ -11,7 +11,7 @@ There is no text on screen, by design. The up arrow (or the on-screen `i`) opens
 
 ## What it is doing
 
-- Every servo turns at 30 rpm from a random starting angle, so at rest the wall is a shimmer with no pattern in it.
+- Every servo turns at 15 rpm from a random starting angle, so at rest the wall is a shimmer with no pattern in it.
 - Up to three velocity waves cross it at once. Each is a sinusoid of servo speed with straight wave fronts, inside a smooth envelope that enters at one edge and leaves at the other, with its own direction, speed, period and size. A servo's angle is the running total of its speed, so a wave leaves the angles it crossed shifted for good.
 - A mirror cut at 45 degrees and seen straight on reflects directions lying along the wall itself: up into the sky, sideways to the horizon, down to the ground. Each disc is flat, so from across a room it is a single dot of whatever it is pointed at.
 - Each scene draws a new viewpoint (up to 35 degrees off the wall's axis), a new direction for the soft light, and a new sky of a few puffy clouds.

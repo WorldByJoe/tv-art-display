@@ -20,7 +20,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  mirrors.html · v0.2 · 2026-10-10
+  mirrors.html · v0.3 · 2026-10-10
 
   A wall of 160 x 90 servos, each turning a small round mirror (Joe,
   2026-10-10). The mirror is not mounted flat: it sits on the end of a shaft
@@ -30,7 +30,7 @@
   hazy light, the ground. Seen from straight in front, a 45-degree mirror
   reflects directions lying along the wall itself.
 
-  THE MOTION. Every servo turns at 30 rpm and starts at a random angle, so
+  THE MOTION. Every servo turns at 15 rpm and starts at a random angle, so
   at rest the wall is a shimmer with no pattern. Over it pass 0-3 velocity
   waves: each is a sinusoid in a smooth envelope, with straight wave fronts,
   that enters at one edge of the field and leaves at the other, with its own
@@ -62,10 +62,13 @@
   card holds for the rest of the visit and keeps the scene's view and sky.
 
   URL: ?seed=S repeats scenes · ?pin stays · ?solo=N holds the wall N min ·
-       ?rpm=30 the mean speed · ?rs=0.5 draws smaller · ?size=1..10
+       ?pace=0.5 every rate (1 = the first draft) · ?rpm=15 the mean speed · ?rs=0.5 draws smaller · ?size=1..10
        (x 9 x 16) · ?waves=on|off · ?start=aligned|random.
 
   CHANGED
+    v0.3  everything at half speed by default (Joe: "soothing, like the pebbles";
+          30 rpm "feels dizzying"): 15 rpm, waves half as fast, as big in rpm
+          and as frequent, twice as long in period; ?pace=1 for the first pace
     v0.2  settings on the card: number of mirrors, waves on/off, aligned or
           random start, each with "any" (the default) drawn per scene
     v0.1  first draft
@@ -84,7 +87,12 @@ const SEED0 = Q.has('seed') ? parseInt(Q.get('seed'), 10) : (Date.now() % 1e9);
 const W = 8.0, H = 4.5, TILT = Math.PI / 4;
 const SIZES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((k) => ({ k, cols: 16 * k, rows: 9 * k }));
 let COLS = 160, ROWS = 90, N = COLS * ROWS, PITCH = W / COLS;
-const RPM0 = parseFloat(Q.get('rpm') || '30');
+/* PACE scales every rate in the piece - servo speed, wave speed, wave size
+   in rpm, how often waves come - and stretches every wave period by 1/PACE,
+   so the same patterns play slower. 0.5 since v0.3 (Joe: "soothing, like the
+   pebbles"); ?pace=1 is the first draft's pace. */
+const PACE = Math.max(0.05, parseFloat(Q.get('pace') || '0.5'));
+const RPM0 = parseFloat(Q.get('rpm') || String(30 * PACE));
 const W0 = RPM0 * 2 * Math.PI / 60;                    // rad/s
 
 function mulberry32(a) {
@@ -250,9 +258,9 @@ let waves = [], S = null, sceneNo = -1;
 function newWave(r) {
   const ang = r() * 2 * Math.PI, dx = Math.cos(ang), dy = Math.sin(ang);
   const proj = RS_EDGE.map(([x, y]) => dx * x + dy * y), sMin = Math.min(...proj), sMax = Math.max(...proj);
-  const c = 0.5 + 2.5 * r(), T = 1.5 + 6.5 * r(), lam = c * T;
+  const c = (0.5 + 2.5 * r()) * PACE, T = (1.5 + 6.5 * r()) / PACE, lam = c * T;   // lam unchanged by PACE
   const Wd = lam * (1.5 + 2.5 * r());
-  return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: 5 + 20 * r(), psi: r() * 2 * Math.PI, age: 0 };
+  return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: (5 + 20 * r()) * PACE, psi: r() * 2 * Math.PI, age: 0 };
 }
 
 /* ------------------------------------------------------------- settings
@@ -274,7 +282,7 @@ function setWaves(r, fresh) {
   waves = [];
   if (S.waves === 'off') return;
   if (!fresh && r() < 0.5) { const w = newWave(r); w.age = (w.sMax - w.sMin) / w.c * r(); waves.push(w); }   // sometimes one already passing
-  S.nextWave = S.t + (fresh ? 0.5 : 2 + 6 * r());
+  S.nextWave = S.t + (fresh ? 0.5 : (2 + 6 * r()) / PACE);
 }
 
 function newScene() {
@@ -286,7 +294,7 @@ function newScene() {
   const lel = (8 + 62 * r()) * Math.PI / 180, laz = (r() * 2 - 1) * 1.75;
   const light = new THREE.Vector3(Math.cos(lel) * Math.sin(laz), Math.sin(lel), Math.cos(lel) * Math.cos(laz));
   const warm = r();
-  S = { seed, r, off, around, light, lel, laz, t: 0, nextWave: 1e9, waveRate: 0.04 + 0.1 * r(),
+  S = { seed, r, off, around, light, lel, laz, t: 0, nextWave: 1e9, waveRate: (0.04 + 0.1 * r()) * PACE,
         size: pick('size', r), waves: pick('waves', r), start: pick('start', r) };
   buildField(SIZES[S.size]);
   setPhases(r);
@@ -392,7 +400,7 @@ function advance(dt) {
   /* waves arrive at random, never more than three at once */
   if (S.waves === 'on' && S.t >= S.nextWave) {
     if (waves.length < 3) waves.push(newWave(S.r));
-    S.nextWave = S.t + Math.max(2, -Math.log(1 - S.r()) / S.waveRate);
+    S.nextWave = S.t + Math.max(2 / PACE, -Math.log(1 - S.r()) / S.waveRate);
   }
   for (const w of waves) w.age += dt;
   waves = waves.filter((w) => w.sMin + w.c * w.age - w.Wd < w.sMax);
