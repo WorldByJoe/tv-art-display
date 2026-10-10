@@ -7,7 +7,7 @@ A bank of servos lying on the ground and facing the sky, each slowly turning a r
 Open `index.html` in a browser. That is the whole of it - one file, no build,
 no server, no keys. It is written for a 4K screen and scales down.
 
-There is no text on screen, by design. The up arrow (or the on-screen `i`) opens a card with the scene's numbers; while it is open, the down arrow steps between the three settings and left and right change the one chosen. In the URL: `?size=1` to `10` (times 9 by 16), `?waves=on|off`, `?start=aligned|random`, `?rpm=` for the median speed; `n` starts a new scene.
+There is no text on screen, by design. The up arrow (or the on-screen `i`) opens a card with the scene's numbers; while it is open, the down arrow steps between eight settings (mirrors, start, servo speed, waves on or off, wave size, period, travel speed and how often waves come) and left and right change the one chosen. In the URL: `?size=1` to `10` (times 9 by 16), `?waves=on|off`, `?start=aligned|random`, `?rpm=` for the median speed; `n` starts a new scene.
 
 ## What it is doing
 

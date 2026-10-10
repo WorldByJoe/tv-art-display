@@ -20,7 +20,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  mirrors.html · v0.5 · 2026-10-10
+  mirrors.html · v0.6 · 2026-10-10
 
   A bank of servos lying on the ground, facing up, each turning a round
   mirror (Joe, 2026-10-10). The mirror is not mounted flat: it sits on the
@@ -71,12 +71,24 @@
   Each also offers "any": a fresh random value every scene. The defaults are
   Joe's: waves on, started aligned, mirror count "any"; a choice made from
   the card holds for the rest of the visit and keeps the scene's view and sky.
+  Five more (Joe: "a control ... to adjust the servo rotation rate and the
+  wave properties"), each a fixed list with the current value in the middle:
+    Servo speed  1.5-6 rpm (3). The waves keep every servo between an eighth
+                 and twice it, as 0.375-6 rpm did at 3.
+    Wave size    x0.5 / x1 / x1.5 of 0.375-1.0 times the servo speed.
+    Wave period  2-8 / 4-16 / 8-32 s.
+    Wave travel  half / as is / double 0.19-1.1 m/s.
+    How often    rarely / now and then / often (x0.5 / x1 / x2 the rate).
+  A wave setting clears the waves passing and brings a fresh one in at once,
+  so the change shows; the servo speed changes on the spot.
 
   URL: ?seed=S repeats scenes · ?pin stays · ?solo=N holds the wall N min ·
        ?rpm=4 the median speed · ?rs=0.5 draws smaller · ?size=1..10
        (x 9 x 16) · ?waves=on|off · ?start=aligned|random.
 
   CHANGED
+    v0.6  five more settings on the card: servo speed, and the waves' size,
+          period, travel speed and how often they come
     v0.5  aligned with waves by default; the bank square to the screen; every
           speed a quarter slower (3 rpm, 0.375-6 rpm, waves 0.19-1.1 m/s)
     v0.4  lying on the ground facing up, seen from 35-65 deg off vertical;
@@ -105,8 +117,7 @@ let COLS = 160, ROWS = 90, N = COLS * ROWS, PITCH = W / COLS;
 /* speeds (Joe, 2026-10-10): 4 rpm with waves keeping every servo between
    0.5 and 8 rpm, then every velocity cut by a quarter: 3 rpm, 0.375-6 rpm
    (each wave 1.125-3 rpm in size, the sum clamped); periods stay 4-16 s */
-const RPM0 = parseFloat(Q.get('rpm') || '3'), RPM_LO = 0.375, RPM_HI = 6;
-const W0 = RPM0 * 2 * Math.PI / 60;                    // rad/s
+const RPM0 = parseFloat(Q.get('rpm') || '3');          // the card's 'Servo speed' starts here
 
 function mulberry32(a) {
   return function () {
@@ -284,22 +295,25 @@ let waves = [], S = null, sceneNo = -1;
 function newWave(r) {
   const ang = r() * 2 * Math.PI, dx = Math.cos(ang), dy = Math.sin(ang);
   const proj = RS_EDGE.map(([x, y]) => dx * x + dy * y), sMin = Math.min(...proj), sMax = Math.max(...proj);
-  const c = 0.1875 + 0.9375 * r(), T = 4 + 12 * r(), lam = c * T;   // 0.19-1.1 m/s
+  const c = (0.1875 + 0.9375 * r()) * choice.wspeed, T = (4 + 12 * r()) * choice.wperiod, lam = c * T;
   const Wd = lam * (1.5 + 2.5 * r());
-  return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: 1.125 + 1.875 * r(), psi: r() * 2 * Math.PI, age: 0 };
+  return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: (0.375 + 0.625 * r()) * choice.wsize * choice.rpm, psi: r() * 2 * Math.PI, age: 0 };
 }
 
 /* ------------------------------------------------------------- settings
    choice.* is what the viewer asked for ('any' or a value); S.* is what this
    scene is actually running. */
-const OPTS = { size: ['any', 0, 1, 2, 3, 4, 5, 6, 7, 8, 9], waves: ['any', 'on', 'off'], start: ['any', 'aligned', 'random'] };
+const OPTS = { size: ['any', 0, 1, 2, 3, 4, 5, 6, 7, 8, 9], waves: ['any', 'on', 'off'], start: ['any', 'aligned', 'random'],
+               rpm: [1.5, 2, 3, 4, 6], wsize: [0.5, 1, 1.5], wperiod: [0.5, 1, 2], wspeed: [0.5, 1, 2], wfreq: [0.5, 1, 2] };
+if (!OPTS.rpm.includes(RPM0)) { OPTS.rpm.push(RPM0); OPTS.rpm.sort((a, b) => a - b); }   // ?rpm= any value
 const choice = {
   size: Q.has('size') ? Math.min(9, Math.max(0, parseInt(Q.get('size'), 10) - 1)) : 'any',
   waves: OPTS.waves.includes(Q.get('waves')) ? Q.get('waves') : 'on',          // Joe's defaults
   start: OPTS.start.includes(Q.get('start')) ? Q.get('start') : 'aligned',
+  rpm: RPM0, wsize: 1, wperiod: 1, wspeed: 1, wfreq: 1,
 };
 const ANY = { size: [0, 1, 2, 3], waves: ['on', 'off'], start: ['aligned', 'random'] };   // what 'any' draws from
-const pick = (key, r) => choice[key] !== 'any' ? choice[key] : ANY[key][Math.floor(r() * ANY[key].length)];
+const pick = (key, r) => choice[key] !== 'any' || !ANY[key] ? choice[key] : ANY[key][Math.floor(r() * ANY[key].length)];
 function setPhases(r) {
   const p0 = r() * 2 * Math.PI;
   for (let k = 0; k < N; k++) phi[k] = S.start === 'aligned' ? p0 : r() * 2 * Math.PI;
@@ -337,16 +351,25 @@ function newScene() {
   describeSettings();
 }
 
-/* the card's three setting rows: what is chosen, and what this scene runs */
+/* the card's setting rows: what is chosen, and what this scene runs */
 let sel = 0, pending = null;
-const SET_KEYS = ['size', 'waves', 'start'];
+const SET_KEYS = ['size', 'start', 'rpm', 'waves', 'wsize', 'wperiod', 'wspeed', 'wfreq'];
+const LABEL = { size: 'Mirrors', start: 'Start', rpm: 'Servo speed', waves: 'Waves', wsize: 'Wave size', wperiod: 'Wave period', wspeed: 'Wave travel', wfreq: 'Waves come' };
 const sizeText = (i) => SIZES[i].rows + ' \u00d7 ' + SIZES[i].cols;
+const f1 = (x) => (Math.round(x * 10) / 10).toString();
 function describeSettings() {
   const c = pending || choice;
-  const word = { size: sizeText, waves: (v) => v, start: (v) => v };
+  const word = {
+    size: sizeText, waves: (v) => v, start: (v) => v,
+    rpm: (v) => f1(v) + ' rpm',
+    wsize: (v) => '\u00b1' + f1(0.375 * v * c.rpm) + '\u2013' + f1(v * c.rpm) + ' rpm',
+    wperiod: (v) => f1(4 * v) + '\u2013' + f1(16 * v) + ' s',
+    wspeed: (v) => (Math.round(0.1875 * v * 100) / 100) + '\u2013' + f1(1.125 * v) + ' m/s',
+    wfreq: (v) => ({ 0.5: 'rarely', 1: 'now and then', 2: 'often' })[v],
+  };
   window.MIRRORS.sel = sel;
   window.MIRRORS.ui = SET_KEYS.map((key) => ({
-    k: { size: 'Mirrors', waves: 'Waves', start: 'Start' }[key],
+    k: LABEL[key],
     v: c[key] === 'any' ? 'any (now ' + word[key](S[key]) + ')' : word[key](c[key]),
   }));
 }
@@ -370,7 +393,8 @@ function applySettings() {
   for (const key of SET_KEYS) if (choice[key] !== before[key]) S[key] = pick(key, r);   // only what the viewer changed
   if (S.size !== was.size) { buildField(SIZES[S.size]); setPhases(r); }
   else if (S.start !== was.start) setPhases(r);
-  if (S.waves !== was.waves || S.start !== was.start || S.size !== was.size) setWaves(r, true);
+  const waveProps = ['wsize', 'wperiod', 'wspeed', 'wfreq'].some((k) => choice[k] !== before[k]);
+  if (S.waves !== was.waves || S.start !== was.start || S.size !== was.size || waveProps) setWaves(r, true);
   sceneStart = performance.now();
   describeSettings();
   if (window.Wall && Wall.openCard && document.body.classList.contains('showabout')) Wall.openCard();
@@ -428,16 +452,16 @@ function advance(dt) {
   /* waves arrive at random, never more than three at once */
   if (S.waves === 'on' && S.t >= S.nextWave) {
     if (waves.length < 3) waves.push(newWave(S.r));
-    S.nextWave = S.t + Math.max(4, -Math.log(1 - S.r()) / S.waveRate);
+    S.nextWave = S.t + Math.max(4, -Math.log(1 - S.r()) / (S.waveRate * choice.wfreq));
   }
   for (const w of waves) w.age += dt;
   waves = waves.filter((w) => w.sMin + w.c * w.age - w.Wd < w.sMax);
-  const K = 2 * Math.PI / 60, WLO = RPM_LO * K, WHI = RPM_HI * K;
+  const K = 2 * Math.PI / 60, W0R = choice.rpm * K, WLO = W0R / 8, WHI = 2 * W0R;   // the servo speed, and its limits
   const ws = waves.map((w) => ({ dx: w.dx, dy: w.dy, lead: w.sMin + w.c * w.age, Wd: w.Wd, k: 2 * Math.PI / w.lam, ph: w.psi - 2 * Math.PI * w.c * w.age / w.lam, A: w.rpm * K }));
   let lo = 1e9, hi = -1e9;
   for (let i = 0; i < N; i++) {
     const x = cellArr[2 * i], y = cellArr[2 * i + 1];
-    let w = W0;
+    let w = W0R;
     for (const q of ws) {
       const s = q.dx * x + q.dy * y, back = q.lead - s;            // how far behind the leading edge
       if (back > 0 && back < q.Wd) w += q.A * 0.5 * (1 - Math.cos(2 * Math.PI * back / q.Wd)) * Math.sin(q.k * s + q.ph);
