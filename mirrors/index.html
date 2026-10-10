@@ -20,7 +20,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  mirrors.html · v0.1 · 2026-10-10
+  mirrors.html · v0.2 · 2026-10-10
 
   A wall of 160 x 90 servos, each turning a small round mirror (Joe,
   2026-10-10). The mirror is not mounted flat: it sits on the end of a shaft
@@ -46,10 +46,28 @@
   Each scene draws the viewer's position (up to 35 degrees off the wall's
   axis), the light's direction, and the clouds.
 
+  SETTINGS (Joe, 2026-10-10: "let them adjust settings ... number of
+  mirrors ... waves turned off ... mirrors aligned or at random ... randomize
+  runs among those settings"). With the card open (up), down steps between
+  three settings and left/right change the one selected:
+    Mirrors  9 x 16 up to 90 x 160, in ten steps. The wall stays 8 x 4.5 m;
+             fewer mirrors are bigger ones (50 cm at 9 x 16), so a wave looks
+             the same at every count, only drawn with coarser dots.
+    Waves    on or off.
+    Start    aligned (every mirror facing the same way, so a passing wave
+             shows as bands) or random (a shimmer; a wave shows only as a
+             change in how fast it twinkles).
+  Each also offers "any": a fresh random value every scene. All three start
+  at "any", so the runs wander among the choices; a choice made from the
+  card holds for the rest of the visit and keeps the scene's view and sky.
+
   URL: ?seed=S repeats scenes · ?pin stays · ?solo=N holds the wall N min ·
-       ?rpm=30 the mean speed · ?rs=0.5 draws smaller.
+       ?rpm=30 the mean speed · ?rs=0.5 draws smaller · ?size=1..10
+       (x 9 x 16) · ?waves=on|off · ?start=aligned|random.
 
   CHANGED
+    v0.2  settings on the card: number of mirrors, waves on/off, aligned or
+          random start, each with "any" (the default) drawn per scene
     v0.1  first draft
 ========================================================================== */
 
@@ -62,11 +80,10 @@ const DPR = STANDALONE ? Math.min(2, window.devicePixelRatio || 1) : 1;
 const RS = Math.min(1, Math.max(0.3, parseFloat(Q.get('rs') || (STANDALONE ? '1' : '0.5'))));
 const SEED0 = Q.has('seed') ? parseInt(Q.get('seed'), 10) : (Date.now() % 1e9);
 
-/* the hardware */
-const COLS = 160, ROWS = 90, N = COLS * ROWS;
-const PITCH = 0.05;                                   // m between servos
-const W = COLS * PITCH, H = ROWS * PITCH;             // 8 m x 4.5 m
-const DISC_R = 0.021, SHAFT = 0.03, TILT = Math.PI / 4;
+/* the hardware: an 8 x 4.5 m wall of k*16 x k*9 servos, k = 1..10 */
+const W = 8.0, H = 4.5, TILT = Math.PI / 4;
+const SIZES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((k) => ({ k, cols: 16 * k, rows: 9 * k }));
+let COLS = 160, ROWS = 90, N = COLS * ROWS, PITCH = W / COLS;
 const RPM0 = parseFloat(Q.get('rpm') || '30');
 const W0 = RPM0 * 2 * Math.PI / 60;                    // rad/s
 
@@ -149,25 +166,36 @@ function paintSky(r, light) {
 }
 
 /* ------------------------------------------------------------- the servos
-   One disc mesh drawn 14,400 times. Each instance carries where its servo
+   One disc mesh drawn once per servo. Each instance carries where its servo
    is and how far it has turned; the vertex shader builds the tilted disc
    and turns it. At phi = 0 the cut face leans toward +x: normal
-   (sin t, 0, cos t); a turn of phi spins everything about the shaft (z). */
+   (sin t, 0, cos t); a turn of phi spins everything about the shaft (z).
+   buildField() makes the instances for a size; disc and shaft scale with
+   the pitch (radius 0.42 of it, shaft 0.6) so the wall keeps its look. */
 const disc = new THREE.CircleGeometry(1, 18);
-const geo = new THREE.InstancedBufferGeometry();
-geo.index = disc.index; geo.setAttribute('position', disc.attributes.position);
-const cellArr = new Float32Array(N * 2), phi = new Float32Array(N);
-for (let j = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++) {
-  const k = j * COLS + i;
-  cellArr[2 * k] = (i + 0.5) * PITCH - W / 2; cellArr[2 * k + 1] = (j + 0.5) * PITCH - H / 2;
+let geo = null, cellArr = null, phi = null, phiAttr = null, mirrors = null;
+function buildField(size) {
+  COLS = size.cols; ROWS = size.rows; N = COLS * ROWS; PITCH = W / COLS;
+  if (mirrors) { scene.remove(mirrors); geo.dispose(); }
+  geo = new THREE.InstancedBufferGeometry();
+  geo.index = disc.index; geo.setAttribute('position', disc.attributes.position);
+  cellArr = new Float32Array(N * 2); phi = new Float32Array(N);
+  for (let j = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++) {
+    const k = j * COLS + i;
+    cellArr[2 * k] = (i + 0.5) * PITCH - W / 2; cellArr[2 * k + 1] = (j + 0.5) * PITCH - H / 2;
+  }
+  geo.setAttribute('cell', new THREE.InstancedBufferAttribute(cellArr, 2));
+  phiAttr = new THREE.InstancedBufferAttribute(phi, 1); phiAttr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('phi', phiAttr);
+  geo.instanceCount = N;
+  mirrorMat.uniforms.discR.value = 0.42 * PITCH; mirrorMat.uniforms.shaft.value = 0.6 * PITCH;
+  mirrors = new THREE.Mesh(geo, mirrorMat);
+  mirrors.frustumCulled = false;
+  scene.add(mirrors);
 }
-geo.setAttribute('cell', new THREE.InstancedBufferAttribute(cellArr, 2));
-const phiAttr = new THREE.InstancedBufferAttribute(phi, 1); phiAttr.setUsage(THREE.DynamicDrawUsage);
-geo.setAttribute('phi', phiAttr);
-geo.instanceCount = N;
 const mirrorMat = new THREE.ShaderMaterial({
   uniforms: {
-    envTex: { value: envTex }, discR: { value: DISC_R }, shaft: { value: SHAFT }, tilt: { value: TILT },
+    envTex: { value: envTex }, discR: { value: 0.021 }, shaft: { value: 0.03 }, tilt: { value: TILT },
     lightDir: { value: new THREE.Vector3(0, 1, 0) }, lightCol: { value: new THREE.Color(1, 1, 1) },
     lightIn: { value: Math.cos(4 * Math.PI / 180) }, lightOut: { value: Math.cos(11 * Math.PI / 180) },
   },
@@ -205,9 +233,6 @@ const mirrorMat = new THREE.ShaderMaterial({
     }`,
   side: THREE.DoubleSide,
 });
-const mirrors = new THREE.Mesh(geo, mirrorMat);
-mirrors.frustumCulled = false;
-scene.add(mirrors);
 /* the panel the servos stand in, and its frame */
 const panelMat = new THREE.MeshLambertMaterial({ color: 0x15171b });
 const panel = new THREE.Mesh(new THREE.PlaneGeometry(W + 0.24, H + 0.24), panelMat);
@@ -230,6 +255,28 @@ function newWave(r) {
   return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: 5 + 20 * r(), psi: r() * 2 * Math.PI, age: 0 };
 }
 
+/* ------------------------------------------------------------- settings
+   choice.* is what the viewer asked for ('any' or a value); S.* is what this
+   scene is actually running. */
+const OPTS = { size: ['any', 0, 1, 2, 3, 4, 5, 6, 7, 8, 9], waves: ['any', 'on', 'off'], start: ['any', 'aligned', 'random'] };
+const choice = {
+  size: Q.has('size') ? Math.min(9, Math.max(0, parseInt(Q.get('size'), 10) - 1)) : 'any',
+  waves: OPTS.waves.includes(Q.get('waves')) ? Q.get('waves') : 'any',
+  start: OPTS.start.includes(Q.get('start')) ? Q.get('start') : 'any',
+};
+const pick = (key, r) => choice[key] !== 'any' ? choice[key] : OPTS[key][1 + Math.floor(r() * (OPTS[key].length - 1))];
+function setPhases(r) {
+  const p0 = r() * 2 * Math.PI;
+  for (let k = 0; k < N; k++) phi[k] = S.start === 'aligned' ? p0 : r() * 2 * Math.PI;
+  phiAttr.needsUpdate = true;
+}
+function setWaves(r, fresh) {
+  waves = [];
+  if (S.waves === 'off') return;
+  if (!fresh && r() < 0.5) { const w = newWave(r); w.age = (w.sMax - w.sMin) / w.c * r(); waves.push(w); }   // sometimes one already passing
+  S.nextWave = S.t + (fresh ? 0.5 : 2 + 6 * r());
+}
+
 function newScene() {
   sceneNo++;
   const seed = (SEED0 + sceneNo * 7919) >>> 0, r = mulberry32(seed);
@@ -239,11 +286,11 @@ function newScene() {
   const lel = (8 + 62 * r()) * Math.PI / 180, laz = (r() * 2 - 1) * 1.75;
   const light = new THREE.Vector3(Math.cos(lel) * Math.sin(laz), Math.sin(lel), Math.cos(lel) * Math.cos(laz));
   const warm = r();
-  S = { seed, r, off, around, light, lel, laz, t: 0, nextWave: 2 + 6 * r(), waveRate: 0.04 + 0.1 * r() };
-  for (let k = 0; k < N; k++) phi[k] = r() * 2 * Math.PI;
-  phiAttr.needsUpdate = true;
-  waves = [];
-  if (r() < 0.5) { const w = newWave(r); w.age = (w.sMax - w.sMin) / w.c * r(); waves.push(w); }   // sometimes one already passing
+  S = { seed, r, off, around, light, lel, laz, t: 0, nextWave: 1e9, waveRate: 0.04 + 0.1 * r(),
+        size: pick('size', r), waves: pick('waves', r), start: pick('start', r) };
+  buildField(SIZES[S.size]);
+  setPhases(r);
+  setWaves(r, S.start === 'aligned');               // aligned: bring a wave in at once, it is what shows
   paintSky(r, light);
   const lc = new THREE.Color(1, lerp(0.97, 0.85, warm), lerp(0.92, 0.72, warm));
   mirrorMat.uniforms.lightDir.value.copy(light);
@@ -251,7 +298,55 @@ function newScene() {
   sunLight.position.copy(light).multiplyScalar(20); sunLight.color.copy(lc);
   placeCamera();
   Object.assign(window.MIRRORS, { scene: sceneNo + 1, seed, off: off * 180 / Math.PI, lightEl: lel * 180 / Math.PI, lightAz: laz * 180 / Math.PI });
+  describeSettings();
 }
+
+/* the card's three setting rows: what is chosen, and what this scene runs */
+let sel = 0, pending = null;
+const SET_KEYS = ['size', 'waves', 'start'];
+const sizeText = (i) => SIZES[i].rows + ' \u00d7 ' + SIZES[i].cols;
+function describeSettings() {
+  const c = pending || choice;
+  const word = { size: sizeText, waves: (v) => v, start: (v) => v };
+  window.MIRRORS.sel = sel;
+  window.MIRRORS.ui = SET_KEYS.map((key) => ({
+    k: { size: 'Mirrors', waves: 'Waves', start: 'Start' }[key],
+    v: c[key] === 'any' ? 'any (now ' + word[key](S[key]) + ')' : word[key](c[key]),
+  }));
+}
+/* With the card open: down moves between the settings, left/right change
+   the one selected. A change waits 0.6 s for more presses, then rebuilds
+   only what it touches, keeping the scene's view, light and sky. */
+let applyTimer = null;
+function changeSetting(d) {
+  pending = pending || Object.assign({}, choice);
+  const key = SET_KEYS[sel], list = OPTS[key], i = list.indexOf(pending[key]);
+  pending[key] = list[(i + d + list.length) % list.length];
+  describeSettings();
+  if (window.Wall && Wall.openCard) Wall.openCard();
+  clearTimeout(applyTimer);
+  applyTimer = setTimeout(applySettings, 600);
+}
+function applySettings() {
+  const was = { size: S.size, waves: S.waves, start: S.start }, before = Object.assign({}, choice);
+  Object.assign(choice, pending); pending = null;
+  const r = S.r;
+  for (const key of SET_KEYS) if (choice[key] !== before[key]) S[key] = pick(key, r);   // only what the viewer changed
+  if (S.size !== was.size) { buildField(SIZES[S.size]); setPhases(r); }
+  else if (S.start !== was.start) setPhases(r);
+  if (S.waves !== was.waves || S.start !== was.start || S.size !== was.size) setWaves(r, true);
+  sceneStart = performance.now();
+  describeSettings();
+  if (window.Wall && Wall.openCard && document.body.classList.contains('showabout')) Wall.openCard();
+}
+if (window.Wall && Wall.claimKeys) Wall.claimKeys((e) => {
+  if (!document.body.classList.contains('showabout')) return false;
+  if (e.key === 'ArrowDown') { sel = (sel + 1) % SET_KEYS.length; describeSettings(); Wall.openCard(); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') changeSetting(e.key === 'ArrowRight' ? 1 : -1);
+  else return false;
+  e.preventDefault(); e.stopImmediatePropagation();
+  return true;
+});
 
 /* the whole wall in frame from the drawn viewpoint, a little margin round
    it, and CENTRED: seen at an angle the wall is a trapezoid whose middle is
@@ -295,7 +390,7 @@ window.MIRRORS = {};
 function advance(dt) {
   S.t += dt;
   /* waves arrive at random, never more than three at once */
-  if (S.t >= S.nextWave) {
+  if (S.waves === 'on' && S.t >= S.nextWave) {
     if (waves.length < 3) waves.push(newWave(S.r));
     S.nextWave = S.t + Math.max(2, -Math.log(1 - S.r()) / S.waveRate);
   }

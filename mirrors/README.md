@@ -7,7 +7,7 @@ A wall of 160 by 90 servos, each spinning a small round mirror mounted on a shaf
 Open `index.html` in a browser. That is the whole of it - one file, no build,
 no server, no keys. It is written for a 4K screen and scales down.
 
-There is no text on screen, by design. The up arrow (or the on-screen `i`) shows the scene's numbers and the waves passing; `n` starts a new scene, and `?rpm=` changes the mean speed.
+There is no text on screen, by design. The up arrow (or the on-screen `i`) opens a card with the scene's numbers; while it is open, the down arrow steps between the three settings and left and right change the one chosen. In the URL: `?size=1` to `10` (times 9 by 16), `?waves=on|off`, `?start=aligned|random`, `?rpm=` for the mean speed; `n` starts a new scene.
 
 ## What it is doing
 
@@ -15,6 +15,7 @@ There is no text on screen, by design. The up arrow (or the on-screen `i`) shows
 - Up to three velocity waves cross it at once. Each is a sinusoid of servo speed with straight wave fronts, inside a smooth envelope that enters at one edge and leaves at the other, with its own direction, speed, period and size. A servo's angle is the running total of its speed, so a wave leaves the angles it crossed shifted for good.
 - A mirror cut at 45 degrees and seen straight on reflects directions lying along the wall itself: up into the sky, sideways to the horizon, down to the ground. Each disc is flat, so from across a room it is a single dot of whatever it is pointed at.
 - Each scene draws a new viewpoint (up to 35 degrees off the wall's axis), a new direction for the soft light, and a new sky of a few puffy clouds.
+- Three settings, each of which can also be left on "any" to be drawn afresh every scene (the default): the number of mirrors, from 9 by 16 to 90 by 160 on the same 8 by 4.5 m wall, so fewer means bigger; the waves on or off; and the mirrors started aligned or at random. Aligned, a passing wave shows as bands sweeping across the wall; at random, the wall shimmers and a wave shows only as a change in how fast it twinkles.
 
 ## Credits
 
