@@ -20,18 +20,25 @@
 <script>
 'use strict';
 /* ==========================================================================
-  mirrors.html · v0.3 · 2026-10-10
+  mirrors.html · v0.4 · 2026-10-10
 
-  A wall of 160 x 90 servos, each turning a small round mirror (Joe,
-  2026-10-10). The mirror is not mounted flat: it sits on the end of a shaft
-  cut at 45 degrees, so as the servo turns, the mirror's face sweeps a cone
-  45 degrees off the shaft and each disc shows, in turn, every direction on
-  a great circle of the sky around it - blue sky, a few puffy clouds, a
-  hazy light, the ground. Seen from straight in front, a 45-degree mirror
-  reflects directions lying along the wall itself.
+  A bank of servos lying on the ground, facing up, each turning a round
+  mirror (Joe, 2026-10-10). The mirror is not mounted flat: it sits on the
+  end of a shaft cut at 45 degrees, so as the servo turns, the mirror's face
+  sweeps a cone 45 degrees off vertical and the disc shows, in turn,
+  different parts of the sky - blue, a few puffy clouds, a hazy light - and,
+  as it tips away, the dark plate it stands on.
 
-  THE MOTION. Every servo turns at 15 rpm and starts at a random angle, so
-  at rest the wall is a shimmer with no pattern. Over it pass 0-3 velocity
+  THE GEOMETRY THAT DECIDES THE VIEW. A mirror cut at 45 degrees reflects
+  sky only as high as the viewer's own line of sight is tipped from straight
+  down: seen from directly overhead every disc would show the horizon. So
+  the viewer looks down from 35-65 degrees off vertical, and the discs reach
+  up to that high into the sky. A disc that would show the ground is turned
+  nearly edge-on to the viewer, so the sky dominates.
+
+  THE MOTION (Joe: "soothing, like the pebbles"; 30 and then 15 rpm felt like
+  "spinning out of control"). The servos turn at 4 rpm; the waves move their
+  speeds between 0.5 and 8 rpm, with periods of 4-16 s. Over it pass 0-3 velocity
   waves: each is a sinusoid in a smooth envelope, with straight wave fronts,
   that enters at one edge of the field and leaves at the other, with its own
   direction, speed, period and size (Joe's spec). Where a wave's crest is,
@@ -43,16 +50,18 @@
   coloured dot: the colour of the sky in the direction it is reflecting.
   The sky is painted once per scene (gradient, clouds, ground); the light is
   added in the shader so that it can be far brighter than paint and flare.
-  Each scene draws the viewer's position (up to 35 degrees off the wall's
-  axis), the light's direction, and the clouds.
+  Each scene draws the viewer's position (35-65 degrees from straight down,
+  up to 20 degrees to either side), the light's direction, and the clouds.
 
   SETTINGS (Joe, 2026-10-10: "let them adjust settings ... number of
   mirrors ... waves turned off ... mirrors aligned or at random ... randomize
   runs among those settings"). With the card open (up), down steps between
   three settings and left/right change the one selected:
-    Mirrors  9 x 16 up to 90 x 160, in ten steps. The wall stays 8 x 4.5 m;
+    Mirrors  9 x 16 up to 90 x 160, in ten steps. The bank stays 8 x 4.5 m;
              fewer mirrors are bigger ones (50 cm at 9 x 16), so a wave looks
-             the same at every count, only drawn with coarser dots.
+             the same at every count, only drawn with coarser dots. 'any'
+             draws only the four biggest-mirror sizes (9 x 16 to 36 x 64):
+             Joe wanted the mirrors bigger and fewer by default.
     Waves    on or off.
     Start    aligned (every mirror facing the same way, so a passing wave
              shows as bands) or random (a shimmer; a wave shows only as a
@@ -62,10 +71,13 @@
   card holds for the rest of the visit and keeps the scene's view and sky.
 
   URL: ?seed=S repeats scenes · ?pin stays · ?solo=N holds the wall N min ·
-       ?pace=0.5 every rate (1 = the first draft) · ?rpm=15 the mean speed · ?rs=0.5 draws smaller · ?size=1..10
+       ?rpm=4 the median speed · ?rs=0.5 draws smaller · ?size=1..10
        (x 9 x 16) · ?waves=on|off · ?start=aligned|random.
 
   CHANGED
+    v0.4  lying on the ground facing up, seen from 35-65 deg off vertical;
+          4 rpm, waves between 0.5 and 8 rpm with periods of 4-16 s; 'any'
+          mirror count draws only 9 x 16 to 36 x 64
     v0.3  everything at half speed by default (Joe: "soothing, like the pebbles";
           30 rpm "feels dizzying"): 15 rpm, waves half as fast, as big in rpm
           and as frequent, twice as long in period; ?pace=1 for the first pace
@@ -87,12 +99,9 @@ const SEED0 = Q.has('seed') ? parseInt(Q.get('seed'), 10) : (Date.now() % 1e9);
 const W = 8.0, H = 4.5, TILT = Math.PI / 4;
 const SIZES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((k) => ({ k, cols: 16 * k, rows: 9 * k }));
 let COLS = 160, ROWS = 90, N = COLS * ROWS, PITCH = W / COLS;
-/* PACE scales every rate in the piece - servo speed, wave speed, wave size
-   in rpm, how often waves come - and stretches every wave period by 1/PACE,
-   so the same patterns play slower. 0.5 since v0.3 (Joe: "soothing, like the
-   pebbles"); ?pace=1 is the first draft's pace. */
-const PACE = Math.max(0.05, parseFloat(Q.get('pace') || '0.5'));
-const RPM0 = parseFloat(Q.get('rpm') || String(30 * PACE));
+/* speeds (Joe, 2026-10-10): 4 rpm, the waves keep every servo between 0.5
+   and 8 rpm (each wave 1.5-4 rpm in size, the sum clamped), periods 4-16 s */
+const RPM0 = parseFloat(Q.get('rpm') || '4'), RPM_LO = 0.5, RPM_HI = 8;
 const W0 = RPM0 * 2 * Math.PI / 60;                    // rad/s
 
 function mulberry32(a) {
@@ -129,20 +138,22 @@ function paintSky(r, light) {
   const ctx = envCan.getContext('2d');
   /* sky: deep blue overhead to pale at the horizon */
   const deep = [lerp(38, 70, r()), lerp(92, 120, r()), lerp(178, 205, r())];
+  /* blue well down toward the horizon (stops at 40 and 13 deg up), pale only
+     in the last few degrees: the mirrors reflect 0-65 deg up, not the zenith */
   const g = ctx.createLinearGradient(0, 0, 0, ENV_H / 2);
-  g.addColorStop(0, `rgb(${deep})`); g.addColorStop(0.7, 'rgb(122,170,222)'); g.addColorStop(1, 'rgb(214,226,236)');
+  g.addColorStop(0, `rgb(${deep})`); g.addColorStop(0.55, 'rgb(84,136,206)'); g.addColorStop(0.85, 'rgb(140,184,228)'); g.addColorStop(1, 'rgb(200,216,234)');
   ctx.fillStyle = g; ctx.fillRect(0, 0, ENV_W, ENV_H / 2);
-  /* the ground: a field, darker below */
+  /* below the horizon: a mirror lying on the ground that points down sees
+     the dark plate the servos stand on, and a little gravel past it */
   const gg = ctx.createLinearGradient(0, ENV_H / 2, 0, ENV_H);
-  gg.addColorStop(0, 'rgb(150,156,140)'); gg.addColorStop(0.08, 'rgb(96,112,72)'); gg.addColorStop(1, 'rgb(40,48,32)');
+  gg.addColorStop(0, 'rgb(96,92,86)'); gg.addColorStop(0.06, 'rgb(40,40,42)'); gg.addColorStop(1, 'rgb(20,21,24)');
   ctx.fillStyle = gg; ctx.fillRect(0, ENV_H / 2, ENV_W, ENV_H / 2);
-  for (let i = 0; i < 4000; i++) { ctx.fillStyle = r() < 0.5 ? 'rgba(20,30,10,0.18)' : 'rgba(170,180,120,0.12)'; ctx.fillRect(r() * ENV_W, ENV_H / 2 + r() * ENV_H / 2, 2 + 3 * r(), 1 + r()); }
   /* the light's aureole: a soft brightening of the sky around it */
   const [lu, lv] = uvOf(Math.asin(light.y), Math.atan2(light.x, light.z));
-  for (const du of [-ENV_W, 0, ENV_W]) {
-    const a = ctx.createRadialGradient(lu + du, lv, 0, lu + du, lv, 150);
-    a.addColorStop(0, 'rgba(255,250,235,0.55)'); a.addColorStop(1, 'rgba(255,250,235,0)');
-    ctx.fillStyle = a; ctx.fillRect(lu + du - 150, lv - 150, 300, 300);
+  for (const du of [-ENV_W, 0, ENV_W]) {                      // about 30 deg across, sky only
+    const a = ctx.createRadialGradient(lu + du, lv, 0, lu + du, lv, 90);
+    a.addColorStop(0, 'rgba(255,250,235,0.5)'); a.addColorStop(1, 'rgba(255,250,235,0)');
+    ctx.fillStyle = a; ctx.fillRect(lu + du - 90, lv - 90, 180, Math.min(180, ENV_H / 2 - (lv - 90)));
   }
   /* a few puffy clouds: clusters of soft puffs with flat grey bases, lit
      from the light's side; widened by 1/cos(elevation) so they stay round
@@ -184,7 +195,7 @@ const disc = new THREE.CircleGeometry(1, 18);
 let geo = null, cellArr = null, phi = null, phiAttr = null, mirrors = null;
 function buildField(size) {
   COLS = size.cols; ROWS = size.rows; N = COLS * ROWS; PITCH = W / COLS;
-  if (mirrors) { scene.remove(mirrors); geo.dispose(); }
+  if (mirrors) { bank.remove(mirrors); geo.dispose(); }
   geo = new THREE.InstancedBufferGeometry();
   geo.index = disc.index; geo.setAttribute('position', disc.attributes.position);
   cellArr = new Float32Array(N * 2); phi = new Float32Array(N);
@@ -199,7 +210,7 @@ function buildField(size) {
   mirrorMat.uniforms.discR.value = 0.42 * PITCH; mirrorMat.uniforms.shaft.value = 0.6 * PITCH;
   mirrors = new THREE.Mesh(geo, mirrorMat);
   mirrors.frustumCulled = false;
-  scene.add(mirrors);
+  bank.add(mirrors);
 }
 const mirrorMat = new THREE.ShaderMaterial({
   uniforms: {
@@ -216,7 +227,7 @@ const mirrorMat = new THREE.ShaderMaterial({
       vec3 e1 = vec3(ct, 0.0, -st), e2 = vec3(0.0, 1.0, 0.0), n0 = vec3(st, 0.0, ct);
       mat3 Rz = mat3(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0);
       vec3 p = Rz * (discR * (position.x * e1 + position.y * e2));
-      vN = Rz * n0; vRad = length(position.xy);
+      vN = mat3(modelMatrix) * (Rz * n0); vRad = length(position.xy);
       vec4 w = modelMatrix * vec4(vec3(cell, shaft) + p, 1.0); vW = w.xyz;
       gl_Position = projectionMatrix * viewMatrix * w;
     }`,
@@ -241,10 +252,21 @@ const mirrorMat = new THREE.ShaderMaterial({
     }`,
   side: THREE.DoubleSide,
 });
-/* the panel the servos stand in, and its frame */
+/* the bank lies on the ground facing up: everything is built as a wall in
+   the x-y plane (shafts along +z) inside a group turned face-up, which
+   sends +z up and the wall's +y (its 'top' row) away from the viewer */
+const bank = new THREE.Group(); bank.rotation.x = -Math.PI / 2; scene.add(bank);
 const panelMat = new THREE.MeshLambertMaterial({ color: 0x15171b });
 const panel = new THREE.Mesh(new THREE.PlaneGeometry(W + 0.24, H + 0.24), panelMat);
-scene.add(panel);
+bank.add(panel);
+/* the ground round it: gravel */
+const gravelCan = document.createElement('canvas'); gravelCan.width = gravelCan.height = 512;
+const gravelTex = new THREE.CanvasTexture(gravelCan);
+gravelTex.wrapS = gravelTex.wrapT = THREE.RepeatWrapping; gravelTex.repeat.set(12, 12); gravelTex.encoding = THREE.sRGBEncoding; gravelTex.anisotropy = 4;
+(() => { const c = gravelCan.getContext('2d'), r = mulberry32(77); c.fillStyle = 'rgb(118,112,102)'; c.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 9000; i++) { const v = 70 + 110 * r(); c.fillStyle = `rgb(${v},${v * 0.95},${v * 0.88})`; c.beginPath(); c.ellipse(r() * 512, r() * 512, 1 + 3 * r(), 1 + 2.5 * r(), r() * 3, 0, 6.283); c.fill(); } })();
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ map: gravelTex }));
+ground.position.y = -0.005; scene.add(ground);
 const sunLight = new THREE.DirectionalLight(0xffffff, 1.2), skyLight = new THREE.HemisphereLight(0x9fc4ee, 0x405030, 0.5);
 scene.add(sunLight, skyLight);
 
@@ -258,9 +280,9 @@ let waves = [], S = null, sceneNo = -1;
 function newWave(r) {
   const ang = r() * 2 * Math.PI, dx = Math.cos(ang), dy = Math.sin(ang);
   const proj = RS_EDGE.map(([x, y]) => dx * x + dy * y), sMin = Math.min(...proj), sMax = Math.max(...proj);
-  const c = (0.5 + 2.5 * r()) * PACE, T = (1.5 + 6.5 * r()) / PACE, lam = c * T;   // lam unchanged by PACE
+  const c = 0.25 + 1.25 * r(), T = 4 + 12 * r(), lam = c * T;
   const Wd = lam * (1.5 + 2.5 * r());
-  return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: (5 + 20 * r()) * PACE, psi: r() * 2 * Math.PI, age: 0 };
+  return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: 1.5 + 2.5 * r(), psi: r() * 2 * Math.PI, age: 0 };
 }
 
 /* ------------------------------------------------------------- settings
@@ -272,7 +294,8 @@ const choice = {
   waves: OPTS.waves.includes(Q.get('waves')) ? Q.get('waves') : 'any',
   start: OPTS.start.includes(Q.get('start')) ? Q.get('start') : 'any',
 };
-const pick = (key, r) => choice[key] !== 'any' ? choice[key] : OPTS[key][1 + Math.floor(r() * (OPTS[key].length - 1))];
+const ANY = { size: [0, 1, 2, 3], waves: ['on', 'off'], start: ['aligned', 'random'] };   // what 'any' draws from
+const pick = (key, r) => choice[key] !== 'any' ? choice[key] : ANY[key][Math.floor(r() * ANY[key].length)];
 function setPhases(r) {
   const p0 = r() * 2 * Math.PI;
   for (let k = 0; k < N; k++) phi[k] = S.start === 'aligned' ? p0 : r() * 2 * Math.PI;
@@ -282,19 +305,20 @@ function setWaves(r, fresh) {
   waves = [];
   if (S.waves === 'off') return;
   if (!fresh && r() < 0.5) { const w = newWave(r); w.age = (w.sMax - w.sMin) / w.c * r(); waves.push(w); }   // sometimes one already passing
-  S.nextWave = S.t + (fresh ? 0.5 : (2 + 6 * r()) / PACE);
+  S.nextWave = S.t + (fresh ? 0.5 : 4 + 12 * r());
 }
 
 function newScene() {
   sceneNo++;
   const seed = (SEED0 + sceneNo * 7919) >>> 0, r = mulberry32(seed);
-  /* where the viewer stands: up to 35 deg off the wall's axis, any side */
-  const off = 35 * Math.sqrt(r()) * Math.PI / 180, around = r() * 2 * Math.PI;
-  /* where the light is: 8-70 deg up, anywhere across the front */
-  const lel = (8 + 62 * r()) * Math.PI / 180, laz = (r() * 2 - 1) * 1.75;
+  /* where the viewer stands: looking down from 35-65 deg off vertical, from
+     the bank's long side, up to 20 deg round to either side */
+  const off = (35 + 30 * r()) * Math.PI / 180, around = (r() * 2 - 1) * 20 * Math.PI / 180;
+  /* where the light is: 8-70 deg up, any bearing */
+  const lel = (8 + 62 * r()) * Math.PI / 180, laz = (r() * 2 - 1) * Math.PI;
   const light = new THREE.Vector3(Math.cos(lel) * Math.sin(laz), Math.sin(lel), Math.cos(lel) * Math.cos(laz));
   const warm = r();
-  S = { seed, r, off, around, light, lel, laz, t: 0, nextWave: 1e9, waveRate: (0.04 + 0.1 * r()) * PACE,
+  S = { seed, r, off, around, light, lel, laz, t: 0, nextWave: 1e9, waveRate: 0.02 + 0.05 * r(),
         size: pick('size', r), waves: pick('waves', r), start: pick('start', r) };
   buildField(SIZES[S.size]);
   setPhases(r);
@@ -362,7 +386,7 @@ if (window.Wall && Wall.claimKeys) Wall.claimKeys((e) => {
    the middle of the screen (three rounds are plenty) */
 const _v = new THREE.Vector3(), _aim = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3();
 function placeCamera() {
-  const dir = new THREE.Vector3(Math.sin(S.off) * Math.cos(S.around), Math.sin(S.off) * Math.sin(S.around), Math.cos(S.off));
+  const dir = new THREE.Vector3(Math.sin(S.off) * Math.sin(S.around), Math.cos(S.off), Math.sin(S.off) * Math.cos(S.around));
   const M = 0.2, pts = [[-W / 2 - M, -H / 2 - M], [W / 2 + M, -H / 2 - M], [W / 2 + M, H / 2 + M], [-W / 2 - M, H / 2 + M]];
   _aim.set(0, 0, 0);
   const put = (d) => { camera.position.copy(dir).multiplyScalar(d).add(_aim); camera.up.set(0, 1, 0); camera.lookAt(_aim); camera.updateMatrixWorld(); };
@@ -372,12 +396,12 @@ function placeCamera() {
     for (let it = 0; it < 40; it++) {
       const m = (lo + hi) / 2; put(m);
       let ok = true;
-      for (const [x, y] of pts) { _v.set(x, y, 0).project(camera); if (Math.abs(_v.x) > 1 || Math.abs(_v.y) > 1) { ok = false; break; } }
+      for (const [x, y] of pts) { _v.set(x, 0, -y).project(camera); if (Math.abs(_v.x) > 1 || Math.abs(_v.y) > 1) { ok = false; break; } }
       if (ok) hi = m; else lo = m;
     }
     d = hi; put(d);
     let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
-    for (const [x, y] of pts) { _v.set(x, y, 0).project(camera); x0 = Math.min(x0, _v.x); x1 = Math.max(x1, _v.x); y0 = Math.min(y0, _v.y); y1 = Math.max(y1, _v.y); }
+    for (const [x, y] of pts) { _v.set(x, 0, -y).project(camera); x0 = Math.min(x0, _v.x); x1 = Math.max(x1, _v.x); y0 = Math.min(y0, _v.y); y1 = Math.max(y1, _v.y); }
     const th = Math.tan(camera.fov * Math.PI / 360) * d;            // half the view's height at the aim point
     _r.setFromMatrixColumn(camera.matrixWorld, 0); _u.setFromMatrixColumn(camera.matrixWorld, 1);
     _aim.addScaledVector(_r, (x0 + x1) / 2 * th * camera.aspect).addScaledVector(_u, (y0 + y1) / 2 * th);
@@ -400,11 +424,11 @@ function advance(dt) {
   /* waves arrive at random, never more than three at once */
   if (S.waves === 'on' && S.t >= S.nextWave) {
     if (waves.length < 3) waves.push(newWave(S.r));
-    S.nextWave = S.t + Math.max(2 / PACE, -Math.log(1 - S.r()) / S.waveRate);
+    S.nextWave = S.t + Math.max(4, -Math.log(1 - S.r()) / S.waveRate);
   }
   for (const w of waves) w.age += dt;
   waves = waves.filter((w) => w.sMin + w.c * w.age - w.Wd < w.sMax);
-  const K = 2 * Math.PI / 60;
+  const K = 2 * Math.PI / 60, WLO = RPM_LO * K, WHI = RPM_HI * K;
   const ws = waves.map((w) => ({ dx: w.dx, dy: w.dy, lead: w.sMin + w.c * w.age, Wd: w.Wd, k: 2 * Math.PI / w.lam, ph: w.psi - 2 * Math.PI * w.c * w.age / w.lam, A: w.rpm * K }));
   let lo = 1e9, hi = -1e9;
   for (let i = 0; i < N; i++) {
@@ -414,6 +438,7 @@ function advance(dt) {
       const s = q.dx * x + q.dy * y, back = q.lead - s;            // how far behind the leading edge
       if (back > 0 && back < q.Wd) w += q.A * 0.5 * (1 - Math.cos(2 * Math.PI * back / q.Wd)) * Math.sin(q.k * s + q.ph);
     }
+    w = w < WLO ? WLO : w > WHI ? WHI : w;
     let p = phi[i] + w * dt;
     if (p > 6.283185307) p -= 6.283185307;
     phi[i] = p;

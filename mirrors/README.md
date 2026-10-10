@@ -1,21 +1,20 @@
 # Spinning Mirrors
 
-A wall of 160 by 90 servos, each spinning a small round mirror mounted on a shaft cut at 45 degrees, so every disc sweeps its face around a cone and flashes, in turn, sky, cloud, light and ground. Waves of faster and slower spinning roll across the field.
+A bank of servos lying on the ground and facing the sky, each slowly turning a round mirror mounted on a shaft cut at 45 degrees, so every disc sweeps its face around a cone and shows, in turn, different parts of the sky. Gentle waves of faster and slower turning roll across the bank.
 
 ## Running it
 
 Open `index.html` in a browser. That is the whole of it - one file, no build,
 no server, no keys. It is written for a 4K screen and scales down.
 
-There is no text on screen, by design. The up arrow (or the on-screen `i`) opens a card with the scene's numbers; while it is open, the down arrow steps between the three settings and left and right change the one chosen. In the URL: `?size=1` to `10` (times 9 by 16), `?waves=on|off`, `?start=aligned|random`, `?rpm=` for the mean speed; `n` starts a new scene.
+There is no text on screen, by design. The up arrow (or the on-screen `i`) opens a card with the scene's numbers; while it is open, the down arrow steps between the three settings and left and right change the one chosen. In the URL: `?size=1` to `10` (times 9 by 16), `?waves=on|off`, `?start=aligned|random`, `?rpm=` for the median speed; `n` starts a new scene.
 
 ## What it is doing
 
-- Every servo turns at 15 rpm from a random starting angle, so at rest the wall is a shimmer with no pattern in it.
-- Up to three velocity waves cross it at once. Each is a sinusoid of servo speed with straight wave fronts, inside a smooth envelope that enters at one edge and leaves at the other, with its own direction, speed, period and size. A servo's angle is the running total of its speed, so a wave leaves the angles it crossed shifted for good.
-- A mirror cut at 45 degrees and seen straight on reflects directions lying along the wall itself: up into the sky, sideways to the horizon, down to the ground. Each disc is flat, so from across a room it is a single dot of whatever it is pointed at.
-- Each scene draws a new viewpoint (up to 35 degrees off the wall's axis), a new direction for the soft light, and a new sky of a few puffy clouds.
-- Three settings, each of which can also be left on "any" to be drawn afresh every scene (the default): the number of mirrors, from 9 by 16 to 90 by 160 on the same 8 by 4.5 m wall, so fewer means bigger; the waves on or off; and the mirrors started aligned or at random. Aligned, a passing wave shows as bands sweeping across the wall; at random, the wall shimmers and a wave shows only as a change in how fast it twinkles.
+- The servos turn at about 4 rpm. Up to three velocity waves cross the bank at once, each a sinusoid of servo speed with straight wave fronts, inside a smooth envelope that enters at one edge and leaves at the other, with its own direction, speed and period (4 to 16 s); together they keep every servo between 0.5 and 8 rpm. A servo's angle is the running total of its speed, so a wave leaves the angles it crossed shifted for good.
+- A mirror cut at 45 degrees reflects sky only as high as your line of sight is tipped from straight down: from directly overhead every disc would show the horizon. So the view looks down from 35 to 65 degrees off vertical. A disc that would show the ground is turned nearly edge-on to you, so the sky dominates.
+- Each scene draws a new viewpoint, a new direction for the soft light, and a new sky of a few puffy clouds.
+- Three settings, each of which can also be left on "any" to be drawn afresh every scene (the default): the number of mirrors, from 9 by 16 to 90 by 160 on the same 8 by 4.5 m bank, so fewer means bigger ("any" draws the four biggest-mirror sizes); the waves on or off; and the mirrors started aligned or at random. Aligned, a passing wave shows as bands sweeping across the bank; at random, it shimmers and a wave shows only as a change in how fast it twinkles.
 
 ## Credits
 
