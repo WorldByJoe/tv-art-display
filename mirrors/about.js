@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v1.8 · 2026-10-10
+   about.js · v1.9 · 2026-10-10
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,11 +35,11 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v1.9  Spinning Mirrors at 3 rpm, aligned with waves by default
      v1.8  Spinning Mirrors lies on the ground at 4 rpm; the card says so
      v1.7  Spinning Mirrors runs at 15 rpm now; the card says so
      v1.6  Spinning Mirrors: three settings on its card (down picks one, left/right change it)
      v1.5  mirrors.html (Spinning Mirrors)
-     v1.4  Couch Analyst's Status row says Replay during a replay
 --------------------------------------------------------------------------- */
 (function (global) {
   'use strict';
@@ -77,7 +77,7 @@
      this card is open (it claims down/left/right); the selected one wears
      the arrows, and the hint line says so. */
   ABOUT['index.html'] = {
-    what: 'A bank of servos lying on the ground and facing up, each spinning a round mirror on a shaft cut at 45\u00b0. As a servo turns, its mirror\u2019s face sweeps a cone, so the disc shows in turn different parts of the sky, the clouds and the light. The servos turn slowly, about 4 rpm; waves of faster and slower spinning, each a travelling sinusoid with its own direction, speed and period, cross the bank and keep every servo between 0.5 and 8 rpm. Started aligned, the mirrors show a passing wave as bands; started at random, they shimmer.',
+    what: 'A bank of servos lying on the ground and facing up, each spinning a round mirror on a shaft cut at 45\u00b0. As a servo turns, its mirror\u2019s face sweeps a cone, so the disc shows in turn different parts of the sky, the clouds and the light. The servos turn slowly, about 3 rpm; waves of faster and slower spinning, each a travelling sinusoid with its own direction, speed and period, cross the bank and keep every servo between 0.4 and 6 rpm. The mirrors start aligned, so a passing wave shows as bands; started at random (a setting below), they shimmer.',
     hint: (ring) => '▲ close  ·  ▼ next setting  ·  ◀ ▶ change it' + (ring ? '  ·  menu: settings' : ''),
     params: () => [
       ...((window.MIRRORS && MIRRORS.ui) || []).map((r, i) => A(r.k, () => i === MIRRORS.sel ? '◀  ' + r.v + '  ▶' : r.v)),

@@ -20,7 +20,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  mirrors.html · v0.4 · 2026-10-10
+  mirrors.html · v0.5 · 2026-10-10
 
   A bank of servos lying on the ground, facing up, each turning a round
   mirror (Joe, 2026-10-10). The mirror is not mounted flat: it sits on the
@@ -37,8 +37,9 @@
   nearly edge-on to the viewer, so the sky dominates.
 
   THE MOTION (Joe: "soothing, like the pebbles"; 30 and then 15 rpm felt like
-  "spinning out of control"). The servos turn at 4 rpm; the waves move their
-  speeds between 0.5 and 8 rpm, with periods of 4-16 s. Over it pass 0-3 velocity
+  "spinning out of control"; then 4 rpm cut by a quarter). The servos turn at
+  3 rpm; the waves move their speeds between 0.375 and 6 rpm, with periods
+  of 4-16 s. Over it pass 0-3 velocity
   waves: each is a sinusoid in a smooth envelope, with straight wave fronts,
   that enters at one edge of the field and leaves at the other, with its own
   direction, speed, period and size (Joe's spec). Where a wave's crest is,
@@ -51,7 +52,8 @@
   The sky is painted once per scene (gradient, clouds, ground); the light is
   added in the shader so that it can be far brighter than paint and flare.
   Each scene draws the viewer's position (35-65 degrees from straight down,
-  up to 20 degrees to either side), the light's direction, and the clouds.
+  square to the bank's long side, so its edges run parallel to the screen
+  as the pool's do), the light's direction, and the clouds.
 
   SETTINGS (Joe, 2026-10-10: "let them adjust settings ... number of
   mirrors ... waves turned off ... mirrors aligned or at random ... randomize
@@ -66,15 +68,17 @@
     Start    aligned (every mirror facing the same way, so a passing wave
              shows as bands) or random (a shimmer; a wave shows only as a
              change in how fast it twinkles).
-  Each also offers "any": a fresh random value every scene. All three start
-  at "any", so the runs wander among the choices; a choice made from the
-  card holds for the rest of the visit and keeps the scene's view and sky.
+  Each also offers "any": a fresh random value every scene. The defaults are
+  Joe's: waves on, started aligned, mirror count "any"; a choice made from
+  the card holds for the rest of the visit and keeps the scene's view and sky.
 
   URL: ?seed=S repeats scenes · ?pin stays · ?solo=N holds the wall N min ·
        ?rpm=4 the median speed · ?rs=0.5 draws smaller · ?size=1..10
        (x 9 x 16) · ?waves=on|off · ?start=aligned|random.
 
   CHANGED
+    v0.5  aligned with waves by default; the bank square to the screen; every
+          speed a quarter slower (3 rpm, 0.375-6 rpm, waves 0.19-1.1 m/s)
     v0.4  lying on the ground facing up, seen from 35-65 deg off vertical;
           4 rpm, waves between 0.5 and 8 rpm with periods of 4-16 s; 'any'
           mirror count draws only 9 x 16 to 36 x 64
@@ -83,7 +87,6 @@
           and as frequent, twice as long in period; ?pace=1 for the first pace
     v0.2  settings on the card: number of mirrors, waves on/off, aligned or
           random start, each with "any" (the default) drawn per scene
-    v0.1  first draft
 ========================================================================== */
 
 const CONFIG = { holdMin: 6, nextPage: '' /* standalone: nowhere to hand on to; start again */, sceneSec: 150 };
@@ -99,9 +102,10 @@ const SEED0 = Q.has('seed') ? parseInt(Q.get('seed'), 10) : (Date.now() % 1e9);
 const W = 8.0, H = 4.5, TILT = Math.PI / 4;
 const SIZES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((k) => ({ k, cols: 16 * k, rows: 9 * k }));
 let COLS = 160, ROWS = 90, N = COLS * ROWS, PITCH = W / COLS;
-/* speeds (Joe, 2026-10-10): 4 rpm, the waves keep every servo between 0.5
-   and 8 rpm (each wave 1.5-4 rpm in size, the sum clamped), periods 4-16 s */
-const RPM0 = parseFloat(Q.get('rpm') || '4'), RPM_LO = 0.5, RPM_HI = 8;
+/* speeds (Joe, 2026-10-10): 4 rpm with waves keeping every servo between
+   0.5 and 8 rpm, then every velocity cut by a quarter: 3 rpm, 0.375-6 rpm
+   (each wave 1.125-3 rpm in size, the sum clamped); periods stay 4-16 s */
+const RPM0 = parseFloat(Q.get('rpm') || '3'), RPM_LO = 0.375, RPM_HI = 6;
 const W0 = RPM0 * 2 * Math.PI / 60;                    // rad/s
 
 function mulberry32(a) {
@@ -280,9 +284,9 @@ let waves = [], S = null, sceneNo = -1;
 function newWave(r) {
   const ang = r() * 2 * Math.PI, dx = Math.cos(ang), dy = Math.sin(ang);
   const proj = RS_EDGE.map(([x, y]) => dx * x + dy * y), sMin = Math.min(...proj), sMax = Math.max(...proj);
-  const c = 0.25 + 1.25 * r(), T = 4 + 12 * r(), lam = c * T;
+  const c = 0.1875 + 0.9375 * r(), T = 4 + 12 * r(), lam = c * T;   // 0.19-1.1 m/s
   const Wd = lam * (1.5 + 2.5 * r());
-  return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: 1.5 + 2.5 * r(), psi: r() * 2 * Math.PI, age: 0 };
+  return { ang, dx, dy, c, T, lam, Wd, sMin, sMax, rpm: 1.125 + 1.875 * r(), psi: r() * 2 * Math.PI, age: 0 };
 }
 
 /* ------------------------------------------------------------- settings
@@ -291,8 +295,8 @@ function newWave(r) {
 const OPTS = { size: ['any', 0, 1, 2, 3, 4, 5, 6, 7, 8, 9], waves: ['any', 'on', 'off'], start: ['any', 'aligned', 'random'] };
 const choice = {
   size: Q.has('size') ? Math.min(9, Math.max(0, parseInt(Q.get('size'), 10) - 1)) : 'any',
-  waves: OPTS.waves.includes(Q.get('waves')) ? Q.get('waves') : 'any',
-  start: OPTS.start.includes(Q.get('start')) ? Q.get('start') : 'any',
+  waves: OPTS.waves.includes(Q.get('waves')) ? Q.get('waves') : 'on',          // Joe's defaults
+  start: OPTS.start.includes(Q.get('start')) ? Q.get('start') : 'aligned',
 };
 const ANY = { size: [0, 1, 2, 3], waves: ['on', 'off'], start: ['aligned', 'random'] };   // what 'any' draws from
 const pick = (key, r) => choice[key] !== 'any' ? choice[key] : ANY[key][Math.floor(r() * ANY[key].length)];
@@ -311,9 +315,9 @@ function setWaves(r, fresh) {
 function newScene() {
   sceneNo++;
   const seed = (SEED0 + sceneNo * 7919) >>> 0, r = mulberry32(seed);
-  /* where the viewer stands: looking down from 35-65 deg off vertical, from
-     the bank's long side, up to 20 deg round to either side */
-  const off = (35 + 30 * r()) * Math.PI / 180, around = (r() * 2 - 1) * 20 * Math.PI / 180;
+  /* where the viewer stands: looking down from 35-65 deg off vertical,
+     square to the bank's long side (Joe: parallel to the screen, like the pool) */
+  const off = (35 + 30 * r()) * Math.PI / 180, around = 0;
   /* where the light is: 8-70 deg up, any bearing */
   const lel = (8 + 62 * r()) * Math.PI / 180, laz = (r() * 2 - 1) * Math.PI;
   const light = new THREE.Vector3(Math.cos(lel) * Math.sin(laz), Math.sin(lel), Math.cos(lel) * Math.cos(laz));

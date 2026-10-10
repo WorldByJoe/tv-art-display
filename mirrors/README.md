@@ -11,10 +11,10 @@ There is no text on screen, by design. The up arrow (or the on-screen `i`) opens
 
 ## What it is doing
 
-- The servos turn at about 4 rpm. Up to three velocity waves cross the bank at once, each a sinusoid of servo speed with straight wave fronts, inside a smooth envelope that enters at one edge and leaves at the other, with its own direction, speed and period (4 to 16 s); together they keep every servo between 0.5 and 8 rpm. A servo's angle is the running total of its speed, so a wave leaves the angles it crossed shifted for good.
+- The servos turn at about 3 rpm. Up to three velocity waves cross the bank at once, each a sinusoid of servo speed with straight wave fronts, inside a smooth envelope that enters at one edge and leaves at the other, with its own direction, speed and period (4 to 16 s); together they keep every servo between 0.4 and 6 rpm. A servo's angle is the running total of its speed, so a wave leaves the angles it crossed shifted for good.
 - A mirror cut at 45 degrees reflects sky only as high as your line of sight is tipped from straight down: from directly overhead every disc would show the horizon. So the view looks down from 35 to 65 degrees off vertical. A disc that would show the ground is turned nearly edge-on to you, so the sky dominates.
 - Each scene draws a new viewpoint, a new direction for the soft light, and a new sky of a few puffy clouds.
-- Three settings, each of which can also be left on "any" to be drawn afresh every scene (the default): the number of mirrors, from 9 by 16 to 90 by 160 on the same 8 by 4.5 m bank, so fewer means bigger ("any" draws the four biggest-mirror sizes); the waves on or off; and the mirrors started aligned or at random. Aligned, a passing wave shows as bands sweeping across the bank; at random, it shimmers and a wave shows only as a change in how fast it twinkles.
+- Three settings: the number of mirrors, from 9 by 16 to 90 by 160 on the same 8 by 4.5 m bank, so fewer means bigger; the waves on or off; and the mirrors started aligned or at random. Each can also be "any", drawn afresh every scene. By default the waves are on, the mirrors start aligned, and the count is "any" among the four biggest-mirror sizes. Aligned, a passing wave shows as bands sweeping across the bank; at random, it shimmers and a wave shows only as a change in how fast it twinkles.
 
 ## Credits
 
