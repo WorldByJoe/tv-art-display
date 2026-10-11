@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kite Flying</title>
+<link rel="stylesheet" href="wall.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #fade { position: fixed; inset: 0; background: #000; opacity: 1; transition: opacity 1.5s ease; pointer-events: none; }
+  /* the readings ride in the wall's credit line (Joe: "like the font and
+     format we use for the credits ... If I want to read this, I'll get off
+     the couch"): .signature, bottom left, no plate */
+  #readout { transition: opacity .6s ease; }
+  body.showabout #readout { opacity: 0; }
+</style>
+<script src="wall.js"></script>
+<script src="nav.js"></script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="readout" class="signature"></div>
+<div id="fade"></div>
+<script src="three.min.js"></script>
+<script src="kite_engine.js"></script>
+<script>
+'use strict';
+/* ==========================================================================
+  kite.html · v0.2 · 2026-10-10
+
+  A person flying a kite in a big grassy field under a blue sky with puffy
+  clouds (Joe, 2026-10-10). The wind shifts in strength and direction; the
+  flyer manages: pulls the kite up off the grass, lets out line as it
+  climbs, takes line in when it sinks, runs in a lull, fetches it when it
+  comes down. With the two-line delta the flyer pulls one hand or the other
+  to turn it: passes across the wind, loops, dives. Some scenes have a tree
+  downwind that eats kites. No text on screen; the up key's card says what
+  is happening, and left/right on it choose the kite. Along the bottom, in
+  the wall's credit line, the wind, the pull, the line out, the kite's
+  height and what the flyer is doing (unless it is just flying it).
+
+  THE PHYSICS is kite_engine.js (wind with gusts carried downwind, a kite of
+  rigid frame and flat-plate sails, lines and tails as chains of masses,
+  and the flyer's decisions). This page only draws it, and the grass shows
+  the same gust field the kite flies in, so a gust ruffles the grass near
+  the flyer a few seconds before it reaches the kite.
+
+  EACH SCENE DRAWS the kite (diamond, two-line delta or dragon, unless one
+  was chosen; the box kite waits, as Joe asked), the wind (4.5-8.5 m/s at
+  10 m; the dragon 5.5-8.5), the line length (20-32 m single, 18-25 m two), the flyer's clothes, where the sun is, the
+  camera's angle around the flyer (from behind, looking downwind at the
+  kite, to side on), and in about a third of scenes a tree 22-40 m away to
+  one side of the downwind line; the wind is then a little more likely to
+  shift toward it.
+
+  THE CAMERA stands 6-15 m from the flyer, a person's height or a little
+  more off the grass, at the scene's angle around them, and zooms (34-72
+  deg) to keep the flyer and the kite in frame: quickly wider, slowly
+  closer, and ahead of a climbing kite. It backs off only if 72 deg is not
+  enough. For the two-line kite it frames the whole wind window, so it does
+  not chase the stunts. A close camera keeps the flyer big enough to see
+  them run and pull.
+
+  SHADOWS on the grass are worked in the shaders: the flyer's limbs and the
+  kite as capsules projected along the sun, the tree's crown as ellipses.
+
+  URL: ?seed=S repeats scenes · ?pin stays · ?solo=N holds the wall N min ·
+       ?rs=0.5 draws smaller · ?kite=diamond|delta · ?tree=on|off · ?wind=6 ·
+       ?off=blades,ground,sky,clouds,far,trees leaves parts out · ?gputest
+       adds them one at a time (for finding what a GPU dislikes)
+
+  CHANGED
+    v0.2  Joe: kites bigger and lines shorter, the line white and finer, the
+          readings along the bottom in the credit line (mph, feet, pounds),
+          the dragon added as a Chinese centipede (discs, sticks, feathers,
+          whiskers), the kite chosen from the card (left/right while open)
+    v0.1  first draft: diamond and two-line delta, the tree in some scenes
+========================================================================== */
+
+const CONFIG = { holdMin: 6, nextPage: '' /* standalone: nowhere to hand on to; start again */, sceneSec: 170 };
+const Q = new URLSearchParams(location.search);
+const PINNED = Q.has('pin');
+const SOLO_MIN = parseFloat(Q.get('solo') || '0');
+const STANDALONE = !CONFIG.nextPage;                 // the GitHub build empties nextPage
+const DPR = STANDALONE ? Math.min(2, window.devicePixelRatio || 1) : 1;
+const RS = Math.min(1, Math.max(0.3, parseFloat(Q.get('rs') || (STANDALONE ? '1' : '0.5'))));
+const SEED0 = Q.has('seed') ? parseInt(Q.get('seed'), 10) : (Date.now() % 1e9);
+const E = KiteEngine;
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const lin = (r, g, b) => new THREE.Color().setRGB(Math.pow(r / 255, 2.2), Math.pow(g / 255, 2.2), Math.pow(b / 255, 2.2));
+
+/* ------------------------------------------------------------- renderer */
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: STANDALONE, powerPreference: 'high-performance' });
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 9000);
+
+/* everything the hand-written shaders share */
+const V2 = () => new THREE.Vector2(), V4 = () => new THREE.Vector4();
+const U = {
+  sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color(1, 1, 1) }, skyAmb: { value: new THREE.Color(0.3, 0.35, 0.45) },
+  zenith: { value: new THREE.Color() }, horizon: { value: new THREE.Color() }, haze: { value: new THREE.Color() }, fogD: { value: 1600 },
+  gK: { value: Array.from({ length: 8 }, V4) }, gA: { value: Array.from({ length: 8 }, V2) }, gAdv: { value: V2() },
+  gW: { value: V4() }, gT: { value: 0 },
+  shSeg: { value: Array.from({ length: 16 }, V4) }, shRad: { value: Array.from({ length: 16 }, V2) },
+  shEll: { value: Array.from({ length: 14 }, V4) }, sunStretch: { value: new THREE.Vector3(1, 0, 1) },
+  shBox: { value: V4() }, ellBox: { value: V4() },
+  res: { value: V2() },
+};
+const GLSL_COMMON = `
+  uniform vec3 sunDir, sunCol, skyAmb, zenith, horizon, haze; uniform float fogD;
+  uniform vec4 gK[8]; uniform vec2 gA[8]; uniform vec2 gAdv; uniform vec4 gW; uniform float gT;
+  uniform vec4 shSeg[16]; uniform vec2 shRad[16]; uniform vec4 shEll[14]; uniform vec3 sunStretch; uniform vec4 shBox, ellBox;
+  /* the along-wind gust at a point near the grass, m/s (the engine's own field) */
+  float gustAt(vec2 p, float y) {
+    vec2 q = p - gAdv; float s = 0.0;
+    for (int i = 0; i < 8; i++) s += gA[i].x * sin(gK[i].x * q.x + gK[i].y * q.y + gK[i].z * y + gK[i].w + gA[i].y * gT);
+    return s * gW.z;
+  }
+  float segDist(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+    return length(pa - ba * h);
+  }
+  /* shadow on the ground: the flyer and kite as projected capsules, the
+     tree's crown as ellipses stretched away from the sun */
+  float shadowAt(vec2 p) {
+    float s = 0.0;
+    /* most of the field is far from any shadow: test the boxes first */
+    if (p.x > shBox.x && p.y > shBox.y && p.x < shBox.z && p.y < shBox.w)
+    for (int i = 0; i < 16; i++) {
+      vec2 rr = shRad[i]; if (rr.x <= 0.0) continue;
+      float d = segDist(p, shSeg[i].xy, shSeg[i].zw);
+      s = max(s, (1.0 - smoothstep(rr.x - rr.y, rr.x + rr.y, d)));
+    }
+    vec2 ax = sunStretch.xy, ay = vec2(-ax.y, ax.x);
+    if (p.x > ellBox.x && p.y > ellBox.y && p.x < ellBox.z && p.y < ellBox.w)
+    for (int i = 0; i < 14; i++) {
+      vec4 e = shEll[i]; if (e.z <= 0.0) continue;
+      vec2 q = p - e.xy; float d = length(vec2(dot(q, ax) / sunStretch.z, dot(q, ay)));
+      s = max(s, 0.9 * (1.0 - smoothstep(e.z - e.w, e.z + e.w, d)));
+    }
+    return s;
+  }
+  vec3 fogged(vec3 c, float d) { return mix(c, haze, 1.0 - exp(-d / fogD)); }
+`;
+const OUT = `
+  #ifdef TONE_MAPPING
+    col = toneMapping(col);
+  #endif
+  gl_FragColor = linearToOutputTexel(vec4(col, alpha));
+`;
+
+/* ------------------------------------------------------------- textures
+   painted once: grass detail (tiles every 1.6 m) and a soft noise for
+   patches of greener and drier grass */
+function mulberry32(a) { return E.mulberry32(a); }
+const grassCan = document.createElement('canvas'); grassCan.width = grassCan.height = 512;
+(() => {
+  const c = grassCan.getContext('2d'), r = mulberry32(11);
+  c.fillStyle = 'rgb(128,128,128)'; c.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 26000; i++) {
+    const x = r() * 512, y = r() * 512, l = 6 + 18 * r(), a = (r() - 0.5) * 0.9, v = 70 + 120 * r();
+    c.strokeStyle = `rgba(${v},${v},${v},0.55)`; c.lineWidth = 0.8 + 1.4 * r();
+    for (const dx of [-512, 0, 512]) for (const dy of [-512, 0, 512]) {
+      if (x + dx < -30 || x + dx > 542 || y + dy < -30 || y + dy > 542) continue;
+      c.beginPath(); c.moveTo(x + dx, y + dy); c.lineTo(x + dx + Math.sin(a) * l, y + dy - Math.cos(a) * l); c.stroke();
+    }
+  }
+})();
+const grassTex = new THREE.CanvasTexture(grassCan);
+grassTex.wrapS = grassTex.wrapT = THREE.RepeatWrapping; grassTex.anisotropy = 4;
+const noiseCan = document.createElement('canvas'); noiseCan.width = noiseCan.height = 256;
+(() => {
+  /* tileable value noise, three octaves per channel */
+  const c = noiseCan.getContext('2d'), img = c.createImageData(256, 256), r = mulberry32(5);
+  const grid = (n) => { const g = []; for (let i = 0; i < n * n; i++) g.push(r()); return g; };
+  const oct = [[8, grid(8)], [16, grid(16)], [32, grid(32)]], oct2 = [[4, grid(4)], [8, grid(8)], [16, grid(16)]];
+  const val = (O, x, y) => {
+    let s = 0, w = 0, amp = 1;
+    for (const [n, g] of O) {
+      const fx = x / 256 * n, fy = y / 256 * n, ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
+      const at = (a, b) => g[((b % n + n) % n) * n + ((a % n + n) % n)];
+      const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+      const v = lerp(lerp(at(ix, iy), at(ix + 1, iy), sx), lerp(at(ix, iy + 1), at(ix + 1, iy + 1), sx), sy);
+      s += v * amp; w += amp; amp *= 0.5;
+    }
+    return s / w;
+  };
+  for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) {
+    const k = 4 * (y * 256 + x);
+    img.data[k] = 255 * val(oct, x, y); img.data[k + 1] = 255 * val(oct2, x, y); img.data[k + 2] = 255 * val(oct, y, x); img.data[k + 3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+})();
+const noiseTex = new THREE.CanvasTexture(noiseCan);
+noiseTex.wrapS = noiseTex.wrapT = THREE.RepeatWrapping;
+
+/* ------------------------------------------------------------- the sky */
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: U, depthWrite: false, side: THREE.BackSide,
+  vertexShader: `varying vec3 vD; void main() { vD = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: GLSL_COMMON + `
+    varying vec3 vD;
+    void main() {
+      vec3 d = normalize(vD); float e = d.y, alpha = 1.0;
+      vec3 col = mix(horizon, zenith, pow(clamp(e, 0.0, 1.0), 0.5));
+      col = mix(col, haze, exp(-max(e, 0.0) * 18.0) * 0.6);          // haze along the horizon
+      if (e < 0.0) col = haze;
+      float cs = dot(d, sunDir);
+      col += sunCol * (0.05 * pow(max(cs, 0.0), 6.0) + 0.3 * pow(max(cs, 0.0), 120.0));
+      col += sunCol * 18.0 * smoothstep(0.99984, 0.99993, cs);         // the sun's disc
+      ` + OUT + `
+    }`,
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(7000, 48, 24), skyMat);
+sky.renderOrder = -10; sky.frustumCulled = false;
+scene.add(sky);
+
+/* ------------------------------------------------------------- clouds
+   cumulus painted on canvases: puffs over a flat grey base, sunlit tops */
+const CLOUD_TEX = [];
+function paintCloud(seed) {
+  const W = 512, H = 288, can = document.createElement('canvas'); can.width = W; can.height = H;
+  const c = can.getContext('2d'), r = mulberry32(seed);
+  const base = H * 0.80, P = [];
+  const n = 18 + Math.floor(r() * 16), towers = 1 + Math.floor(r() * 3);
+  const tw = Array.from({ length: towers }, () => [W * (0.25 + 0.5 * r()), 0.35 + 0.5 * r()]);
+  for (let i = 0; i < n; i++) {
+    const x = W * (0.12 + 0.76 * r()), prof = tw.reduce((m, [cx, h]) => Math.max(m, h * Math.exp(-(((x - cx) / (W * 0.22)) ** 2))), 0.18);
+    const rad = H * (0.10 + 0.14 * r()) * (0.6 + prof);
+    const y = base - rad * 0.55 - r() * prof * H * 0.55;
+    P.push([x, Math.min(y, base - rad * 0.45), rad]);
+  }
+  for (const pass of [0, 1]) for (const [x, y, rad] of P) {
+    c.save(); c.beginPath(); c.rect(0, 0, W, base); c.clip();
+    const g = c.createRadialGradient(x, y - (pass ? rad * 0.35 : -rad * 0.1), 0, x, y, rad);
+    if (pass === 0) { g.addColorStop(0, 'rgba(176,184,198,1)'); g.addColorStop(0.7, 'rgba(176,184,198,0.85)'); g.addColorStop(1, 'rgba(176,184,198,0)'); }
+    else { g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.5, 'rgba(250,251,253,0.75)'); g.addColorStop(1, 'rgba(250,251,253,0)'); }
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, rad, 0, 2 * Math.PI); c.fill(); c.restore();
+  }
+  /* a soft grey underside along the base */
+  const gb = c.createLinearGradient(0, base - H * 0.16, 0, base);
+  gb.addColorStop(0, 'rgba(160,168,184,0)'); gb.addColorStop(1, 'rgba(150,158,176,0.55)');
+  c.globalCompositeOperation = 'source-atop'; c.fillStyle = gb; c.fillRect(0, base - H * 0.16, W, H * 0.16);
+  const t = new THREE.CanvasTexture(can); t.encoding = THREE.sRGBEncoding;
+  return t;
+}
+for (let i = 0; i < 6; i++) CLOUD_TEX.push(paintCloud(101 + i * 17));
+let clouds = [];
+function makeClouds(r, n) {
+  for (const c of clouds) { scene.remove(c); c.material.dispose(); }
+  clouds = [];
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.SpriteMaterial({ map: CLOUD_TEX[Math.floor(r() * CLOUD_TEX.length)], transparent: true, depthWrite: false, fog: false });
+    const s = new THREE.Sprite(m), w = 380 + 900 * Math.pow(r(), 1.4);
+    s.scale.set(w, w * 0.5625, 1);
+    s.position.set((r() * 2 - 1) * 7000, 900 + 700 * r(), (r() * 2 - 1) * 7000);
+    s.userData.base = 0.9 + 0.1 * r();
+    clouds.push(s); scene.add(s);
+  }
+}
+
+/* ------------------------------------------------------------- the field */
+const groundMat = new THREE.ShaderMaterial({
+  uniforms: Object.assign({ grassTex: { value: grassTex }, noiseTex: { value: noiseTex },
+    gA_: { value: new THREE.Color() }, gB_: { value: new THREE.Color() }, gC_: { value: new THREE.Color() } }, U),
+  vertexShader: `varying vec3 vW; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: GLSL_COMMON + `
+    uniform sampler2D grassTex, noiseTex; uniform vec3 gA_, gB_, gC_;
+    varying vec3 vW;
+    void main() {
+      vec2 p = vW.xz; float alpha = 1.0;
+      float d = length(vW - cameraPosition);
+      float det = texture2D(grassTex, p / 1.6).r, det2 = texture2D(grassTex, p / 7.3 + 0.37).r;
+      vec3 nz = texture2D(noiseTex, p / 55.0).rgb, nz2 = texture2D(noiseTex, p / 420.0).rgb;
+      vec3 col = mix(gA_, gB_, smoothstep(0.3, 0.7, nz.r));
+      col = mix(col, gC_, smoothstep(0.55, 0.8, nz2.g) * 0.7);                 // drier stretches
+      float fine = mix(0.75 + 0.5 * det * det2 * 1.6, 1.0, smoothstep(30.0, 140.0, d));
+      col *= fine * (0.85 + 0.3 * nz.b);
+      /* wind on the grass: bent blades show their paler sides where the gust is strong */
+      float g = gustAt(p, 0.5) + gW.w;
+      col = mix(col, col * vec3(1.18, 1.22, 1.08) + vec3(0.012, 0.015, 0.008), smoothstep(0.6, 1.8, g / max(gW.w, 0.5)) * 0.55);
+      float sh = shadowAt(p);
+      float sun = max(sunDir.y, 0.0);
+      col = col * (sunCol * sun * (1.0 - 0.8 * sh) + skyAmb);
+      col = fogged(col, d);
+      ` + OUT + `
+    }`,
+});
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000).rotateX(-Math.PI / 2), groundMat);
+ground.renderOrder = -5;
+scene.add(ground);
+
+/* ------------------------------------------------------------- far away: tree lines and hills */
+const farMat = new THREE.ShaderMaterial({
+  uniforms: U, vertexColors: true,
+  vertexShader: `varying vec3 vW, vC; void main() { vC = color; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: GLSL_COMMON + `
+    varying vec3 vW, vC;
+    void main() {
+      float alpha = 1.0, d = length(vW.xz - cameraPosition.xz);
+      vec3 col = vC * (sunCol * max(sunDir.y, 0.0) * 0.55 + skyAmb * 1.1);
+      col = fogged(col, d * 1.15);
+      ` + OUT + `
+    }`,
+});
+let farMesh = null;
+function makeFar(r) {
+  if (farMesh) { scene.remove(farMesh); farMesh.geometry.dispose(); }
+  const P = [], C = [], I = [];
+  const wave = (n) => { const w = []; for (let i = 0; i < n; i++) w.push([1 + Math.floor(r() * 9) + i * 3, r() * 6.28, r()]); return w; };
+  const ring = (R0, dR, base, amp, bumps, col, cvar, gaps) => {
+    const N = 900, wv = wave(7), gp = wave(4), start = P.length / 3;
+    for (let i = 0; i <= N; i++) {
+      const th = i / N * 2 * Math.PI;
+      let n = 0; for (const [k, ph, a] of wv) n += a * Math.sin(k * th + ph);
+      let g = 0; for (const [k, ph, a] of gp) g += a * Math.sin(k * th + ph);
+      const R = R0 + dR * n * 0.3;
+      let h = base + amp * (0.55 + 0.25 * n);
+      if (bumps) h += bumps * Math.abs(Math.sin(th * R / 6.5 + 2 * Math.sin(th * 37)));
+      if (gaps) h *= smoothstep(-0.2, 0.25, g + gaps);
+      const x = Math.cos(th) * R, z = Math.sin(th) * R;
+      P.push(x, -3, z, x, Math.max(h, -2), z);
+      const v = 1 + cvar * (r() - 0.5);
+      C.push(col[0] * 0.75 * v, col[1] * 0.75 * v, col[2] * 0.75 * v, col[0] * v, col[1] * v, col[2] * v);
+      if (i < N) { const a = start + 2 * i; I.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    }
+  };
+  const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  const tree = [0.05, 0.10, 0.04], hill = [0.10, 0.14, 0.09];
+  ring(3200, 900, 30, 100, 0, hill, 0.1, 0);                  // low hills far off
+  ring(1300, 260, 8, 14, 2.5, [0.06, 0.11, 0.05], 0.3, 0.8);  // a far tree line
+  ring(650, 140, 7, 12, 3, tree, 0.3, 0.6);                   // a nearer one, with gaps
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  geo.setIndex(I);
+  farMesh = new THREE.Mesh(geo, farMat); farMesh.frustumCulled = false;
+  scene.add(farMesh);
+}
+
+/* ------------------------------------------------------------- grass blades
+   a patch of blades round the flyer, bent by the same gusts; it follows
+   the flyer and thins out at its edge */
+const BLADES = STANDALONE ? 30000 : 18000, PATCH = 30;
+const bladeGeo = new THREE.InstancedBufferGeometry();
+(() => {
+  const P = [], I = [];
+  const hs = [0, 0.35, 0.7, 1.0], ws = [1, 0.85, 0.55, 0];
+  for (let k = 0; k < 4; k++) { if (k < 3) P.push(-ws[k] * 0.5, hs[k], 0, ws[k] * 0.5, hs[k], 0); else P.push(0, 1, 0); }
+  I.push(0, 1, 2, 1, 3, 2, 2, 3, 4, 3, 5, 4, 4, 5, 6);
+  bladeGeo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  bladeGeo.setIndex(I);
+  const r = mulberry32(31), inst = new Float32Array(BLADES * 4), var4 = new Float32Array(BLADES * 4);
+  for (let i = 0; i < BLADES; i++) {
+    inst.set([r(), r(), r() * 6.283, 0.12 + 0.2 * Math.pow(r(), 1.5)], 4 * i);
+    var4.set([r(), r(), r(), r()], 4 * i);
+  }
+  bladeGeo.setAttribute('inst', new THREE.InstancedBufferAttribute(inst, 4));
+  bladeGeo.setAttribute('vary', new THREE.InstancedBufferAttribute(var4, 4));
+  bladeGeo.instanceCount = BLADES;
+})();
+const bladeMat = new THREE.ShaderMaterial({
+  uniforms: Object.assign({ center: { value: new THREE.Vector2() }, bA: { value: new THREE.Color() }, bB: { value: new THREE.Color() } }, U),
+  side: THREE.DoubleSide,
+  vertexShader: GLSL_COMMON + `
+    attribute vec4 inst, vary; uniform vec2 center; uniform vec3 bA, bB;
+    varying vec3 vC; varying float vSh, vD;
+    void main() {
+      vec2 o = (fract(inst.xy - center / ${PATCH.toFixed(1)} + 0.5) - 0.5) * ${PATCH.toFixed(1)};
+      vec2 base = center + o;
+      float edge = (1.0 - smoothstep(0.3, 0.5, length(o) / ${PATCH.toFixed(1)})) * (1.0 - smoothstep(9.0, 20.0, length(base - cameraPosition.xz)));
+      float h = inst.w * edge, t = position.y;
+      float g = gustAt(base, 0.3) + gW.w;
+      float bend = clamp(0.15 + 0.11 * g + 0.25 * sin(gT * (2.5 + vary.x) + vary.y * 6.283) * min(g, 3.0) * 0.12, 0.0, 1.25);
+      vec2 dir = normalize(vec2(gW.x, gW.y) + 0.35 * vec2(cos(inst.z), sin(inst.z)));
+      vec2 side = vec2(cos(inst.z), sin(inst.z)) * 0.012 * (1.0 + vary.z);
+      vec3 p = vec3(base.x + side.x * position.x, 0.0, base.y + side.y * position.x);
+      float lean = bend * t * t;
+      p.xz += dir * h * sin(lean); p.y = h * t * cos(lean * 0.8);
+      vC = mix(bA, bB, 0.35 + t * (0.45 + 0.3 * vary.w)) * (0.85 + 0.3 * vary.z);
+      vSh = shadowAt(base);
+      vec4 w = vec4(p, 1.0); vD = length(p - cameraPosition);
+      gl_Position = projectionMatrix * viewMatrix * w;
+    }`,
+  fragmentShader: GLSL_COMMON + `
+    varying vec3 vC; varying float vSh, vD;
+    void main() {
+      float alpha = 1.0;
+      vec3 col = vC * (sunCol * max(sunDir.y, 0.0) * 0.85 * (1.0 - 0.8 * vSh) + skyAmb);
+      col = fogged(col, vD);
+      ` + OUT + `
+    }`,
+});
+const blades = new THREE.Mesh(bladeGeo, bladeMat); blades.frustumCulled = false;
+scene.add(blades);
+
+/* ------------------------------------------------------------- lights for the solid things */
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.0), hemi = new THREE.HemisphereLight(0x9fbfe6, 0x5c7240, 0.9);
+scene.add(sunLight, hemi);
+
+/* ------------------------------------------------------------- trees
+   a trunk, a few limbs and a lumpy crown of leaf clumps (one mesh) */
+function mergeGeos(list) {
+  const P = [], N = [], C = [];
+  for (const [g, col] of list) {
+    const gg = g.index ? g.toNonIndexed() : g, p = gg.attributes.position.array, n = gg.attributes.normal.array;
+    for (let i = 0; i < p.length; i += 3) {
+      P.push(p[i], p[i + 1], p[i + 2]); N.push(n[i], n[i + 1], n[i + 2]);
+      const c = typeof col === 'function' ? col(p[i], p[i + 1], p[i + 2]) : col;
+      C.push(c[0], c[1], c[2]);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  return geo;
+}
+const treeMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+function makeTree(r, x, z, size, detail) {
+  const H = size, trunkH = H * (0.28 + 0.06 * r()), crownR = H * (0.36 + 0.06 * r()), cy = trunkH + crownR * 0.85;
+  const parts = [], crown = [];
+  const bark = [0.13, 0.10, 0.08];
+  const trunk = new THREE.CylinderGeometry(H * 0.022, H * 0.032, trunkH + crownR * 0.4, 9, 1);
+  trunk.translate(0, (trunkH + crownR * 0.4) / 2, 0);
+  parts.push([trunk, bark]);
+  const nb = 4 + Math.floor(r() * 3), nClump = detail ? 14 + Math.floor(r() * 6) : 6;
+  for (let i = 0; i < nb; i++) {
+    const a = i / nb * 6.283 + r(), up = 0.5 + 0.4 * r(), len = crownR * (0.75 + 0.3 * r());
+    const dir = new THREE.Vector3(Math.cos(a) * Math.cos(up), Math.sin(up), Math.sin(a) * Math.cos(up));
+    const g = new THREE.CylinderGeometry(H * 0.008, H * 0.016, len, 6, 1);
+    g.translate(0, len / 2, 0);
+    g.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)));
+    g.translate(0, trunkH * (0.85 + 0.2 * r()), 0);
+    parts.push([g, bark]);
+  }
+  const leaf = [0.06 + 0.03 * r(), 0.13 + 0.05 * r(), 0.04 + 0.02 * r()];
+  for (let i = 0; i < nClump; i++) {
+    const u = r() * 2 - 1, th = r() * 6.283, rr = Math.cbrt(r()) * 0.72;
+    const px = Math.sqrt(1 - u * u) * Math.cos(th) * crownR * rr, pz = Math.sqrt(1 - u * u) * Math.sin(th) * crownR * rr, py = u * crownR * 0.75 * rr;
+    const cr = crownR * (0.38 + 0.2 * r());
+    const g = new THREE.IcosahedronGeometry(cr, detail ? 2 : 1);
+    const pa = g.attributes.position;
+    for (let k = 0; k < pa.count; k++) {
+      const vx = pa.getX(k), vy = pa.getY(k), vz = pa.getZ(k), n = 1 + 0.18 * Math.sin(vx * 3.1 / cr * 2 + i) * Math.sin(vy * 2.7 / cr * 2) * Math.sin(vz * 3.7 / cr * 2 + i * 0.7);
+      pa.setXYZ(k, vx * n, vy * n * 0.85, vz * n);
+    }
+    const nm = g.attributes.normal;
+    for (let k = 0; k < pa.count; k++) { _v.set(pa.getX(k), pa.getY(k) / 0.85, pa.getZ(k)).normalize(); nm.setXYZ(k, _v.x, _v.y, _v.z); }
+    g.translate(px, cy + py, pz);
+    crown.push({ x: x + px, y: cy + py, z: z + pz, r: cr * 0.9 });
+    parts.push([g, (vx, vy) => { const k = 0.55 + 0.6 * clamp((vy - trunkH) / (crownR * 2), 0, 1); return [leaf[0] * k, leaf[1] * k, leaf[2] * k]; }]);
+  }
+  const mesh = new THREE.Mesh(mergeGeos(parts), treeMat);
+  mesh.position.set(x, 0, z);
+  const top = cy + crownR;
+  return { mesh, phys: { x, z, trunkR: H * 0.032, trunkH: trunkH + crownR * 0.3, top, R: crownR * 1.3, cy, crown } };
+}
+let trees = [], bigTree = null;
+function makeTrees(r, S) {
+  for (const t of trees) { scene.remove(t.mesh); t.mesh.geometry.dispose(); }
+  trees = []; bigTree = null;
+  /* a few trees well out in the field, for scale */
+  const n = 3 + Math.floor(r() * 6);
+  for (let i = 0; i < n; i++) {
+    const a = r() * 6.283, d = 90 + 260 * r();
+    trees.push(makeTree(r, Math.cos(a) * d, Math.sin(a) * d, 8 + 8 * r(), false));
+  }
+  if (S.tree) { bigTree = S.tree.built; trees.push(bigTree); }                 // built with its physics
+  for (const t of trees) scene.add(t.mesh);
+}
+
+/* ------------------------------------------------------------- lines and ribbons
+   a strip that keeps a width in pixels (lines, spars) or in metres (tails)
+   whatever the distance, with soft edges */
+const lineMat = (color, px, metres, opacity) => new THREE.ShaderMaterial({
+  uniforms: Object.assign({ col: { value: color }, px: { value: px }, metres: { value: metres || 0 }, op: { value: opacity || 1 } }, U),
+  transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  vertexShader: `
+    attribute vec3 nb; attribute float side, dirSign, wmul; uniform vec2 res; uniform float px, metres;
+    varying float vPx, vHw;
+    void main() {
+      vec4 a = projectionMatrix * modelViewMatrix * vec4(position, 1.0), b = projectionMatrix * modelViewMatrix * vec4(nb, 1.0);
+      vec2 sa = a.xy / max(a.w, 1e-3), sb = b.xy / max(b.w, 1e-3);
+      vec2 d = (sb - sa) * res; d = length(d) > 1e-5 ? normalize(d) * dirSign : vec2(1.0, 0.0);
+      float w = max(px, metres * wmul * 0.5 * projectionMatrix[1][1] * res.y * 0.5 / max(a.w, 1e-3));   // half width, px
+      a.xy += vec2(-d.y, d.x) * side * (w + 1.0) / res * 2.0 * a.w;
+      vPx = side * (w + 1.0); vHw = w;
+      gl_Position = a;
+    }`,
+  fragmentShader: `
+    uniform vec3 col; uniform float op; varying float vPx, vHw;
+    void main() {
+      /* coverage of the pixel by a strip vHw either side of the centre */
+      float alpha = op * clamp(vHw + 0.5 - abs(vPx), 0.0, 1.0) * min(1.0, 2.0 * vHw);
+      vec3 c = col;
+      #ifdef TONE_MAPPING
+        c = toneMapping(c);
+      #endif
+      gl_FragColor = linearToOutputTexel(vec4(c, alpha));
+    }`,
+});
+class Strip {
+  constructor(n, mat) {
+    this.n = n;
+    const g = new THREE.BufferGeometry();
+    this.pos = new Float32Array(n * 6); this.nb = new Float32Array(n * 6); this.wm = new Float32Array(n * 2).fill(1);
+    const side = new Float32Array(n * 2), ds = new Float32Array(n * 2), idx = [];
+    for (let i = 0; i < n; i++) { side[2 * i] = -1; side[2 * i + 1] = 1; ds[2 * i] = ds[2 * i + 1] = i < n - 1 ? 1 : -1; }
+    for (let i = 0; i < n - 1; i++) { const a = 2 * i; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('nb', new THREE.BufferAttribute(this.nb, 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('wmul', new THREE.BufferAttribute(this.wm, 1).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('side', new THREE.BufferAttribute(side, 1)); g.setAttribute('dirSign', new THREE.BufferAttribute(ds, 1));
+    g.setIndex(idx);
+    this.mesh = new THREE.Mesh(g, mat); this.mesh.frustumCulled = false;
+  }
+  /* pts: flat array of n points */
+  set(pts, wmul) {
+    const n = this.n, P = this.pos, N = this.nb;
+    for (let i = 0; i < n; i++) {
+      const j = i < n - 1 ? i + 1 : i - 1;
+      for (let c = 0; c < 3; c++) { P[6 * i + c] = P[6 * i + 3 + c] = pts[3 * i + c]; N[6 * i + c] = N[6 * i + 3 + c] = pts[3 * j + c]; }
+      if (wmul) this.wm[2 * i] = this.wm[2 * i + 1] = wmul[i];
+    }
+    const g = this.mesh.geometry;
+    g.attributes.position.needsUpdate = true; g.attributes.nb.needsUpdate = true;
+    if (wmul) g.attributes.wmul.needsUpdate = true;
+  }
+}
+
+/* ------------------------------------------------------------- the kite
+   sails drawn from the engine's own panels; spars and bridle as thin
+   strips; the sail glows when the sun is behind it (thin nylon) */
+const sailMat = new THREE.ShaderMaterial({
+  uniforms: Object.assign({ map: { value: null } }, U), side: THREE.DoubleSide,
+  vertexShader: `varying vec2 vUv; varying vec3 vW, vN; void main() { vUv = uv; vN = normal; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: GLSL_COMMON + `
+    uniform sampler2D map; varying vec2 vUv; varying vec3 vW, vN;
+    void main() {
+      float alpha = 1.0;
+      vec3 tex = pow(texture2D(map, vUv).rgb, vec3(2.2));
+      vec3 V = normalize(cameraPosition - vW), N = normalize(vN);
+      if (dot(N, V) < 0.0) N = -N;                         // the side we see
+      float nd = dot(N, sunDir);
+      vec3 col = tex * (sunCol * (max(nd, 0.0) * 0.95 + max(-nd, 0.0) * 0.55 * (0.4 + 0.6 * tex)) + skyAmb * 1.1);
+      col = fogged(col, length(vW - cameraPosition));
+      ` + OUT + `
+    }`,
+});
+function kiteTexture(r, kind) {
+  const can = document.createElement('canvas'); can.width = can.height = 256;
+  const c = can.getContext('2d');
+  const PAL = ['#d7263d', '#f46036', '#ffd23f', '#3bb273', '#1b4b9b', '#6a2c91', '#e03e8f', '#1c9aa0', '#f2f2f2', '#1a1a1a'];
+  const pick = () => PAL[Math.floor(r() * PAL.length)];
+  let a = pick(), b = pick(); while (b === a) b = pick();
+  let d = pick(); while (d === a || d === b) d = pick();
+  const style = Math.floor(r() * 4);
+  c.fillStyle = a; c.fillRect(0, 0, 256, 256);
+  if (kind === 'dragon') return dragonTexture(c, can, r);
+  if (kind === 'delta') {
+    if (style === 0) { for (let i = 0; i < 6; i++) { c.fillStyle = [a, b, d][i % 3]; c.beginPath(); c.moveTo(128, 256 - i * 30); c.lineTo(-40, 0 - i * 30 + 120); c.lineTo(-40, -40); c.lineTo(296, -40); c.lineTo(296, 120 - i * 30); c.closePath(); c.fill(); } }
+    else if (style === 1) { c.fillStyle = b; c.fillRect(0, 0, 256, 120); c.fillStyle = d; c.fillRect(110, 0, 36, 256); }
+    else if (style === 2) { const g = c.createLinearGradient(0, 0, 256, 0); ['#d7263d', '#f46036', '#ffd23f', '#3bb273', '#1b4b9b', '#6a2c91'].forEach((col, i) => g.addColorStop(i / 5, col)); c.fillStyle = g; c.fillRect(0, 0, 256, 256); }
+    else { c.fillStyle = b; c.beginPath(); c.moveTo(128, 0); c.lineTo(0, 256); c.lineTo(80, 256); c.lineTo(128, 120); c.lineTo(176, 256); c.lineTo(256, 256); c.closePath(); c.fill(); }
+  } else {
+    if (style === 0) { c.fillStyle = b; c.fillRect(0, 0, 128, 70); c.fillRect(128, 70, 128, 186); }
+    else if (style === 1) { c.fillStyle = b; for (let i = 0; i < 12; i++) { c.beginPath(); c.moveTo(128, 70); c.arc(128, 70, 300, i * Math.PI / 6, (i + 0.5) * Math.PI / 6); c.fill(); } c.fillStyle = d; c.beginPath(); c.arc(128, 70, 30, 0, 6.3); c.fill(); }
+    else if (style === 2) { for (let i = 0; i < 7; i++) { c.fillStyle = [a, b, d][i % 3]; c.fillRect(0, i * 37, 256, 37); } }
+    else { for (let i = 4; i > 0; i--) { c.fillStyle = i % 2 ? b : d; c.beginPath(); c.arc(128, 90, i * 34, 0, 6.3); c.fill(); } }
+  }
+  const t = new THREE.CanvasTexture(can); t.encoding = THREE.sRGBEncoding; t.anisotropy = 4;
+  return { tex: t, colors: [a, b, d] };
+}
+/* the centipede dragon's head: a painted face on a round disc (uv across
+   and up), and the colours its body discs take */
+const DRAGON_PAL = [['#c8202f', '#f4c430', '#1a1a1a'], ['#1f7a3a', '#f2d541', '#7a1f1f'], ['#1f4fa8', '#f2f2f2', '#d9a21b'], ['#6a2c91', '#f39c12', '#1a1a1a']];
+function dragonTexture(c, can, r) {
+  const [body, gold, dark] = DRAGON_PAL[Math.floor(r() * DRAGON_PAL.length)];
+  const Y = (v) => 256 - v * 256;                    // canvas row for a height up the face (0 chin, 1 brow)
+  c.fillStyle = gold; c.fillRect(0, 0, 256, 256);
+  c.fillStyle = body; c.beginPath(); c.arc(128, 128, 112, 0, 6.3); c.fill();        // the face inside a gold rim
+  c.fillStyle = gold;                                // a mane of flames round the rim
+  for (let i = 0; i < 24; i++) { const a = i / 24 * 6.283; c.beginPath(); c.moveTo(128 + 108 * Math.cos(a - 0.12), 128 + 108 * Math.sin(a - 0.12)); c.lineTo(128 + 128 * Math.cos(a), 128 + 128 * Math.sin(a)); c.lineTo(128 + 108 * Math.cos(a + 0.12), 128 + 108 * Math.sin(a + 0.12)); c.fill(); }
+  for (const sx of [-1, 1]) {                        // eyes, brows, nostrils
+    const ex = 128 + sx * 34, ey = Y(0.62);
+    c.fillStyle = '#ffffff'; c.beginPath(); c.ellipse(ex, ey, 20, 15, 0, 0, 6.3); c.fill();
+    c.fillStyle = dark; c.beginPath(); c.arc(ex + sx * 3, ey, 9, 0, 6.3); c.fill();
+    c.strokeStyle = gold; c.lineWidth = 7; c.beginPath(); c.moveTo(ex - 26 * sx, ey - 26); c.lineTo(ex + 22 * sx, ey - 14); c.stroke();
+    c.fillStyle = dark; c.beginPath(); c.ellipse(128 + sx * 12, Y(0.36), 6, 9, 0, 0, 6.3); c.fill();
+  }
+  c.strokeStyle = gold; c.lineWidth = 6; c.beginPath(); c.arc(128, Y(0.3), 46, 0.2, Math.PI - 0.2); c.stroke();   // the grin
+  c.fillStyle = '#ffffff';
+  for (let i = -3; i <= 3; i++) { c.beginPath(); c.moveTo(128 + i * 12 - 5, Y(0.22)); c.lineTo(128 + i * 12 + 5, Y(0.22)); c.lineTo(128 + i * 12, Y(0.22) + 10); c.fill(); }
+  const t = new THREE.CanvasTexture(can); t.encoding = THREE.sRGBEncoding; t.anisotropy = 4;
+  return { tex: t, colors: [body, gold, dark] };
+}
+/* the centipede: every disc an instance (the head is bigger and wears the
+   face), a balance stick across each with a tuft of feathers at each end,
+   two backbone strings through the discs' tops and bottoms, and two
+   whiskers trailing from the head. Each disc faces the way the engine says
+   its strings hold it (T.nrm). */
+function discTexture() {
+  const can = document.createElement('canvas'); can.width = can.height = 128;
+  const c = can.getContext('2d');
+  c.fillStyle = '#ffffff'; c.fillRect(0, 0, 128, 128);
+  c.fillStyle = 'rgba(0,0,0,0.25)'; c.beginPath(); c.arc(64, 64, 62, 0, 6.3); c.fill();   // a darker rim
+  c.fillStyle = '#ffffff'; c.beginPath(); c.arc(64, 64, 52, 0, 6.3); c.fill();
+  c.fillStyle = 'rgba(0,0,0,0.12)';                                                       // a scale pattern
+  for (let y = 20; y < 120; y += 18) for (let x = 14; x < 120; x += 18) { c.beginPath(); c.arc(x + ((y / 18) % 2) * 9, y, 8, 0, Math.PI); c.fill(); }
+  const t = new THREE.CanvasTexture(can); t.encoding = THREE.sRGBEncoding;
+  return t;
+}
+function makeCentipede(tr, look) {
+  const n = tr.n, objs = [];
+  const discs = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 24), new THREE.MeshLambertMaterial({ map: discTexture(), side: THREE.DoubleSide }), n);
+  const body = new THREE.Color(look.colors[0]).convertSRGBToLinear(), gold = new THREE.Color(look.colors[1]).convertSRGBToLinear();
+  for (let k = 0; k < n; k++) discs.setColorAt(k, k % 4 === 3 ? gold : body);
+  discs.instanceColor.needsUpdate = true;
+  const sticks = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 5), new THREE.MeshLambertMaterial({ color: lin(120, 90, 50) }), n + 1);
+  const tufts = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 6), new THREE.MeshLambertMaterial({ color: lin(245, 240, 225) }), 2 * (n + 1));
+  const head = new THREE.Mesh(new THREE.CircleGeometry(1, 40), new THREE.MeshLambertMaterial({ map: look.tex, side: THREE.DoubleSide }));
+  const strMat = lineMat(lin(230, 225, 215), 0.4, 0, 0.8);
+  const backTop = new Strip(n + 1, strMat), backBot = new Strip(n + 1, strMat);
+  const whisk = [new Strip(8, lineMat(gold, 0.8, 0.03, 1)), new Strip(8, lineMat(gold, 0.8, 0.03, 1))];
+  for (const m of [discs, sticks, tufts, head]) m.frustumCulled = false;
+  objs.push(discs, sticks, tufts, head, backTop.mesh, backBot.mesh, whisk[0].mesh, whisk[1].mesh);
+  return { tr, discs, sticks, tufts, head, backTop, backBot, whisk, objs, top: new Float32Array(3 * (n + 1)), bot: new Float32Array(3 * (n + 1)), wb: new Float32Array(24) };
+}
+const _m4 = new THREE.Matrix4(), _xa = new THREE.Vector3(), _ya = new THREE.Vector3(), _za = new THREE.Vector3(), _pv = new THREE.Vector3(), _sv = new THREE.Vector3();
+const _dv = new THREE.Vector3(), _tv = new THREE.Vector3(), _bv = new THREE.Vector3();
+function drawCentipede(C, t) {
+  const T = W.tail, tr = C.tr, x = W.ph.x, N = T.nrm;
+  let ti = 0;
+  for (let k = 0; k <= tr.n; k++) {
+    const i3 = 3 * T.parts[k], r = (k === 0 ? tr.head : tr.d) / 2;
+    _za.set(N[3 * k], N[3 * k + 1], N[3 * k + 2]);
+    if (_za.lengthSq() < 0.5) _za.set(1, 0, 0);
+    _za.normalize();
+    _xa.set(0, 1, 0).cross(_za); if (_xa.lengthSq() < 1e-6) _xa.set(1, 0, 0); _xa.normalize();   // across: level
+    _ya.crossVectors(_za, _xa);                                                                   // up the disc
+    _pv.set(x[i3], x[i3 + 1], x[i3 + 2]);
+    _m4.makeBasis(_xa, _ya, _za).scale(_sv.set(r, r, r)).setPosition(_pv);
+    if (k === 0) { C.head.matrixAutoUpdate = false; C.head.matrix.copy(_m4); C.head.matrixWorldNeedsUpdate = true; }
+    else C.discs.setMatrixAt(k - 1, _m4);
+    C.top[3 * k] = x[i3] + _ya.x * r * 0.8; C.top[3 * k + 1] = x[i3 + 1] + _ya.y * r * 0.8; C.top[3 * k + 2] = x[i3 + 2] + _ya.z * r * 0.8;
+    C.bot[3 * k] = x[i3] - _ya.x * r * 0.8; C.bot[3 * k + 1] = x[i3 + 1] - _ya.y * r * 0.8; C.bot[3 * k + 2] = x[i3 + 2] - _ya.z * r * 0.8;
+    /* the balance stick across the disc, a feather tuft at each end */
+    const L = r * 2.6, sr = 0.008 * (k === 0 ? 2 : 1);
+    _bv.copy(_pv).addScaledVector(_za, -0.01);
+    _dv.copy(_ya).multiplyScalar(-1);
+    _m4.makeBasis(_dv, _xa, _za).scale(_sv.set(sr, L, sr)).setPosition(_bv);
+    C.sticks.setMatrixAt(k, _m4);
+    for (const sd of [-1, 1]) {
+      const tr2 = r * 0.35, fl = 0.18 * Math.sin(t * 6 + k * 0.7 + sd);
+      _dv.copy(_xa).multiplyScalar(sd).addScaledVector(_ya, fl).normalize();
+      _tv.copy(_bv).addScaledVector(_xa, sd * L / 2).addScaledVector(_dv, tr2 * 0.8);
+      const side = new THREE.Vector3().crossVectors(_dv, _za).normalize();
+      _m4.makeBasis(side, _dv, _za).scale(_sv.set(tr2 * 0.5, tr2 * 1.6, tr2 * 0.5)).setPosition(_tv);
+      C.tufts.setMatrixAt(ti++, _m4);
+    }
+    if (k === 0) {                                   // whiskers trail back from the head's cheeks, fluttering
+      for (let s2 = 0; s2 < 2; s2++) {
+        const sd = s2 ? 1 : -1;
+        for (let j = 0; j < 8; j++) {
+          const u = j / 7, a = 0.12 * u * Math.sin(t * 7 + j * 0.9 + sd), o = r * (0.55 + 0.3 * u) * sd + a;
+          C.wb[3 * j] = x[i3] + _xa.x * o - _za.x * u * 1.4 - _ya.x * (r * 0.3 + u * 0.5);
+          C.wb[3 * j + 1] = x[i3 + 1] + _xa.y * o - _za.y * u * 1.4 - _ya.y * (r * 0.3 + u * 0.5);
+          C.wb[3 * j + 2] = x[i3 + 2] + _xa.z * o - _za.z * u * 1.4 - _ya.z * (r * 0.3 + u * 0.5);
+        }
+        C.whisk[s2].set(C.wb);
+      }
+    }
+  }
+  C.discs.instanceMatrix.needsUpdate = true; C.sticks.instanceMatrix.needsUpdate = true; C.tufts.instanceMatrix.needsUpdate = true;
+  C.backTop.set(C.top); C.backBot.set(C.bot);
+}
+let KV = null;                                        // the drawn kite
+function buildKiteView(r) {
+  if (KV) {
+    for (const o of KV.objs) { scene.remove(o); if (o.geometry) o.geometry.dispose(); if (o.material !== sailMat) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } }
+    if (sailMat.uniforms.map.value) sailMat.uniforms.map.value.dispose();
+  }
+  const K = W.kite, def = W.def, kind = S.kite;
+  const look = kiteTexture(r, kind);
+  sailMat.uniforms.map.value = look.tex;
+  /* sails: one triangle per engine panel, uv from body x,y */
+  const xs = Object.values(def.pts || { o: [0, 0] }).map((p) => p[0]), ys = Object.values(def.pts || { o: [0, 1] }).map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const nT = K.S.length, sg = new THREE.BufferGeometry();
+  const sp = new Float32Array(nT * 9), sn = new Float32Array(nT * 9), su = new Float32Array(nT * 6);
+  K.S.forEach((Sx, k) => Sx.verts.forEach((v, j) => { su[6 * k + 2 * j] = (v[0] - x0) / (x1 - x0); su[6 * k + 2 * j + 1] = (v[1] - y0) / (y1 - y0); }));
+  sg.setAttribute('position', new THREE.BufferAttribute(sp, 3).setUsage(THREE.DynamicDrawUsage));
+  sg.setAttribute('normal', new THREE.BufferAttribute(sn, 3).setUsage(THREE.DynamicDrawUsage));
+  sg.setAttribute('uv', new THREE.BufferAttribute(su, 2));
+  const sail = new THREE.Mesh(sg, sailMat); sail.frustumCulled = false;
+  /* spars and bridle legs, in body coordinates */
+  const P = def.pts || {}, sc = (v) => v.map((c) => c * (def.scale || 1));   // a body point given at the kite's design size
+  const spars = kind === 'delta'
+    ? [[P.N, P.L], [P.N, P.R], [P.N, P.T], [sc([-0.62, 0.22, -0.06]), sc([0.62, 0.22, -0.06])], [sc([-0.62, 0.22, -0.06]), sc([-0.4, 0.1, -0.2])], [sc([0.62, 0.22, -0.06]), sc([0.4, 0.1, -0.2])]]
+    : kind === 'dragon' ? []
+    : [[P.N, P.T], [P.L, [0, P.L[1], 0]], [[0, P.R[1], 0], P.R]];
+  const bridles = kind === 'delta'
+    ? [[P.BL, P.N], [P.BL, sc([-0.62, 0.22, -0.06])], [P.BL, sc([-0.05, 0.12, 0])], [P.BR, P.N], [P.BR, sc([0.62, 0.22, -0.06])], [P.BR, sc([0.05, 0.12, 0])]]
+    : kind === 'dragon' ? []
+    : [[P.B, sc([0, 0.93, 0])], [P.B, sc([0, 0.12, 0])]];
+  const sparMat = lineMat(new THREE.Color(0.02, 0.02, 0.02), 1.0), bridleMat = lineMat(new THREE.Color(0.75, 0.75, 0.72), 0.5, 0, 0.8);
+  const segs = [];
+  for (const [a, b] of spars) segs.push({ a: K.emb(a), b: K.emb(b), strip: new Strip(2, sparMat) });
+  for (const [a, b] of bridles) segs.push({ a: K.emb(a), b: K.emb(b), strip: new Strip(2, bridleMat) });
+  /* flying lines and the tail */
+  const lineM = lineMat(lin(244, 242, 236), 0.42, 0, 0.85);            // white and fine (Joe: less conspicuous)
+  const lines = W.lines.map(() => new Strip(E.NLINE + 1, lineM));
+  let tail = null;
+  let cent = null;
+  if (W.tail && W.tail.train) cent = makeCentipede(W.tail.train, look);
+  else if (W.tail) tail = new Strip(W.tail.parts.length, lineMat(new THREE.Color(look.colors[1]).convertSRGBToLinear(), 1.0, 0.07 * (def.scale || 1), 1));
+  const objs = [sail, ...segs.map((s) => s.strip.mesh), ...lines.map((l) => l.mesh)];
+  if (tail) objs.push(tail.mesh);
+  if (cent) objs.push(...cent.objs);
+  for (const o of objs) scene.add(o);
+  KV = { sail, sp, sn, segs, lines, tail, cent, objs, buf: new Float32Array(3 * 64), wm: new Float32Array(64) };
+}
+function drawKite(t) {
+  const K = W.kite, x = W.ph.x, B = K.basis;
+  const at = (w, out, o) => { out[o] = out[o + 1] = out[o + 2] = 0; for (let j = 0; j < 4; j++) { const i3 = 3 * B[j]; out[o] += w[j] * x[i3]; out[o + 1] += w[j] * x[i3 + 1]; out[o + 2] += w[j] * x[i3 + 2]; } };
+  K.S.forEach((Sx, k) => {
+    for (let v = 0; v < 3; v++) at([Sx.c[4 * v], Sx.c[4 * v + 1], Sx.c[4 * v + 2], Sx.c[4 * v + 3]], KV.sp, 9 * k + 3 * v);
+    const p = KV.sp, o = 9 * k;
+    const ax = p[o + 3] - p[o], ay = p[o + 4] - p[o + 1], az = p[o + 5] - p[o + 2], bx = p[o + 6] - p[o], by = p[o + 7] - p[o + 1], bz = p[o + 8] - p[o + 2];
+    let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx; const l = Math.hypot(nx, ny, nz) || 1;
+    for (let v = 0; v < 3; v++) { KV.sn[o + 3 * v] = nx / l; KV.sn[o + 3 * v + 1] = ny / l; KV.sn[o + 3 * v + 2] = nz / l; }
+  });
+  KV.sail.geometry.attributes.position.needsUpdate = true; KV.sail.geometry.attributes.normal.needsUpdate = true;
+  const b = KV.buf;
+  for (const s of KV.segs) { at(s.a, b, 0); at(s.b, b, 3); s.strip.set(b); }
+  W.lines.forEach((ln, li) => {
+    ln.parts.forEach((pi, k) => { b[3 * k] = x[3 * pi]; b[3 * k + 1] = x[3 * pi + 1]; b[3 * k + 2] = x[3 * pi + 2]; });
+    KV.lines[li].set(b);
+  });
+  if (KV.tail) {
+    const T = W.tail.parts, n = T.length;
+    /* the physics tail streams straight; a ribbon also flutters: a wave
+       travels down it, sideways to the wind, growing toward its end */
+    const ex = W.wind.ex, ez = W.wind.ez;
+    for (let k = 0; k < n; k++) {
+      const i3 = 3 * T[k], a = 0.18 * (k / n) * Math.sin(k * 0.85 - t * 9.0), v = 0.08 * (k / n) * Math.cos(k * 0.6 - t * 6.5);
+      b[3 * k] = x[i3] - ez * a; b[3 * k + 1] = x[i3 + 1] + v; b[3 * k + 2] = x[i3 + 2] + ex * a;
+      KV.wm[k] = (0.3 + 0.7 * Math.abs(Math.cos(k * 0.9 - t * 7.0))) * (1 - 0.5 * k / n);
+    }
+    KV.tail.set(b, KV.wm);
+  }
+  if (KV.cent) drawCentipede(KV.cent, t);
+}
+
+/* ------------------------------------------------------------- the flyer
+   a jointed figure placed from the engine's body frame each frame: legs
+   step by the engine's gait phase with the feet planted, arms reach the
+   engine's hands (which hold the line), the head turns to the kite */
+const Y = new THREE.Vector3(0, 1, 0), _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _w = new THREE.Vector3();
+function limb(r0, r1, mat) { const g = new THREE.CylinderGeometry(r1, r0, 1, 10, 1); const m = new THREE.Mesh(g, mat); m.userData.r = (r0 + r1) / 2; return m; }
+function ball(r, mat) { return new THREE.Mesh(new THREE.SphereGeometry(r, 12, 9), mat); }
+function place(m, a, b) {                     // a cylinder of height 1 along y, from a to b
+  _v.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const L = _v.length() || 1e-4;
+  m.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+  m.quaternion.setFromUnitVectors(Y, _v.multiplyScalar(1 / L));
+  m.scale.set(1, L, 1);
+}
+const add3 = (a, b, k) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+function ik(S, T, la, lb, pole) {               // two-bone reach: elbow/knee position
+  let dx = T[0] - S[0], dy = T[1] - S[1], dz = T[2] - S[2];
+  let d = Math.hypot(dx, dy, dz) || 1e-4;
+  const dc = clamp(d, Math.abs(la - lb) + 1e-3, la + lb - 1e-4);
+  dx /= d; dy /= d; dz /= d;
+  const ca = (la * la + dc * dc - lb * lb) / (2 * la * dc), sa = Math.sqrt(Math.max(0, 1 - ca * ca));
+  let px = pole[0], py = pole[1], pz = pole[2];
+  const pd = px * dx + py * dy + pz * dz; px -= pd * dx; py -= pd * dy; pz -= pd * dz;
+  const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+  const E1 = [S[0] + la * (ca * dx + sa * px), S[1] + la * (ca * dy + sa * py), S[2] + la * (ca * dz + sa * pz)];
+  const T1 = [S[0] + dx * dc, S[1] + dy * dc, S[2] + dz * dc];
+  return [E1, T1];
+}
+let PV = null;
+function buildPerson(r) {
+  if (PV) for (const m of PV.all) { scene.remove(m); m.geometry.dispose(); }
+  const SKIN = [[247, 213, 186], [233, 190, 152], [198, 146, 106], [160, 108, 72], [114, 76, 50], [80, 54, 38]];
+  const SHIRT = [[200, 40, 50], [30, 50, 100], [235, 235, 230], [240, 190, 40], [40, 120, 70], [120, 120, 125], [230, 110, 40], [70, 150, 190], [150, 60, 130]];
+  const PANTS = [[45, 70, 120], [190, 165, 120], [40, 40, 45], [100, 100, 105], [70, 90, 60]];
+  const HAIR = [[25, 20, 18], [60, 40, 25], [110, 75, 40], [200, 160, 90], [150, 150, 150], [150, 70, 35]];
+  const pick = (A) => { const c = A[Math.floor(r() * A.length)]; return lin(c[0], c[1], c[2]); };
+  const M = (c) => new THREE.MeshLambertMaterial({ color: c });
+  const skin = M(pick(SKIN)), shirt = M(pick(SHIRT)), pants = M(pick(PANTS)), hair = M(pick(HAIR)), shoe = M(lin(60, 55, 50));
+  const shorts = r() < 0.35, longSleeve = r() < 0.4, cap = r() < 0.4;
+  const capMat = M(pick(SHIRT));
+  const o = {
+    torso: null, hips: null, neck: limb(0.05, 0.048, skin), head: ball(0.105, skin), hairM: null, capM: null,
+    thigh: [limb(0.074, 0.058, pants), limb(0.074, 0.058, pants)], shin: [limb(0.054, 0.042, shorts ? skin : pants), limb(0.054, 0.042, shorts ? skin : pants)],
+    knee: [ball(0.058, shorts ? skin : pants), ball(0.058, shorts ? skin : pants)], foot: [ball(1, shoe), ball(1, shoe)],
+    upper: [limb(0.048, 0.04, longSleeve ? shirt : skin), limb(0.048, 0.04, longSleeve ? shirt : skin)],
+    sleeve: [limb(0.056, 0.05, shirt), limb(0.056, 0.05, shirt)],
+    fore: [limb(0.038, 0.03, longSleeve ? shirt : skin), limb(0.038, 0.03, longSleeve ? shirt : skin)],
+    elbow: [ball(0.041, longSleeve ? shirt : skin), ball(0.041, longSleeve ? shirt : skin)], hand: [ball(0.043, skin), ball(0.043, skin)],
+    shoulder: [ball(0.06, shirt), ball(0.06, shirt)],
+  };
+  /* trunk: a rounded shape, flattened front to back */
+  const tp = [[0, 0], [0.15, 0.02], [0.155, 0.12], [0.14, 0.26], [0.165, 0.4], [0.17, 0.47], [0.12, 0.53], [0, 0.55]].map(([x, y]) => new THREE.Vector2(x, y));
+  o.torso = new THREE.Mesh(new THREE.LatheGeometry(tp, 16), shirt); o.torso.geometry.scale(1, 1, 0.62);
+  const hp = [[0, -0.1], [0.12, -0.09], [0.16, -0.02], [0.155, 0.08], [0, 0.08]].map(([x, y]) => new THREE.Vector2(x, y));
+  o.hips = new THREE.Mesh(new THREE.LatheGeometry(hp, 16), pants); o.hips.geometry.scale(1, 1, 0.68);
+  o.hairM = new THREE.Mesh(new THREE.SphereGeometry(0.112, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.56), hair);
+  if (cap) {
+    const cg = new THREE.SphereGeometry(0.116, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.42);
+    const brim = new THREE.CylinderGeometry(0.1, 0.1, 0.012, 14, 1); brim.scale(1, 1, 0.8); brim.translate(0, 0.045, 0.1);
+    o.capM = new THREE.Mesh(mergeGeos([[cg, [1, 1, 1]], [brim, [1, 1, 1]]]), new THREE.MeshLambertMaterial({ color: capMat.color, vertexColors: false }));
+  }
+  /* what is in the hands: a winder, or two handles */
+  o.gear = W.lines.length === 2
+    ? [limb(0.014, 0.014, M(lin(30, 30, 30))), limb(0.014, 0.014, M(lin(30, 30, 30)))]
+    : [new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.035, 18), M(lin(150, 110, 70)))];
+  const all = [o.torso, o.hips, o.neck, o.head, o.hairM, ...o.thigh, ...o.shin, ...o.knee, ...o.foot, ...o.upper, ...o.sleeve, ...o.fore, ...o.elbow, ...o.hand, ...o.shoulder, ...o.gear];
+  if (o.capM) all.push(o.capM);
+  for (const m of all) scene.add(m);
+  o.all = all; o.longSleeve = longSleeve;
+  PV = o;
+}
+const BODY = { thigh: 0.45, shin: 0.44, upper: 0.29, fore: 0.27 };
+let SEGS = [];                                        // this frame's capsules, for the shadow
+function drawPerson() {
+  const P = W.person, Bf = P.body(), f = Bf.f, rt = Bf.r, td = Bf.td;
+  const o = PV;
+  SEGS = [];
+  const seg = (a, b, rad) => SEGS.push([a, b, rad]);
+  /* legs: feet planted, stepping by the engine's phase */
+  const sp = P.speed, cad = sp < 0.05 ? 0 : 1.5 + 0.45 * Math.min(4.5, sp), stride = cad > 0 ? sp / cad : 0;
+  const mv = sp > 0.05 ? [P.vx / sp, 0, P.vz / sp] : f;
+  const pel = Bf.pelvis;
+  for (let s = 0; s < 2; s++) {
+    const side = s ? 1 : -1, ph = P.phase + (s ? Math.PI : 0);
+    const hipJ = add3(pel, rt, 0.095 * side);
+    const swing = stride > 0 ? 0.5 * stride * Math.cos(ph) : (s ? 0.06 : -0.04) + 0.25 * P.crouch * side;
+    const lift = stride > 0 ? Math.max(0, -Math.sin(ph)) * (0.05 + 0.05 * Math.min(sp, 3)) : 0;
+    const ank = [hipJ[0] + mv[0] * swing + rt[0] * 0.02 * side, 0.075 + lift, hipJ[2] + mv[2] * swing + rt[2] * 0.02 * side];
+    const [kn, an] = ik(hipJ, ank, BODY.thigh, BODY.shin, [f[0] + rt[0] * 0.15 * side, 0.1, f[2] + rt[2] * 0.15 * side]);
+    place(o.thigh[s], hipJ, kn); place(o.shin[s], kn, an); o.knee[s].position.set(kn[0], kn[1], kn[2]);
+    const toe = [an[0] + f[0] * 0.13, an[1] - 0.035, an[2] + f[2] * 0.13];
+    o.foot[s].position.set((an[0] + toe[0]) / 2, an[1] - 0.025, (an[2] + toe[2]) / 2);
+    o.foot[s].scale.set(0.05, 0.045, 0.125);
+    o.foot[s].quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(f[0], 0, f[2]));
+    seg(hipJ, kn, 0.065); seg(kn, an, 0.05); seg(an, toe, 0.05);
+  }
+  /* trunk and head */
+  const basis = (yv, fwd) => {
+    const yy = new THREE.Vector3(yv[0], yv[1], yv[2]).normalize();
+    const zz = new THREE.Vector3(fwd[0], fwd[1], fwd[2]); zz.addScaledVector(yy, -zz.dot(yy)).normalize();
+    const xx = new THREE.Vector3().crossVectors(yy, zz);
+    return new THREE.Matrix4().makeBasis(xx, yy, zz);
+  };
+  const tb = basis(td, f);
+  o.torso.position.set(pel[0], pel[1], pel[2]); o.torso.quaternion.setFromRotationMatrix(tb);
+  o.hips.position.set(pel[0], pel[1], pel[2]); o.hips.quaternion.setFromRotationMatrix(basis([0, 1, 0], f));
+  const neckTop = add3(Bf.neck, td, 0.06);
+  place(o.neck, Bf.neck, neckTop);
+  /* the head turns toward the kite, within a neck's reach */
+  const lk = P.look, hd = [lk[0] - neckTop[0], lk[1] - neckTop[1], lk[2] - neckTop[2]];
+  let yawL = Math.atan2(hd[2], hd[0]) - P.yaw; yawL = Math.atan2(Math.sin(yawL), Math.cos(yawL)); yawL = clamp(yawL, -1.3, 1.3);
+  const pitch = clamp(Math.atan2(hd[1], Math.hypot(hd[0], hd[2])), -0.5, 0.9);
+  const hy = P.yaw + yawL, hf = [Math.cos(hy) * Math.cos(pitch), Math.sin(pitch), Math.sin(hy) * Math.cos(pitch)];
+  const hc = add3(neckTop, td, 0.1);
+  o.head.position.set(hc[0], hc[1], hc[2]);
+  const up = [td[0] - hf[0] * 0.2 * Math.sin(pitch), td[1], td[2] - hf[2] * 0.2 * Math.sin(pitch)];
+  const hb = basis(up, hf);
+  o.hairM.position.set(hc[0] - hf[0] * 0.012, hc[1] + 0.006, hc[2] - hf[2] * 0.012); o.hairM.quaternion.setFromRotationMatrix(hb);
+  o.hairM.quaternion.multiply(_q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.45));
+  if (o.capM) { o.capM.position.set(hc[0], hc[1] + 0.012, hc[2]); o.capM.quaternion.setFromRotationMatrix(hb); }
+  seg(pel, Bf.neck, 0.16); seg(neckTop, hc, 0.1);
+  /* arms reach the engine's hands */
+  for (let s = 0; s < 2; s++) {
+    const side = s ? 1 : -1, S0 = s ? Bf.shR : Bf.shL, T = P.hands[s];
+    const pole = [-f[0] * 0.5 + rt[0] * side * 0.7, -1, -f[2] * 0.5 + rt[2] * side * 0.7];
+    const [el, ha] = ik(S0, T, BODY.upper, BODY.fore, pole);
+    place(o.upper[s], S0, el); place(o.fore[s], el, ha);
+    const sl = add3(S0, [el[0] - S0[0], el[1] - S0[1], el[2] - S0[2]], o.longSleeve ? 1 : 0.45);
+    place(o.sleeve[s], S0, sl);
+    o.elbow[s].position.set(el[0], el[1], el[2]); o.hand[s].position.set(ha[0], ha[1], ha[2]); o.shoulder[s].position.set(S0[0], S0[1], S0[2]);
+    seg(S0, el, 0.05); seg(el, ha, 0.04);
+  }
+  if (o.gear.length === 2) for (let s = 0; s < 2; s++) {
+    const h = P.hands[s];
+    place(o.gear[s], add3(h, [0, 1, 0], -0.13), add3(h, [0, 1, 0], 0.13));
+  } else {
+    const h = P.hands[1];
+    o.gear[0].position.set(h[0], h[1] - 0.02, h[2]);
+    o.gear[0].quaternion.setFromUnitVectors(Y, new THREE.Vector3(rt[0], 0, rt[2]));
+  }
+}
+
+/* ------------------------------------------------------------- shadows on the grass */
+function updateShadows() {
+  const L = U.sunDir.value, ly = Math.max(0.08, L.y);
+  const proj = (p) => [p[0] - L.x * p[1] / ly, p[2] - L.z * p[1] / ly];
+  const segs = SEGS.slice(0, 13);
+  /* the kite: its spine and its spar */
+  const K = W.kite, x = W.ph.x, pt = (i) => [x[3 * i], x[3 * i + 1], x[3 * i + 2]];
+  const id = K.idx;
+  if (id.N != null) { segs.push([pt(id.N), pt(id.T), 0.18]); segs.push([pt(id.L), pt(id.R), 0.1]); }
+  const box = [1e9, 1e9, -1e9, -1e9], grow = (x, z, m) => { box[0] = Math.min(box[0], x - m); box[1] = Math.min(box[1], z - m); box[2] = Math.max(box[2], x + m); box[3] = Math.max(box[3], z + m); };
+  for (let i = 0; i < 16; i++) {
+    const s = segs[i];
+    if (!s) { U.shRad.value[i].set(0, 0); continue; }
+    const a = proj(s[0]), b = proj(s[1]), h = (s[0][1] + s[1][1]) / 2;
+    U.shSeg.value[i].set(a[0], a[1], b[0], b[1]);
+    U.shRad.value[i].set(s[2] * 0.9, 0.02 + 0.012 * h);
+    const m = s[2] + 0.05 + 0.012 * h;
+    grow(a[0], a[1], m); grow(b[0], b[1], m);
+  }
+  U.shBox.value.set(box[0], box[1], box[2], box[3]);
+  const crowns = bigTree ? bigTree.phys.crown : [], eb = [1e9, 1e9, -1e9, -1e9];
+  for (let i = 0; i < 14; i++) {
+    const c = crowns[i];
+    if (!c) { U.shEll.value[i].set(0, 0, 0, 0); continue; }
+    const p = proj([c.x, c.y, c.z]);
+    U.shEll.value[i].set(p[0], p[1], c.r, 0.25 + 0.02 * c.y);
+    const m = (c.r + 0.3 + 0.02 * c.y) / ly;
+    eb[0] = Math.min(eb[0], p[0] - m); eb[1] = Math.min(eb[1], p[1] - m); eb[2] = Math.max(eb[2], p[0] + m); eb[3] = Math.max(eb[3], p[1] + m);
+  }
+  U.ellBox.value.set(eb[0], eb[1], eb[2], eb[3]);
+  const az = Math.hypot(L.x, L.z) || 1;
+  U.sunStretch.value.set(L.x / az, L.z / az, 1 / ly);
+}
+
+/* ------------------------------------------------------------- scenes */
+let W = null, S = null, sceneNo = -1;
+window.KITE = {};
+/* the kite: the viewer picks it on the card (left/right while it is open),
+   or 'any' draws one each scene. The box kite waits (Joe: "add box kites
+   later once we get the delta and normal diamond kites to work"). */
+const KITE_OPTS = ['any', 'diamond', 'delta', 'dragon'], KITE_ANY = ['diamond', 'delta', 'dragon'];
+let KITE_CHOICE = KITE_OPTS.includes(Q.get('kite')) ? Q.get('kite') : 'any', kitePending = null, kiteTimer = null;
+const KITE_WORD = { any: 'any', diamond: 'diamond', delta: 'two-line delta', dragon: 'dragon' };
+function chooseKite(d) {
+  const i = KITE_OPTS.indexOf(kitePending || KITE_CHOICE);
+  kitePending = KITE_OPTS[(i + d + KITE_OPTS.length) % KITE_OPTS.length];
+  window.KITE.choice = KITE_WORD[kitePending];
+  if (window.Wall && Wall.openCard) Wall.openCard();
+  clearTimeout(kiteTimer);
+  kiteTimer = setTimeout(() => {                     // a moment for more presses, then a new scene with that kite
+    const changed = kitePending !== KITE_CHOICE;
+    KITE_CHOICE = kitePending; kitePending = null;
+    if (changed && !fading) endScene(true);
+  }, 700);
+}
+if (window.Wall && Wall.claimKeys) Wall.claimKeys((e) => {
+  if (!document.body.classList.contains('showabout')) return false;
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return false;
+  chooseKite(e.key === 'ArrowRight' ? 1 : -1);
+  e.preventDefault(); e.stopImmediatePropagation();
+  return true;
+});
+function newScene() {
+  sceneNo++;
+  const seed = (SEED0 + sceneNo * 7919) >>> 0, r = mulberry32(seed);
+  const kite = KITE_CHOICE !== 'any' ? KITE_CHOICE : KITE_ANY[Math.floor(r() * KITE_ANY.length)];
+  /* the dragon's long tail wants more wind */
+  const U0 = Q.has('wind') ? parseFloat(Q.get('wind')) : kite === 'dragon' ? 5.5 + 3 * r() : 4.5 + 4 * r();
+  const lineL = kite === 'delta' ? 18 + 7 * r() : kite === 'dragon' ? 22 + 10 * r() : 20 + 12 * r();   // short enough to see the kite well
+  const treeOn = Q.get('tree') === 'on' ? true : Q.get('tree') === 'off' ? false : r() < 0.35;
+  let tree = null;
+  if (treeOn) {
+    const side = r() < 0.5 ? -1 : 1, dn = 22 + 18 * r(), lat = side * (8 + 12 * r());
+    tree = { x: dn, z: lat, size: 10 + 4 * r(), side };
+  }
+  S = { seed, r, kite, U0, lineL, tree, orbit: kite === 'delta' ? (r() * 2 - 1) * 0.95 : kite === 'dragon' ? (r() < 0.5 ? -1 : 1) * (0.5 + 0.45 * r()) : (r() * 2 - 1) * 1.9, camH: 1.2 + 1.2 * r(),
+        camD: kite === 'delta' ? 6 + 5 * r() : 6 + 9 * r(),
+        sunEl: (20 + 42 * r()) * Math.PI / 180, sunAz: r() * 2 * Math.PI, t: 0 };
+  /* (the centipede is seen three-quarters on: its discs face the flyer, and side on they are slivers) */
+  /* the sun, sky and field colours */
+  const L = new THREE.Vector3(Math.cos(S.sunEl) * Math.cos(S.sunAz), Math.sin(S.sunEl), Math.cos(S.sunEl) * Math.sin(S.sunAz));
+  U.sunDir.value.copy(L);
+  const warm = clamp(1 - (S.sunEl - 0.35) / 0.6, 0, 1) * r();
+  U.sunCol.value.setRGB(1.0, lerp(0.97, 0.86, warm), lerp(0.92, 0.72, warm)).multiplyScalar(1.5);
+  U.zenith.value.copy(lin(lerp(52, 70, r()), lerp(108, 128, r()), lerp(190, 215, r())));
+  U.horizon.value.copy(lin(170, 198, 228));
+  U.haze.value.copy(lin(196, 212, 226));
+  U.skyAmb.value.copy(lin(120, 140, 170)).multiplyScalar(0.55);
+  const dry = r();
+  groundMat.uniforms.gA_.value.copy(lin(lerp(60, 92, dry), lerp(98, 110, dry), lerp(34, 40, dry)));
+  groundMat.uniforms.gB_.value.copy(lin(lerp(48, 72, dry), lerp(86, 92, dry), lerp(28, 32, dry)));
+  groundMat.uniforms.gC_.value.copy(lin(128, 122, 62));
+  bladeMat.uniforms.bA.value.copy(lin(38, 62, 22)); bladeMat.uniforms.bB.value.copy(lin(lerp(96, 130, dry), lerp(128, 134, dry), lerp(48, 58, dry)));
+  sunLight.position.copy(L).multiplyScalar(50); sunLight.color.copy(U.sunCol.value).multiplyScalar(0.75);
+  hemi.color.copy(U.zenith.value).lerp(new THREE.Color(1, 1, 1), 0.5); hemi.groundColor.copy(lin(96, 118, 64)); hemi.intensity = 1.05;
+  /* the world: wind toward +x; the tree to one side downwind */
+  const treePhys = tree ? makeTreeWorld(r, tree) : null;
+  W = new E.World({ seed, kite, U0, dir: 0, gusty: 0.8 + 0.4 * r(), lineL, launchL: kite === 'delta' ? lineL - 0.5 : 16 + 4 * r(),
+                    bias: tree ? tree.side : 0, tree: treePhys, fate: tree ? r() < 0.45 : false });
+  /* cache the gust field's along-wind modes for the grass */
+  const M0 = W.wind.M[0];
+  for (let i = 0; i < 8; i++) { U.gK.value[i].set(M0[6 * i], M0[6 * i + 1], M0[6 * i + 2], M0[6 * i + 4]); U.gA.value[i].set(M0[6 * i + 3], M0[6 * i + 5]); }
+  makeClouds(r, 14 + Math.floor(r() * 18));
+  makeFar(r);
+  makeTrees(r, S);
+  if (typeof OFF !== 'undefined') {
+    for (const c of clouds) c.visible = !OFF.includes('clouds');
+    farMesh.visible = !OFF.includes('far');
+    for (const t of trees) t.mesh.visible = !OFF.includes('trees');
+  }
+  buildPerson(r);
+  buildKiteView(r);
+  camState = null;
+  Object.assign(window.KITE, { scene: sceneNo + 1, seed, kite: E.KITES[kite].label, lineL, tree: !!tree, sunEl: S.sunEl * 180 / Math.PI,
+                               choice: KITE_WORD[KITE_CHOICE] + (KITE_CHOICE === 'any' ? ' (now ' + E.KITES[kite].label + ')' : '') });
+}
+/* the tree's physics shape is the one the mesh is built from */
+function makeTreeWorld(r, tree) {
+  const t = makeTree(mulberry32((S.seed ^ 0x5eed) >>> 0), tree.x, tree.z, tree.size, true);
+  tree.built = t;
+  return t.phys;
+}
+
+/* ------------------------------------------------------------- camera
+   the flyer and the kite (for the two-line kite: the whole wind window)
+   kept in frame from the scene's angle around the flyer */
+let camState = null;
+const _p = new THREE.Vector3(), _a = new THREE.Vector3();
+function framePoints() {
+  const P = W.person, I = W.info, pts = [[P.x, 0.02, P.z], [P.x, 1.85, P.z]];
+  if (S.kite === 'delta') {
+    const L = W.lines[0].L, th = W.wind.th, hx = P.x, hz = P.z;
+    for (const [az, el] of [[0, 70], [-46, 14], [46, 14], [0, 16], [-28, 45], [28, 45]]) {
+      const a = th + az * Math.PI / 180, e = el * Math.PI / 180;
+      pts.push([hx + L * Math.cos(e) * Math.cos(a), 1.2 + L * Math.sin(e), hz + L * Math.cos(e) * Math.sin(a)]);
+    }
+  } else {
+    pts.push([I.cx, I.cy + 1.0, I.cz], [I.cx, Math.max(0.1, I.cy - 1.2), I.cz]);
+    const ld = 0.8;                                   // and where it will be in a moment
+    pts.push([I.cx + I.vx * ld, Math.max(0.1, I.cy + I.vy * ld + 1.0), I.cz + I.vz * ld]);
+    if (W.tail) { const k = W.tail.parts[Math.floor((W.tail.parts.length - 1) * (W.tail.train ? 1 : 0.6))], x = W.ph.x; pts.push([x[3 * k], Math.max(0.1, x[3 * k + 1]), x[3 * k + 2]]); }
+    if (bigTree && (W.ai.state === 'snag' || W.ai.state === 'giveup')) { const t = bigTree.phys; pts.push([t.x, t.top, t.z], [t.x, 0, t.z]); }
+  }
+  return pts;
+}
+function fitCamera(dt, snap) {
+  const P = W.person, I = W.info;
+  const pts = framePoints();
+  /* where the camera stands: a set distance from the flyer, at the scene's
+     angle round from the kite's direction (the wind's, for the two-line kite) */
+  const kb = S.kite === 'delta' ? W.wind.th : Math.atan2(I.cz - P.z, I.cx - P.x);
+  if (!camState || snap) camState = { bear: kb, d: S.camD, fov: 50, look: new THREE.Vector3(I.cx, I.cy, I.cz), base: new THREE.Vector3(P.x, 0, P.z) };
+  const db = Math.atan2(Math.sin(kb - camState.bear), Math.cos(kb - camState.bear));
+  camState.bear += db * (snap ? 1 : 1 - Math.exp(-dt / 5));
+  camState.base.x += (P.x - camState.base.x) * (snap ? 1 : 1 - Math.exp(-dt / 2.5));
+  camState.base.z += (P.z - camState.base.z) * (snap ? 1 : 1 - Math.exp(-dt / 2.5));
+  const ang = camState.bear + Math.PI + S.orbit;
+  const put = (d, fov) => {
+    camera.fov = fov; camera.updateProjectionMatrix();
+    camera.position.set(camState.base.x + Math.cos(ang) * d, S.camH, camState.base.z + Math.sin(ang) * d);
+    /* aim at the middle of the points' angular spread */
+    let ys = [], ps = [];
+    for (const p of pts) { const dx = p[0] - camera.position.x, dy = p[1] - camera.position.y, dz = p[2] - camera.position.z; ys.push(Math.atan2(dz, dx)); ps.push(Math.atan2(dy, Math.hypot(dx, dz))); }
+    const y0 = ys[0]; ys = ys.map((y) => y0 + Math.atan2(Math.sin(y - y0), Math.cos(y - y0)));
+    const yc = (Math.min(...ys) + Math.max(...ys)) / 2, pc = (Math.min(...ps) + Math.max(...ps)) / 2;
+    _a.set(camera.position.x + Math.cos(yc) * Math.cos(pc), camera.position.y + Math.sin(pc), camera.position.z + Math.sin(yc) * Math.cos(pc));
+    camera.up.set(0, 1, 0); camera.lookAt(_a); camera.updateMatrixWorld();
+    for (const p of pts) { _p.set(p[0], p[1], p[2]).project(camera); if (Math.abs(_p.x) > 0.86 || Math.abs(_p.y) > 0.84 || _p.z > 1) return false; }
+    return true;
+  };
+  /* zoom to fit from the scene's distance; back off only past a wide 72 deg */
+  let wantD = S.camD, wantF;
+  if (put(S.camD, 72)) {
+    let lo = 34, hi = 72;
+    for (let it = 0; it < 18; it++) { const m = (lo + hi) / 2; if (put(S.camD, m)) hi = m; else lo = m; }
+    wantF = hi;
+  } else {
+    let lo = S.camD, hi = 160;
+    for (let it = 0; it < 20; it++) { const m = (lo + hi) / 2; if (put(m, 72)) hi = m; else lo = m; }
+    wantD = hi; wantF = 72;
+  }
+  /* widen quickly (keep the kite in), close in slowly (calm) */
+  const k = (want, now, fast) => (snap ? 1 : 1 - Math.exp(-dt / (want > now ? fast : 5)));
+  camState.fov += (wantF - camState.fov) * k(wantF, camState.fov, 0.25);
+  camState.d += (wantD - camState.d) * k(wantD, camState.d, 0.6);
+  put(camState.d, camState.fov);
+  /* the aim eases too */
+  const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+  const tgt = camera.position.clone().add(dir.multiplyScalar(30));
+  if (snap) camState.look.copy(tgt); else camState.look.lerp(tgt, 1 - Math.exp(-dt / 0.9));
+  camera.lookAt(camState.look);
+  window.KITE.camD = camState.d; window.KITE.fov = camState.fov;
+}
+
+function resize() {
+  renderer.setPixelRatio(DPR * RS);
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  const v = new THREE.Vector2(); renderer.getDrawingBufferSize(v); U.res.value.copy(v);
+}
+
+/* ------------------------------------------------------------- what the card reads */
+const DOING = {
+  prep: 'getting ready', pull: 'pulling it up off the grass', climb: 'letting out line as it climbs', fly: 'flying it',
+  save: 'running upwind to keep it up', down: 'it is down', fetch: 'walking out to fetch it', pickup: 'picking it up',
+  carry: 'launching it from the hand', setdown: 'standing it up again', walkout: 'walking back out', launch: 'launching',
+  setup: 'standing it up again', walkback: 'walking back to the end of the lines', snag: 'tugging it out of the tree', giveup: 'the tree has it',
+  tug: 'tugging to flip it upright',
+};
+const MPH = 2.23694, FT = 3.28084, LB = 1 / 4.44822;   // the strip and the card speak mph, feet and pounds
+function readouts() {
+  const I = W.info, wd = W.wind, ai = W.ai;
+  let doing = DOING[ai.state] || ai.state;
+  if (ai.state === 'fly' && ai.intent) doing = ai.intent;
+  Object.assign(window.KITE, {
+    U10: wd.U10, Ukite: wd.mean(Math.max(0.1, I.cy)), shift: (wd.th - wd.th0) * 180 / Math.PI, lull: wd.lullS, gust: wd.gustS,
+    line: W.lines[0].L, pull: I.T, height: I.cy, beta: I.beta * 180 / Math.PI, speed: I.speed, doing,
+    lines: W.lines.length,
+  });
+}
+/* the readings along the bottom (Joe: "small text at the bottom of the
+   screen"), refreshed four times a second */
+const strip = document.getElementById('readout');
+let stripAt = 0;
+function drawStrip(now) {
+  if (now - stripAt < 250) return;
+  stripAt = now;
+  const K = window.KITE, n0 = (x) => Math.round(x).toString();
+  const wind = n0(K.U10 * MPH) + ' mph' + (K.lull > 0.3 ? ', a lull' : K.gust > 0.3 ? ', gusting' : '');
+  const items = ['wind ' + wind, 'pull ' + (K.pull * LB < 9.5 ? (Math.round(K.pull * LB * 10) / 10).toString() : n0(K.pull * LB)) + ' lb',
+                 'line out ' + (K.lines === 2 ? '2 × ' : '') + n0(K.line * FT) + ' ft', 'kite ' + n0(Math.max(0, K.height) * FT) + ' ft up'];
+  if (K.doing && K.doing !== DOING.fly) items.push(K.doing);       // "flying it" goes without saying
+  const text = items.join('  ·  ');
+  if (text !== strip.textContent) strip.textContent = text;
+}
+
+/* ------------------------------------------------------------- loop */
+let last = 0, sceneStart = 0, fading = false, fpsN = 0, fpsT = performance.now(), acc = 0, simAcc = 0, doneAt = 0;
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const s0 = performance.now();
+  acc += dt;
+  let n = 0;
+  while (acc >= E.DT && n < 3) { W.step(E.DT); acc -= E.DT; n++; }
+  if (n === 3) acc = 0;
+  simAcc += performance.now() - s0;
+  S.t += dt;
+  const wd = W.wind;
+  U.gAdv.value.set(wd.adv[0], wd.adv[1]); U.gT.value = wd.t;
+  U.gW.value.set(wd.ex, wd.ez, wd.U10 * wd.gusty * Math.min(1, Math.log(0.5 / 0.03) / 4.2), wd.mean(0.5));
+  /* clouds drift with the wind aloft, a little veered */
+  const ua = wd.U10 * 2.2, ca = Math.cos(wd.th + 0.35), sa = Math.sin(wd.th + 0.35);
+  for (const c of clouds) {
+    c.position.x += ua * ca * dt; c.position.z += ua * sa * dt;
+    const dx = c.position.x - camera.position.x, dz = c.position.z - camera.position.z;
+    if (dx > 7000) c.position.x -= 14000; if (dx < -7000) c.position.x += 14000;
+    if (dz > 7000) c.position.z -= 14000; if (dz < -7000) c.position.z += 14000;
+    const hd = Math.hypot(dx, dz);
+    c.material.opacity = c.userData.base * (1 - 0.65 * clamp((hd - 2500) / 4500, 0, 1));
+  }
+  drawPerson();
+  drawKite(S.t);
+  updateShadows();
+  fitCamera(dt, false);
+  sky.position.copy(camera.position);
+  const cd = camera.getWorldDirection(_p), cdl = Math.hypot(cd.x, cd.z) || 1;
+  bladeMat.uniforms.center.value.set(camera.position.x + cd.x / cdl * 11, camera.position.z + cd.z / cdl * 11);
+  readouts();
+  drawStrip(now);
+  renderer.render(scene, camera);
+  fpsN++;
+  if (now - fpsT > 2000) {
+    window.KITE.fps = Math.round(fpsN * 1000 / (now - fpsT)); window.KITE.simMs = +(simAcc / fpsN).toFixed(2);
+    fpsN = 0; simAcc = 0; fpsT = now;
+  }
+  if (W.ai.done && !doneAt) doneAt = now;
+  if (!fading && ((now - sceneStart) / 1000 > CONFIG.sceneSec || (doneAt && now - doneAt > 4000))) endScene();
+  requestAnimationFrame(frame);
+}
+function holding() {
+  if (PINNED || !CONFIG.nextPage) return true;
+  const so = window.Wall && Wall.soloNow && Wall.soloNow();
+  return !!(so && so.file === 'kite.html');
+}
+function startScene() {
+  newScene();
+  if (window.GPU_HIDE) window.GPU_HIDE();
+  for (let i = 0; i < 2; i++) W.step(E.DT);
+  drawPerson(); drawKite(0); updateShadows();
+  fitCamera(0, true);
+  doneAt = 0;
+}
+function endScene(chosen) {
+  fading = true;
+  document.getElementById('fade').style.opacity = 1;
+  setTimeout(() => {
+    if (!chosen && !holding() && shownFor() >= dwell()) return handOff();
+    startScene(); sceneStart = performance.now(); fading = false;
+    document.getElementById('fade').style.opacity = 0;
+  }, 1700);
+}
+const shownAt = Date.now();
+const shownFor = () => Date.now() - shownAt;
+const dwell = () => (window.Wall && Wall.holdMs) ? Wall.holdMs(CONFIG.holdMin) : CONFIG.holdMin * 60000;
+let handedOff = false;
+function handOff() {
+  if (handedOff) return; handedOff = true;
+  location.href = (window.Wall && Wall.nextPage) ? Wall.nextPage(CONFIG.nextPage) : CONFIG.nextPage;
+}
+setInterval(() => {
+  if (holding() || fading || handedOff) return;
+  if (shownFor() >= dwell()) { fading = true; document.getElementById('fade').style.opacity = 1; setTimeout(handOff, 1700); }
+}, 5000);
+addEventListener('keydown', (e) => { if (e.key === 'n' && !fading) endScene(); });   // desk testing: next scene
+
+/* ------------------------------------------------------------- boot */
+/* ?off=blades,ground,clouds,far,trees,sky : leave parts out (finding what a GPU dislikes) */
+const OFF = (Q.get('off') || '').split(',');
+if (OFF.includes('blades')) blades.visible = false;
+if (OFF.includes('ground')) ground.visible = false;
+if (OFF.includes('sky')) sky.visible = false;
+/* ?gputest : parts appear one at a time, 4 s apart; window.GPUTEST says
+   which was showing when (if ever) the context was lost */
+if (Q.has('gputest')) {
+  const parts = [['sky', () => [sky]], ['ground', () => [ground]], ['far', () => [farMesh]], ['clouds', () => clouds],
+                 ['trees', () => trees.map((t) => t.mesh)], ['person', () => PV.all], ['kite', () => [KV.sail, ...KV.segs.map((g) => g.strip.mesh)]],
+                 ['lines', () => [...KV.lines.map((l) => l.mesh), ...(KV.tail ? [KV.tail.mesh] : [])]], ['blades', () => [blades]]];
+  window.GPUTEST = { stage: 'none', lost: null };
+  canvas.addEventListener('webglcontextlost', () => { window.GPUTEST.lost = window.GPUTEST.stage; });
+  window.GPU_HIDE = () => { if (window.GPUTEST.stage === 'none') for (const [, f] of parts) for (const o of f()) o.visible = false; };
+  setTimeout(() => {
+    let k = 0;
+    const tick = setInterval(() => {
+      if (k >= parts.length) { clearInterval(tick); window.GPUTEST.stage = 'all'; return; }
+      const [name, f] = parts[k++];
+      for (const o of f()) o.visible = true;
+      window.GPUTEST.stage = name;
+    }, 4000);
+  }, 500);
+}
+if (SOLO_MIN > 0 && window.Wall && Wall.startSolo) Wall.startSolo('kite.html', SOLO_MIN);
+addEventListener('resize', () => { resize(); });
+resize();
+startScene();
+renderer.render(scene, camera);
+requestAnimationFrame((t) => { last = t; sceneStart = t; document.getElementById('fade').style.opacity = 0; requestAnimationFrame(frame); });
+</script>
+</body>
+</html>

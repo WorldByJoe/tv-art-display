@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v2.3 · 2026-10-07
+   wall.js · v2.6 · 2026-10-10
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,18 +39,17 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.6  kite.html joins the ring as 'Kite Flying', after Spinning Mirrors: a
+           person flying a kite in a gusty field, the kite and line from physics
+     v2.5  mirrors.html joins the ring as 'Spinning Mirrors', after Ripples: 160 x 90
+           servos turning mirrors on 45-degree shafts, waves of speed passing over
+     v2.4  couch.html joins the ring as 'Couch Analyst', after Game Day: postseason
+           baseball (the baseball chat's page), on the wall only while a game is on
      v2.3  a page opened by its folder (every GitHub piece: .../ripples/) is
            index.html, not the mosaic - the arrows sent published pieces to a
            ring file that is not there, and the card showed 'Mosaic Wall'
      v2.2  a card may carry its own hint line (about.js `hint`), for a page that
            claims keys while its card is open - Ripples' left/right pick a pool shape
-     v2.1  ripples.html joins the ring as 'Ripples', after Murmuration: pebbles
-           dropped in a pool, the water solved mode by mode, a new scene every 2.5 min
-     v2.0  THE D-PAD IS THE WALL'S: left/right change piece and up opens the
-           piece's card (about.js) on EVERY page, in the capture phase - five
-           pages ignored the arrows and Ballgame could not be left at all
-     v1.9  murmuration.html joins the ring as 'Murmuration', after The Balance:
-           starlings at dusk, no text, a fresh flock and evening every 8 minutes
 */
 (function (global) {
   'use strict';
@@ -592,6 +591,17 @@
        theory solved exactly mode by mode; a new view, sun and sky every 2.5
        minutes. It never finishes, so it takes minutes. No text on it. */
     { file:'ripples.html',       name:'Ripples',          kind:'time', unit:'minutes',    def:5,  loop:'time'   },
+    /* A wall of 160 x 90 servos, each spinning a mirror on a shaft cut at 45
+       degrees (Joe, 2026-10-10); waves of faster and slower spinning pass over
+       it. A new viewpoint, light and sky every 2.5 minutes; it never finishes,
+       so it takes minutes. No text on it. */
+    { file:'mirrors.html',       name:'Spinning Mirrors', kind:'time', unit:'minutes',    def:5,  loop:'time'   },
+    /* A person flying a kite in a gusty field (Joe, 2026-10-10): a diamond, a
+       two-line delta or a centipede dragon, the wind, kite and line worked out
+       from physics, and sometimes a tree that eats kites. A new scene about
+       every three minutes; it never finishes, so it takes minutes. The only
+       text is one small credit-style line of readings. */
+    { file:'kite.html',          name:'Kite Flying',      kind:'time', unit:'minutes',    def:6,  loop:'time'   },
     /* A live Vikings or Colorado State game, when there is one (Joe,
        2026-09-27). The page decides for itself whether to stay: it holds the
        wall for as long as the game is actually being played, keeps a finished
@@ -605,6 +615,15 @@
        dwell, and a football game is much the longest thing on this wall. Four
        hours covers an overtime game and stays under the six-hour STALL_CAP. */
     { file:'gameday.html',       name:'Game Day',         kind:'time', unit:'minutes',    def:240,loop:'time'   },
+    /* Couch Analyst: postseason baseball, live (Joe asked the baseball chat for
+       a TV version, 2026-10-08). That chat owns the page and deploys it straight
+       to the Pi (couch.html + couch/), like Ballgame. Like Game Day it decides
+       for itself: it holds the wall from 20 minutes before a postseason first
+       pitch until 10 minutes after the last out and stands aside within 25 s
+       when nothing is on. 270 minutes for the same reason as Game Day's 240: the
+       stall watchdog budgets a 'time' page by its dwell, and an extra-inning
+       playoff game is the longest thing that can be on; still under STALL_CAP. */
+    { file:'couch.html',         name:'Couch Analyst',    kind:'time', unit:'minutes',    def:270,loop:'time'   },
     /* Ballgame: the trait-driven baseball simulation. Its source lives in its
        own repository (WorldByJoe/baseball-sim) and deploys straight to the Pi
        with its four bb_*.js engine files, like tree_growth. One whole game

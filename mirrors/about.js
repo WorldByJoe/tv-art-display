@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.0 · 2026-10-10
+   about.js · v2.2 · 2026-10-10
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,12 +35,12 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v2.2  Kite Flying: choose the kite with left/right; mph, feet and pounds
+     v2.1  Kite Flying: what the flyer is doing, the wind, the kite and its line
      v2.0  Spinning Mirrors: eight settings (servo speed and wave properties added); Scene row dropped
      v1.9  Spinning Mirrors at 3 rpm, aligned with waves by default
      v1.8  Spinning Mirrors lies on the ground at 4 rpm; the card says so
-     v1.7  Spinning Mirrors runs at 15 rpm now; the card says so
-     v1.6  Spinning Mirrors: three settings on its card (down picks one, left/right change it)
---------------------------------------------------------------------------- */
+*/
 (function (global) {
   'use strict';
   const ABOUT = global.ABOUT = global.ABOUT || {};

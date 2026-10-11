@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v2.5 · 2026-10-10
+   wall.js · v2.6 · 2026-10-10
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,6 +39,8 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.6  kite.html joins the ring as 'Kite Flying', after Spinning Mirrors: a
+           person flying a kite in a gusty field, the kite and line from physics
      v2.5  mirrors.html joins the ring as 'Spinning Mirrors', after Ripples: 160 x 90
            servos turning mirrors on 45-degree shafts, waves of speed passing over
      v2.4  couch.html joins the ring as 'Couch Analyst', after Game Day: postseason
@@ -48,8 +50,6 @@
            ring file that is not there, and the card showed 'Mosaic Wall'
      v2.2  a card may carry its own hint line (about.js `hint`), for a page that
            claims keys while its card is open - Ripples' left/right pick a pool shape
-     v2.1  ripples.html joins the ring as 'Ripples', after Murmuration: pebbles
-           dropped in a pool, the water solved mode by mode, a new scene every 2.5 min
 */
 (function (global) {
   'use strict';
@@ -596,6 +596,12 @@
        it. A new viewpoint, light and sky every 2.5 minutes; it never finishes,
        so it takes minutes. No text on it. */
     { file:'mirrors.html',       name:'Spinning Mirrors', kind:'time', unit:'minutes',    def:5,  loop:'time'   },
+    /* A person flying a kite in a gusty field (Joe, 2026-10-10): a diamond, a
+       two-line delta or a centipede dragon, the wind, kite and line worked out
+       from physics, and sometimes a tree that eats kites. A new scene about
+       every three minutes; it never finishes, so it takes minutes. The only
+       text is one small credit-style line of readings. */
+    { file:'kite.html',          name:'Kite Flying',      kind:'time', unit:'minutes',    def:6,  loop:'time'   },
     /* A live Vikings or Colorado State game, when there is one (Joe,
        2026-09-27). The page decides for itself whether to stay: it holds the
        wall for as long as the game is actually being played, keeps a finished

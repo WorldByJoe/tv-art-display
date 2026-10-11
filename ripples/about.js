@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v1.2 · 2026-10-07
+   about.js · v2.2 · 2026-10-10
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,10 +35,12 @@
    meter id); Photographs never names anyone.
 
    CHANGED
-     v1.2  Ripples: the pool shape, chosen with left/right, and its own hint line
-     v1.1  ripples.html (pebbles in a pool)
-     v1.0  first build: every ring stop
---------------------------------------------------------------------------- */
+     v2.2  Kite Flying: choose the kite with left/right; mph, feet and pounds
+     v2.1  Kite Flying: what the flyer is doing, the wind, the kite and its line
+     v2.0  Spinning Mirrors: eight settings (servo speed and wave properties added); Scene row dropped
+     v1.9  Spinning Mirrors at 3 rpm, aligned with waves by default
+     v1.8  Spinning Mirrors lies on the ground at 4 rpm; the card says so
+*/
 (function (global) {
   'use strict';
   const ABOUT = global.ABOUT = global.ABOUT || {};
