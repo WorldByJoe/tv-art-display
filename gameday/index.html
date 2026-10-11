@@ -111,7 +111,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  gameday.html · v3.2 · 2026-10-11
+  gameday.html · v3.4 · 2026-10-11
 
   A live football game on the wall - score, the field, who just did what, and
   the win-probability curve. Watches the Vikings and Colorado State.
@@ -182,8 +182,13 @@
   volume, so the TV's own knob already scales the horn.
 
   CHANGED
+    v3.4  a drive that crosses a quarter break shows it: its end time carries
+          the new quarter and a tick marks where the quarter turned
+    v3.3  punts and kickoffs with their returns (kicks dashed, returns dotted) in
+          the gap between drives; each drive's start and end clock beside the end
+          zones; the field marker lights up on a first down
     v3.2  turnovers: the fumbled or intercepted down gets its mark, and the
-          other side's return is drawn under the drive that lost the ball
+          other side's return is drawn with it
     v3.1  the drive in progress grows play by play to the ball's spot (ESPN
           gives a drive no end until it is over, so it sat as a stub)
     v3.0  Colorado State as well as the Vikings (two leagues, one page); holds
@@ -193,8 +198,6 @@
           them; every drive drawn, not the last fourteen; player photos 250 wall
           px and filling their frame; win-probability field tinted toward each
           team's colour
-    v2.0  field bar, player cards, info box dismantled, feed to the bottom
-    v1.0  first build
 ========================================================================== */
 
 const CONFIG = {
@@ -242,7 +245,7 @@ addEventListener('resize', resize);
 const S = {
   found:false, league:'nfl', team:'', state:'pre', desc:'', clock:'', period:0,
   kickoff:'', away:null, home:null, us:'home', sit:null,
-  wp:[], drives:[], scoring:[], roster:{}, lastPlay:null, driveTeam:'',
+  wp:[], drives:[], scoring:[], roster:{}, lastPlay:null, driveTeam:'', firstDown:'',
   lastFeed:0, stale:false, eventId:'', wentFinalAt:0, firstSeen:Date.now(),
 };
 const seenScoring = new Set();
@@ -298,6 +301,41 @@ function compareGames(a, b){
   return compareCand({rank:ra, date:String(a.date)}, {rank:rb, date:String(b.date)});
 }
 
+/* DID THE LATEST PLAY MOVE THE CHAINS? Judged once per new play, from the
+   situation before it (the previous poll) and after it (this one): the same
+   team kept the ball, it is now 1st down, and either the previous down was
+   later than 1st or the ball has reached the previous line to gain. That
+   last test is what keeps a 1st-down penalty ("1st & 5", "1st & 20") from
+   counting. With no earlier poll to compare (the page just loaded), a fresh
+   "1st & 10" or "1st & Goal" after a scrimmage play is taken as one. A
+   timeout or a quarter's end is not a play: it leaves the verdict as it was.
+   S.firstDown holds the id of the play that earned it, '' otherwise. */
+let lastSit = null;
+function trackFirstDown(sit){
+  const lp = sit?.lastPlay;
+  const before = lastSit;
+  lastSit = sit;
+  if (!sit || !lp) return;
+  const id = String(lp.id || '');
+  if (before && String(before.lastPlay?.id || '') === id) return;     // already judged
+  const t = lp.type?.text || '';
+  if (/Timeout|End Period|End of|Two-minute/i.test(t)) return;
+  const pos = String(sit.possession || '');
+  const kept = !!pos && String(lp.start?.team?.id || '') === pos && String(lp.end?.team?.id || '') === pos;
+  const scrim = !/Kickoff|Punt|Field Goal|Extra Point|Two-Point/i.test(t);
+  let fd = false;
+  if (kept && scrim && sit.down === 1 && typeof sit.yardLine === 'number'){
+    if (before && String(before.possession || '') === pos && before.down >= 1 &&
+        typeof before.yardLine === 'number' && typeof before.distance === 'number'){
+      const dir = pos === String(S.home?.id) ? 1 : -1;
+      fd = before.down > 1 || dir * (sit.yardLine - (before.yardLine + dir * before.distance)) >= 0;
+    } else {
+      fd = sit.distance === 10 || /Goal/i.test(sit.shortDownDistanceText || '');
+    }
+  }
+  S.firstDown = fd ? id : '';
+}
+
 async function pollScoreboard(){
   /* Ask every watched league, then choose. Live beats upcoming beats finished. */
   const want = ONLY ? [{league:S.league || 'nfl', team:ONLY, extra:''},
@@ -341,6 +379,8 @@ async function pollScoreboard(){
   S.period = st.period || 0;
   S.kickoff = ev.date || '';
   S.sit = comp.situation || null;
+  if (switched){ S.firstDown = ''; lastSit = null; }
+  trackFirstDown(S.sit);
   S.lastFeed = Date.now();
 
   if (switched){ seeded = false; seenScoring.clear(); S.wentFinalAt = 0; }
@@ -467,24 +507,84 @@ function recoverySpot(text){
   let m, last = null;
   while ((m = re.exec(text || ''))) last = m;
   if (!last) return null;
-  const n = parseInt(last[2], 10), ab = (last[1] || '').toUpperCase();
-  if (!ab) return n === 50 ? 50 : null;
-  if (S.home && ab === S.home.abbr) return n;
-  if (S.away && ab === S.away.abbr) return 100 - n;
+  return {at: spotAbs(last[1], parseInt(last[2], 10)), idx: last.index + last[0].length};
+}
+
+/* TEXT SPOTS TO ESPN'S 0-100. The play TEXT does not always use the feed's
+   team abbreviation (Houston is "HST" in the text and "HOU" in the feed,
+   Cleveland "CLV" and "CLE" - seen 2026-10-11), so which side of the field a
+   text abbreviation names is LEARNED from the feed: every play pairs a
+   possessionText ("HST 40") with its absolute yardLine (60). */
+const SIDE = {};                       // text abbreviation -> 'home' | 'away'
+function learnSides(plays){
+  for (const pl of plays) for (const e of [pl.start, pl.end]){
+    const m = /^([A-Z]{2,4}) (\d{1,2})$/.exec(e?.possessionText || '');
+    if (!m || typeof e.yardLine !== 'number' || m[2] === '50') continue;
+    const n = parseInt(m[2], 10);
+    if (e.yardLine === n) SIDE[m[1]] = 'home';
+    else if (e.yardLine === 100 - n) SIDE[m[1]] = 'away';
+  }
+}
+function spotAbs(ab, n){
+  if (n === 50) return 50;
+  ab = (ab || '').toUpperCase();
+  const side = SIDE[ab] || (S.home && ab === S.home.abbr ? 'home'
+                          : S.away && ab === S.away.abbr ? 'away' : '');
+  return side === 'home' ? n : side === 'away' ? 100 - n : null;
+}
+
+/* WHERE A RETURN STOPPED, from the returner's own clause after `idx`:
+   "B.Brown to NO 27 for 23 yards", "B.Covey ran ob at PHI 42 for 18 yards",
+   "D.Pierce pushed ob at PHI 38 for 32 yards", "to PHI 26 for no gain". Read
+   from the text because the play's end spot includes any penalty enforced
+   after the return. A return for a touchdown names no spot: it ends at the
+   goal line the returning team was attacking. */
+function returnEnd(text, idx, rid){
+  const rest = (text || '').slice(idx);
+  const m = /(?:\bto|ran ob at|pushed ob at) (?:the )?([A-Z]{2,4}) (\d{1,2}) for (?:-?\d+ yards?|no gain)/.exec(rest);
+  if (m) return spotAbs(m[1], parseInt(m[2], 10));
+  if (/for \d+ yards?, TOUCHDOWN/i.test(rest) && !/NULLIFIED/i.test(rest))
+    return rid === String(S.home?.id) ? 100 : 0;
   return null;
 }
 
 /* A TURNOVER'S RETURN: the other side picked the ball up at `from` and carried
-   it to `to` (the play's end spot, which ESPN gives as the RETURN's end). Only
-   for a play whose ball ends with the other team; null otherwise. */
+   it to `to`. Only for a play whose ball ends with the other team. */
 function turnoverReturn(pl, teamId){
   const t = pl?.type?.text || '';
   if (!/Fumble Recovery \(Opponent\)|Intercept|Fumble Return/i.test(t)) return null;
-  const to = pl.end?.yardLine, rid = String(pl.end?.team?.id || '');
-  if (typeof to !== 'number' || !rid || rid === teamId) return null;
-  const from = recoverySpot(pl.text);
-  if (from === null) return null;
-  return {from: from, to: to, team: rid, id: String(pl.id)};
+  const end = pl.end?.yardLine, rid = String(pl.end?.team?.id || '');
+  if (typeof end !== 'number' || !rid || rid === teamId) return null;
+  const rec = recoverySpot(pl.text);
+  if (!rec || rec.at === null) return null;
+  const to = returnEnd(pl.text, rec.idx, rid);
+  return {kind:'turnover', ret:{from: rec.at, to: to === null ? end : to, team: rid}, id: String(pl.id)};
+}
+
+/* A PUNT OR KICKOFF AND ITS RETURN. The kick runs from the play's start spot,
+   its length read from "kicks 61 yards" / "punts 56 yards", toward the
+   receiving team's goal (clamped to the back of the end zone). The return runs
+   from where the kick came down to where the returner stopped. No return on a
+   touchback, a fair catch, a kick out of bounds or one downed by the kicking
+   team; a muffed kick draws the kick alone. Verified against every punt and
+   kickoff of the 2026-10-11 early games. */
+function kickPlay(pl){
+  const t = pl?.type?.text || '', tx = pl?.text || '';
+  if (!/^(Kickoff|Punt)/i.test(t) || /No Play/i.test(tx)) return null;
+  const from = pl.start?.yardLine, kid = String(pl.start?.team?.id || '');
+  const km = /(?:kicks|punts) (\d+) yards?/i.exec(tx);
+  if (typeof from !== 'number' || !kid || !km) return null;
+  const dir = kid === String(S.home?.id) ? 1 : -1;
+  const land = Math.max(-10, Math.min(110, from + dir * parseInt(km[1], 10)));
+  const out = {kind: /^Kickoff/i.test(t) ? 'kickoff' : 'punt',
+               kick: {from: from, to: land, team: kid}, ret: null, id: String(pl.id)};
+  const rid = String(pl.end?.team?.id || '');
+  if (!rid || rid === kid) return out;                       // kicking team kept it
+  if (/Touchback|fair catch|out of bounds|downed by|MUFF/i.test(tx)) return out;
+  const to = returnEnd(tx, km.index + km[0].length, rid);
+  const end = to === null ? pl.end?.yardLine : to;
+  if (typeof end === 'number' && end !== land) out.ret = {from: land, to: end, team: rid};
+  return out;
 }
 
 async function pollDeep(){
@@ -510,6 +610,8 @@ async function pollDeep(){
     const list = Array.from(byId.values());
 
     S.driveTeam = dr.current?.team?.abbreviation || '';
+    for (const k in SIDE) delete SIDE[k];
+    learnSides(list.flatMap(v => v.plays || []));
 
     S.drives = list.map((v, i) => {
       const plays = v.plays || [];
@@ -541,6 +643,19 @@ async function pollDeep(){
       const teamId = String(v.team?.id || '');
       const rets = [];
       for (const pl of plays){ const r = turnoverReturn(pl, teamId); if (r) rets.push(r); }
+      /* Punts and kickoffs in this drive's plays. ESPN files a kickoff under
+         the RECEIVING team's drive (its first play) and a punt under the
+         punting team's (its last). */
+      const kicks = [];
+      for (const pl of plays){ const k = kickPlay(pl); if (k) kicks.push(k); }
+      /* A DRIVE THAT CROSSES A QUARTER BREAK. Rows sit under the quarter they
+         began in, so the Saints' drive from 0:41 of the 1st to 8:23 of the 2nd
+         sat above the Q2 rule and the first row below it began at 8:23, which
+         read as "the 2nd quarter started at 8 minutes" (Joe, 2026-10-11). The
+         first play of the new quarter says when and where it turned. */
+      const p0 = v.start?.period?.number || 0;
+      const qTurn = plays.find(pl => (pl.period?.number || 0) > p0 &&
+                                     typeof pl.start?.yardLine === 'number') || null;
       /* HOW THE DRIVE SCORED, IF IT DID.
          There is NO separate extra-point play in this feed: the PAT is written
          into the TOUCHDOWN play's own text, e.g.
@@ -603,6 +718,13 @@ async function pollDeep(){
         live:  live,
         teamId: teamId,
         rets:  rets,
+        kicks: kicks,
+        /* Game clock when the drive began and ended, for the labels beside the
+           end zones; the drive in progress has no end yet. An end in a later
+           quarter carries that quarter (see qSpot). */
+        t0:    v.start?.clock?.displayValue || '',
+        t1:    ended ? ((qTurn ? 'Q' + qTurn.period.number + ' ' : '') + (v.end?.clock?.displayValue || '')) : '',
+        qSpot: qTurn ? qTurn.start.yardLine : null,
         ids:   new Set(plays.map(p => String(p.id))),
         yards: typeof v.yards === 'number' ? v.yards : 0,
         result:result,
@@ -745,6 +867,15 @@ function drawField(x, y, w, h){
   const home = S.home, away = S.away;
   if (!home || !away) return;
 
+  /* ROOM FOR THE CLOCK. Each drive's start and end game clock sit just outside
+     the end zones (Joe, 2026-10-11), so the field gives up one label's width
+     on each side. LX keeps the strip's own left edge for the legend, which
+     lines up with the curve below. */
+  const LX = x;
+  ctx.font = font('t5');
+  const labW = ctx.measureText('00:00').width + 14;
+  x += labW; w -= 2 * labW;
+
   /* A REAL FIELD IS 120 YARDS LONG: 100 between the goal lines plus a ten-yard
      end zone at each end.
 
@@ -794,17 +925,28 @@ function drawField(x, y, w, h){
      came by the ball. */
   const ds = S.drives.filter(d => d.from !== null);
   if (ds.length){
-    const lane = (h - 12) / ds.length;
+    /* A LEAD above the first row holds the opening kickoff, the one change of
+       possession with no drive above it. */
+    const lane = (h - 12) / (ds.length + 0.45);
     const bh = Math.max(2, Math.min(lane * 0.60, 16));
     const dotR = Math.max(1.5, Math.min(bh * 0.46, 7));
     const roomForDots = lane >= 7;          // below this the lanes merge; skip
+    const top0 = y + 6 + lane * 0.45;
+    const rowY = i => top0 + i * lane;
+    /* THE GAP BETWEEN TWO ROWS is where the ball changed hands, so that is
+       where a punt, kickoff or turnover is drawn: nearer the drive that gave
+       the ball up. A quarter's rule sits nearer the drive that follows. */
+    const gapY = i => rowY(i) - Math.min((lane - bh) * 0.58, lane * 0.30);
+    const qOff = Math.max(2, Math.min((lane - bh) * 0.18, lane * 0.10));
+    const gaps = [];                        // gaps[i] = changes of possession above row i
+    const toGap = (i, ev) => { (gaps[i] = gaps[i] || []).push(ev); };
     ds.forEach((d, i) => {
       /* A RULE WHERE THE QUARTER TURNS. Rows are drives in order, so a period
          boundary falls BETWEEN two rows; halftime gets a brighter line because
          it is the one break that is not just a clock reset. */
       if (i > 0 && d.period && ds[i-1].period && d.period !== ds[i-1].period){
         const half = d.period === 3;
-        const ry = y + 6 + i * lane - lane * 0.16;
+        const ry = rowY(i) - qOff;
         ctx.save();
         ctx.strokeStyle = half ? 'rgba(255,255,255,.45)' : 'rgba(255,255,255,.20)';
         ctx.lineWidth = half ? Math.max(1, 2) : 1;
@@ -834,17 +976,50 @@ function drawField(x, y, w, h){
           if (m) marks = marks.concat([m]);
         } else if (unseen){
           /* The ball has just changed hands on a play the summary has not
-             listed: show the turnover now rather than a poll or two later. */
+             listed: show the turnover or punt now rather than a poll or two
+             later. */
           const r = turnoverReturn(lp, d.teamId);
           if (r){ rets = rets.concat([r]); if (m) marks = marks.concat([m]); }
+          const k = kickPlay(lp);
+          if (k && k.kind === 'punt') toGap(i + 1, k);
         }
       }
+      /* A kickoff began this drive (ESPN files it here), so it goes in the gap
+         above; a punt or a turnover ended it, so in the gap below. */
+      for (const k of d.kicks) toGap(k.kind === 'kickoff' ? i : i + 1, k);
+      for (const r of rets) toGap(i + 1, r);
+
       const a = X(Math.min(d.from, to)), b = X(Math.max(d.from, to));
       const team = d.abbr === home.abbr ? home : away;
-      const Y = y + 6 + i * lane;
+      const Y = rowY(i);
       const mid = Y + bh / 2;
       ctx.fillStyle = hexA(team.color, d.us ? .95 : .60);
       ctx.fillRect(a, Y, Math.max(2, b - a), bh);
+      /* The quarter turned during this drive: a white tick across the bar at
+         the spot of the new quarter's first play. */
+      if (d.qSpot !== null && d.qSpot !== undefined){
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = Math.max(2, bh * 0.18);
+        ctx.beginPath(); ctx.moveTo(X(d.qSpot), Y - bh * 0.45); ctx.lineTo(X(d.qSpot), Y + bh * 1.45); ctx.stroke();
+        ctx.restore();
+      }
+
+      /* THE CLOCK, outside the end zones: the start time beside the end zone
+         the drive set out from (the team's own), the end time beside the one
+         it was heading for. A home drive runs left to right, so a Vikings
+         drive at New Orleans reads right to left (Joe, 2026-10-11). */
+      {
+        const homeDrive = d.abbr === home.abbr;
+        const lt = homeDrive ? d.t0 : d.t1, rt = homeDrive ? d.t1 : d.t0;
+        ctx.save();
+        // Never taller than a row, so a long game's labels do not overprint.
+        ctx.font = '400 ' + Math.min(T.t5, lane * 0.9) + 'px ' + FONT_NUM;
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(206,220,240,.72)';
+        if (lt){ ctx.textAlign = 'right'; ctx.fillText(lt, x - 8, mid); }
+        if (rt){ ctx.textAlign = 'left';  ctx.fillText(rt, x + w + 8, mid); }
+        ctx.restore();
+      }
 
       /* HOW THE BALL ARRIVED. Green for a punt received or a stop on downs -
          the drive began because the defence did its job. Yellow for a turnover.
@@ -873,26 +1048,6 @@ function drawField(x, y, w, h){
             ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.fill();
           }
         }
-      }
-
-      /* A TURNOVER AND ITS RETURN, just under the drive that lost the ball: a
-         yellow dot where the other side picked it up (the same yellow that
-         caps a drive begun by a turnover) and a dashed line in THEIR colour to
-         where the return stopped. Under the bar, not on it, because a return
-         runs back over the yards the drive had just gained and would hide them. */
-      for (const r of rets){
-        const rt = r.team === String(home.id) ? home : away;
-        const ry = Y + bh + Math.min((lane - bh) * 0.5, bh * 0.9);
-        ctx.save();
-        ctx.strokeStyle = rt.color; ctx.lineWidth = Math.max(1.5, bh * 0.28);
-        ctx.setLineDash([Math.max(3, bh*0.55), Math.max(3, bh*0.40)]);
-        ctx.beginPath(); ctx.moveTo(X(r.from), ry); ctx.lineTo(X(r.to), ry); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.beginPath(); ctx.moveTo(X(r.to), ry - bh*0.45); ctx.lineTo(X(r.to), ry + bh*0.45); ctx.stroke();
-        ctx.fillStyle = '#F5C518';
-        ctx.beginPath(); ctx.arc(X(r.from), ry, Math.max(3, bh * 0.50), 0, 7); ctx.fill();
-        ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 1; ctx.stroke();
-        ctx.restore();
       }
 
       /* ---------------- how the drive ENDED, if it scored ----------------
@@ -965,6 +1120,48 @@ function drawField(x, y, w, h){
         ctx.fill();
       }
     });
+
+    /* CHANGES OF POSSESSION, in the gaps between rows. Two line types (Joe,
+       2026-10-11): a KICK is dashed, in the kicking team's colour, like the
+       field goal's flight; a RUN with the ball the other way - a punt or kick
+       return, or a turnover's return - is dotted, in the returning team's
+       colour. A tick marks where each one stopped, and a turnover adds a
+       yellow dot where the ball changed hands (the same yellow that caps a
+       drive begun by a turnover). */
+    const lw = Math.max(2, bh * 0.30);
+    const colOf = id => (String(id) === String(home.id) ? home : away).color;
+    const seg = (s, kick, gy) => {
+      ctx.strokeStyle = colOf(s.team);
+      // Dots carry less ink than dashes, so they are drawn heavier to read as well.
+      if (kick){ ctx.lineWidth = lw;        ctx.lineCap = 'butt';  ctx.setLineDash([lw * 3.2, lw * 2.2]); }
+      else     { ctx.lineWidth = lw * 1.45; ctx.lineCap = 'round'; ctx.setLineDash([0.01, lw * 2.6]); }
+      ctx.beginPath(); ctx.moveTo(X(s.from), gy); ctx.lineTo(X(s.to), gy); ctx.stroke();
+      ctx.setLineDash([]); ctx.lineCap = 'butt';
+    };
+    const tick = (s, gy) => {
+      ctx.strokeStyle = colOf(s.team); ctx.lineWidth = Math.max(1.5, lw * 0.8);
+      ctx.beginPath(); ctx.moveTo(X(s.to), gy - bh * 0.45); ctx.lineTo(X(s.to), gy + bh * 0.45); ctx.stroke();
+    };
+    ctx.save();
+    gaps.forEach((evs, g) => {
+      if (!evs) return;
+      const gy = gapY(g);
+      /* A return runs back along its own kick's path, so the two would lie on
+         top of each other: the kick sits a line's width above the gap's
+         centre and its return a line's width below. */
+      const sep = (ev) => (ev.kick && ev.ret) ? lw * 1.1 : 0;
+      for (const ev of evs){
+        const s = sep(ev);
+        if (ev.kick){ seg(ev.kick, true, gy - s); if (!ev.ret) tick(ev.kick, gy); }
+        if (ev.ret){ seg(ev.ret, false, gy + s); tick(ev.ret, gy + s * 0.5); }
+        if (ev.kind === 'turnover'){
+          ctx.fillStyle = '#F5C518';
+          ctx.beginPath(); ctx.arc(X(ev.ret.from), gy, Math.max(3, bh * 0.50), 0, 7); ctx.fill();
+          ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 1; ctx.stroke();
+        }
+      }
+    });
+    ctx.restore();
   }
 
   /* THE BALL, in the colour of whoever has it.
@@ -977,8 +1174,30 @@ function drawField(x, y, w, h){
     const bx = X(S.sit.yardLine);
     const p = possTeam();
     const col = p.color;
+    /* A FIRST DOWN (Joe, 2026-10-11): the play that moved the chains lights
+       the marker - a white halo behind it and a tag at its top in the team's
+       colour - until the next play is run. */
+    const fd = !!S.firstDown;
+    if (fd){
+      ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 10;
+      ctx.beginPath(); ctx.moveTo(bx, y - 10); ctx.lineTo(bx, y + h + 10); ctx.stroke();
+    }
     ctx.strokeStyle = col; ctx.lineWidth = Math.max(3, 4);
     ctx.beginPath(); ctx.moveTo(bx, y - 10); ctx.lineTo(bx, y + h + 10); ctx.stroke();
+    if (fd){
+      ctx.save();
+      ctx.font = font('t5', 700);
+      const tag = 'FIRST DOWN', tw = ctx.measureText(tag).width + T.t5 * 1.1, th = T.t5 * 1.5;
+      const tx = Math.max(x, Math.min(x + w - tw, bx - tw / 2)), ty = y - 12 - th;
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(tx, ty, tw, th, th / 2) : ctx.rect(tx, ty, tw, th);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = '#FFFFFF'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(tag, tx + tw / 2, ty + th / 2 + 1);
+      ctx.restore();
+    }
     // A brown football on the marker, ringed in the team's colour so it reads
     // at three metres against either end of the field.
     const cy = y + h + 10 + T.t5 * 0.55, rxx = Math.max(9, 13), ryy = Math.max(6, 8);
@@ -1008,27 +1227,29 @@ function drawField(x, y, w, h){
   const legend = [
     'each row is one drive, oldest at top · ' + S.drives.length + ' so far',
     'downs:  \u25CF run   \u25CB pass',
-    'began:  green = punt or downs,  yellow = turnover,  kickoff unmarked',
-    'lost it:  yellow dot under a drive, dashed line = the other side\'s return',
+    'began:  green = punt or downs,  yellow = turnover',
+    'between drives:  dashed = kick (punt, kickoff),  dotted = return,  yellow dot = turnover',
+    'clock:  start time by the end zone the drive set out from, end time by the one it was heading for',
+    'a drive that ran into the next quarter ends "Q2 8:23", with a white tick where it turned',
     'scored:  dashed line to a ball = field goal',
     '\u25CF/\u25CB in the end zone = rushing / passing touchdown',
     'ball after it = extra point  (dashed ring kicked, solid ring two-point)',
     'S = safety',
   ];
-  const wrapW = Math.round(W * 0.60) - x;     // the left column, same as the curve
+  const wrapW = Math.round(W * 0.60) - LX;    // the left column, same as the curve
   const sep = '      ';
   let line = '', ly = y + h + T.t5 * 2.4;
   for (const phrase of legend){
     const test = line ? line + sep + phrase : phrase;
     if (line && ctx.measureText(test).width > wrapW){
-      ctx.fillText(line, x + 6, ly);
+      ctx.fillText(line, LX + 6, ly);
       ly += T.t5 * 1.5;
       line = phrase;
     } else {
       line = test;
     }
   }
-  if (line) ctx.fillText(line, x + 6, ly);
+  if (line) ctx.fillText(line, LX + 6, ly);
   ctx.restore();
 }
 

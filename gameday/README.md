@@ -13,7 +13,7 @@ Add `?team=` with any ESPN team abbreviation (`?team=SEA`, `?team=CSU`) to watch
 ## What it is doing
 
 - Everything comes from ESPN's public feed, which any web page may read: the scoreboard every 15 seconds for the score and the ball, and the game summary every 25 seconds for the drives, plays, box score and win probability.
-- Each row of the field is one drive, oldest at the top. A dot marks every down (filled for a run, hollow for a pass), the drive in progress grows to the ball's spot play by play, and a turnover shows as a yellow dot under the drive that lost the ball with the other side's return dashed in their colour.
+- Each row of the field is one drive, oldest at the top, with its start and end game clock beside the end zones. A dot marks every down (filled for a run, hollow for a pass) and the drive in progress grows to the ball's spot play by play. Between the rows, where the ball changed hands: kicks dashed in the kicking team's colour, returns dotted in the returning team's, and a yellow dot where a turnover happened. The ball's marker lights up on a first down.
 - ESPN's yard lines run from the home team's goal line (0) to the away team's (100), whoever has the ball, so the home side always attacks to the right.
 - Between games it shows the team's game of the week from ESPN's scoreboard: the kickoff time before it, the final drives and score after. In a bye week there is nothing to show.
 
