@@ -1,19 +1,19 @@
 # Snowflakes
 
-One snow crystal at a time, grown from water vapour on a winter day. A supercooled cloud droplet freezes into a tiny hexagonal prism, the crystal grows as it drifts through the cloud, and the temperature and humidity along its path decide its shape: plate, column, sectored plate, stellar or fernlike dendrite, or a mix written in as conditions change. Full grown, it falls, and the next droplet freezes.
+One snow crystal at a time, grown from water vapour on a winter day. A supercooled cloud droplet freezes into a tiny hexagonal prism, and the crystal grows as an updraft and its own weight carry it through a cloud of its own; the temperature and humidity it meets decide its shape: plate, column, capped column, sectored plate, stellar dendrite, or a mix written in as conditions change. Full grown, it falls.
 
 ## Running it
 
 Open `index.html` in a browser. That is the whole of it - one file, no build,
 no server, no keys. It is written for a 4K screen and scales down.
 
-One small line at the bottom gives the temperature, the humidity, the size and the shape those conditions grow. The up arrow (or the on-screen `i`) opens a card with the crystal's path through the cloud, its thickness and how fast it falls. In the URL: `?arch=stellar|fern|plate|sectored|broad|warm|column|plate-column|plate-dendrite|dendrite-plate` picks a kind, `?seed=` with any number repeats a sequence, `?grow=` sets the growing time in seconds; `n` starts a new flake.
+One small line at the bottom gives the temperature, the humidity, the size and shape grown so far, and whether the crystal is sinking or being carried up. The up arrow (or the on-screen `i`) opens a card with its height in the cloud, the updraft, its trip and how long it has been growing. In the URL: `?arch=stellar|fern|plate|sectored|broad|warm|column|capped|plate-dendrite|dendrite-plate` forces a kind on a scripted path, `?seed=` with any number repeats a sequence, `?grow=` sets the growing time in seconds; `n` starts a new flake.
 
 ## What it is doing
 
 - The growth is the lattice model of Gravner and Griffeath (2008): on a hexagonal lattice, vapour diffuses toward the crystal, a thin boundary layer collects on its edge, and an edge cell joins the crystal when that layer is thick enough. Joining is harder at a tip or corner than on a flat face; how much harder decides whether facets stay flat (a hexagon) or corners outrun them as branches.
 - Temperature and humidity steer those rules through the snow-crystal morphology diagram that Ukichiro Nakaya first mapped: thin plates near -2 C and from about -10 to -22 C (thinnest and most branched near -15 C), columns near -5 C. Within a plate regime more vapour means more branching. A cloud of liquid droplets sits near water saturation, which over ice is about 1% of supersaturation per degree of frost.
-- Each crystal draws its own path through the cloud, so its conditions change as it grows and the history stays in its shape: a plate that sprouts arms, arms that end in plates, a column that grows a plate. All six arms see the same history, which is why they match. Only a twelfth of the lattice is computed; the rest is symmetry.
+- Each crystal grows in a modelled cloud of its own: colder with height (a base at -1 to -7 C, a top at -18 to -32 C), with drier layers where outside air has mixed in and an updraft that swells and fades. The crystal is carried up or sinks at the speed its own mass and face give it, on a real clock (growth of a few micrometres a second), so where it goes is written into its shape: a plate that sprouts arms in wetter air, arms that end in plates in drier air, a column from the cold top that grows a thin plate on each end when it falls into plate weather. All six arms see the same history, which is why they match. Only a twelfth of the lattice is computed; the rest is symmetry.
 - Cloud droplets float nearby at their true size (10 to 20 micrometres). Those near the crystal shrink: ice holds less vapour than liquid water at the same temperature, so the crystal grows at the droplets' expense.
 - The fall is a thin plate in still air: gravity against the air's push on each part of its face. A few-millimetre dendrite settles at about half a metre per second, falls flat and rocks in the cloud's eddies, turning slowly; it is shown slowed ten times, with the camera falling alongside.
 

@@ -1,5 +1,5 @@
 /* ==========================================================================
-  snowflake_engine.js · v0.1 · 2026-10-11
+  snowflake_engine.js · v0.2 · 2026-10-11
 
   The physics behind snowflake.html: one snow crystal growing from water
   vapour in a cloud, and then falling.
@@ -44,7 +44,8 @@
   WHY EVERY FLAKE IS DIFFERENT. A crystal falls through the cloud as it
   grows, so the temperature and humidity around it change. All six arms
   feel the same history at the same moment, so they grow alike; another
-  crystal takes another path. The path is drawn per flake (Path).
+  crystal takes another path. Each flake has its own Cloud and moves through
+  it (Flake); a scripted Path is kept for forcing one kind.
 
   SYMMETRY. Only one twelfth of the lattice is computed (a 30 degree wedge);
   every other cell is the mirror or rotation of a wedge cell. That makes it
@@ -60,6 +61,11 @@
   Pure JavaScript, no DOM: runs in a page or in jsc for tests.
 
   CHANGED
+    v0.2  Cloud (a crystal's conditions from where it actually is) and Flake
+          (one crystal's life, shared by the page and the tests); edge growth
+          no thicker than the weather allows (rings; capped columns grow on the
+          column's ends); sector ridges; thickening limited by vapour
+          diffusion; describe() names the shape grown
     v0.1  first build
 ========================================================================== */
 (function (global) {
@@ -97,8 +103,8 @@ const excessDensity = (T, RHw) => {
    C, plates again from -10 C with the thinnest near -15 C, columns again
    below about -22 C. */
 const HABIT = [[0, -0.2], [-2, -0.35], [-3.5, 0.0], [-5, 0.85], [-6.5, 0.8], [-8.5, 0.25],
-               [-10, -0.3], [-12, -0.8], [-15, -1.25], [-18, -0.9], [-21, -0.45], [-23, 0.05],
-               [-26, 0.35], [-30, 0.35], [-40, 0.3]];
+               [-10, -0.3], [-12, -0.8], [-15, -1.25], [-18, -0.9], [-21, -0.45], [-23, 0.2],
+               [-25, 0.8], [-30, 0.8], [-40, 0.6]];
 /* branchSigma(T): the supersaturation over ice at which branching sets in.
    Lowest near -15 C, where dendrites grow at water saturation; higher near
    -2 C and at -10 / -20 C, where it takes more vapour to branch. In the
@@ -109,10 +115,12 @@ const BRANCH = [[0, 0.20], [-2, 0.13], [-3.5, 0.30], [-5, 0.45], [-7, 0.40], [-9
 /* ASPECT(T): how much thicker the crystal gets per unit it spreads (dh/dr,
    both in lattice cells). Anchored on observed thickness-to-diameter
    ratios: about 1:15 at -2 C, columns several times longer than wide near
-   -5 C, about 1:30 at -11 C, about 1:150 at -15 C, columns again below
-   -23 C. */
-const ASPECT = [[0, 0.15], [-2, 0.12], [-3.5, 0.8], [-5, 6], [-6.5, 5], [-8.5, 1.5], [-10, 0.12],
-                [-12, 0.05], [-15, 0.013], [-18, 0.035], [-21, 0.09], [-23, 1.2], [-26, 3], [-30, 3], [-40, 3]];
+   -5 C, about 1:60 at -11 C, about 1:200 at -15 C, columns again below
+   -23 C. (A first set, twice as thick in the plate range, made 3 mm plates
+   ~140 um thick and fall at 1-3 m/s; real ones are 20-50 um and fall at
+   0.3-0.6 m/s.) */
+const ASPECT = [[0, 0.15], [-2, 0.12], [-3.5, 0.8], [-5, 6], [-6.5, 5], [-8.5, 1.2], [-10, 0.07],
+                [-12, 0.025], [-15, 0.008], [-18, 0.018], [-21, 0.045], [-23, 0.8], [-26, 3], [-30, 3], [-40, 3]];
 function interp(tab, T) {
   if (T >= tab[0][0]) return tab[0][1];
   for (let i = 1; i < tab.length; i++) {
@@ -233,12 +241,16 @@ function Crystal(opts) {
   this.tA = new Float32Array(n).fill(-1);     // step at which it attached
   this.K = new Float32Array(n);               // cumulative basal growth at attachment
   this.hA = new Float32Array(n);              // thickness the cell joined with
+  this.zOff = new Float32Array(n);            // a plate grown on a column's end sits this far from the middle plane
+  this.ridge = new Float32Array(n);           // fractional thickening along a plate's corner-to-centre ridge
+  this.dSum = 0; this.dN = 0;                 // drive at the attachments of the outer half (fern or stellar)
   this.tip = new Uint8Array(n);               // attached as a tip (1-2 neighbours): a rib
   this.edge = [];                             // indices of boundary cells (unattached, >= 1 crystal neighbour)
   this.inEdge = new Uint8Array(n);
   this.rand = mulberry32((opts.seed >>> 0) || 1);
   this.steps = 0; this.Kb = 0; this.rmax = 0; this.mass = 0;
   this.vr = 0; this._r0 = 0; this._s0 = 0;      // radial speed, cells per step (running)
+  this.kbCap = Infinity;                      // most the faces may thicken per step (set by Flake from vapour diffusion)
   this.p = opts.params || morphology(-15, 0.15);
   this.d.fill(this.p.rho);
   this.seedRadius = opts.seedRadius === undefined ? 1 : opts.seedRadius;
@@ -253,15 +265,50 @@ Crystal.prototype.attach = function (i, nAt) {
      prism with flat ends, a plate a slab. A cell joining at a branching tip
      (1 or 2) starts thinner - the edge-sharpening that keeps dendrite tips
      and branches thin while the centre thickens. */
-  let hs = 0, hn = 0;
+  let hs = 0, hn = 0, zs = 0;
   const nbr = this.W.nb;
-  for (let k = 0; k < 6; k++) { const j = nbr[i * 6 + k]; if (j >= 0 && this.a[j]) { hs += this.hA[j] + (this.Kb - this.K[j]); hn++; } }
+  for (let k = 0; k < 6; k++) {
+    const j = nbr[i * 6 + k];
+    if (j >= 0 && this.a[j]) { hs += this.hA[j] + (this.Kb - this.K[j]); zs += this.zOff[j]; hn++; }
+  }
   const hp = hn ? hs / hn : 1.2;
+  let zp = hn ? zs / hn : 0;
   /* how much thinner a tip starts: fully at dendritic beta (1.3), not at all
      on a faceted crystal (beta 2.0 and up), where a corner is just the end
      of a facet */
   const thin = 0.55 + 0.45 * Math.max(0, Math.min(1, (this.p.beta - 1.3) / 0.7));
-  this.hA[i] = nAt >= 3 ? hp : Math.max(1.0, thin * hp);
+  let h = nAt >= 3 ? hp : Math.max(1.0, thin * hp);
+  /* THE EDGE GROWS AS THICK AS THE WEATHER ALLOWS. New growth at the edge is
+     no thicker than a crystal growing here and now would be (aspect x size):
+     in column weather that is no limit, in plate weather it is thin. So a
+     crystal that changes from thick growth to thin leaves a step - one of the
+     inner hexagonal rings real plates show - and a plate grown on a column
+     stays a thin plate (before this, it inherited the column's thickness and
+     the middle became one thick block). When the new growth is less than half
+     as thick as the edge it grows from, it grows from the rims of the two end
+     faces, where the vapour arrives first: two thin plates, one on each end -
+     a capped column on a column, a split plate on a thick plate. zOff carries
+     it out to the end face, and the two plates are the two faces drawn. */
+  /* (in column weather there is no limit: a column's side faces span its
+     whole length. Tying the limit to the width there cut a column's rim back
+     while its middle lengthened - a pencil - and left no step for caps.) */
+  const hEdge = (this.p.col || 0) > 0 ? Infinity : 1.2 + 1.2 * (this.p.aspect || 0) * Math.max(this.rmax, 3);
+  if (h > hEdge) {
+    if (h > 2 * hEdge) zp += (h - hEdge) / 2;
+    h = hEdge;
+  }
+  this.hA[i] = h; this.zOff[i] = zp;
+  /* SECTOR RIDGES. In a sectored plate the ice along each line from the centre
+     to a corner stands proud: the corners grow fastest and lay down thicker
+     ice behind them, dividing the plate into six sectors. Strongest at the
+     sectored-plate beta (1.6-2.1), faint on a plain hexagon, none on a
+     dendrite (whose arms carry their own rib). The wedge's b = 0 line is the
+     line to a corner. */
+  const be = this.p.beta;
+  const amp = (this.p.col || 0) > 0.5 ? 0 : be < 1.5 ? 0 : be < 1.8 ? 0.55 * (be - 1.5) / 0.3 : be < 2.15 ? 0.55 : Math.max(0.18, 0.55 - (be - 2.15) * 1.6);
+  const dperp = this.W.B[i] * 0.866;
+  this.ridge[i] = amp * Math.exp(-(dperp * dperp) / (1.8 * 1.8));
+  if (this.W.dist[i] > 0.5 * this.rmax && this.rmax > 10) { this.dSum += this.p.drive || 0; this.dN++; }
   this.a[i] = 1; this.tA[i] = this.steps; this.K[i] = this.Kb;
   this.tip[i] = nAt <= 2 ? 1 : 0;
   this.c[i] += this.b[i]; this.b[i] = 0; this.d[i] = 0;
@@ -346,7 +393,7 @@ Crystal.prototype.step = function () {
     this._r0 = this.rmax; this._s0 = this.steps;
   }
   const vfloor = 0.0018 * Math.pow(rho / 0.45, 3);
-  this.Kb += (p.aspect || 0) * Math.max(this.vr, vfloor);
+  this.Kb += Math.min((p.aspect || 0) * Math.max(this.vr, vfloor), this.kbCap);
   this.steps++;
 };
 /* Thickness of a crystal cell, in cells: what it joined with plus all the
@@ -354,7 +401,41 @@ Crystal.prototype.step = function () {
    proud of the plate around it. */
 Crystal.prototype.thickness = function (i) {
   if (!this.a[i]) return 0;
-  return (this.hA[i] + (this.Kb - this.K[i])) * (this.tip[i] ? 1.25 : 1);
+  /* ribs and ridges stand proud by a share of a THIN plate's thickness (at
+     most 6 cells), not of the local thickness: as a percentage they turned
+     every corner of a thick column into a spike and each ridge into a fin */
+  const base = this.hA[i] + (this.Kb - this.K[i]), lip = Math.min(base, 6);
+  return base + lip * ((this.tip[i] ? 0.25 : 0) + this.ridge[i]);
+};
+/* WHAT HAS GROWN, in words (for the caption and the card): judged from the
+   crystal's own geometry, not from the conditions now.
+     fill  = area / area of the hexagon through its six points
+     inner = the same inside 0.45 of the radius; mid 0.45-0.8; outer 0.8-1 */
+Crystal.prototype.describe = function () {
+  const W = this.W, R = this.rmax;
+  if (R < 6) return 'hexagonal prism';
+  let area = 0, aIn = 0, aMid = 0, aOut = 0, capped = false, hubR = 0;
+  const h0 = this.thickness(0);
+  for (let i = 0; i < W.n; i++) {
+    if (!this.a[i]) continue;
+    const m = W.mult[i], d = W.dist[i];
+    area += m;
+    if (d < 0.45 * R) aIn += m; else if (d < 0.8 * R) aMid += m; else aOut += m;
+    if (this.zOff[i] > 2) capped = true;                 // plates grown on the ends of something thick
+    if (this.thickness(i) > 0.55 * h0 && d > hubR) hubR = d;
+  }
+  const hexA = (r) => 3 * r * r;
+  const fill = area / hexA(R), fIn = aIn / hexA(0.45 * R), fMid = aMid / (hexA(0.8 * R) - hexA(0.45 * R)),
+        fOut = aOut / (hexA(R) - hexA(0.8 * R));
+  if (h0 > 2 * R * 1.3) return h0 > 2 * R * 5 ? 'needle' : 'column';
+  if (capped && h0 > 0.6 * R) return 'capped column';
+  if (fill > 0.9) return h0 > 0.25 * R ? 'thick hexagonal plate' : 'hexagonal plate';
+  if (fill > 0.72) return 'sectored plate';
+  if (fill > 0.5) return fIn > 0.85 ? 'plate with broad branches' : 'broad-branched crystal';
+  if (fIn > 0.8) return 'plate with dendritic arms';
+  if (fOut > fMid + 0.12) return 'stellar dendrite with plate tips';
+  const drv = this.dN ? this.dSum / this.dN : 1;
+  return drv > 1.45 ? 'fernlike stellar dendrite' : 'stellar dendrite';
 };
 /* Totals over the full lattice (multiplicities). */
 Crystal.prototype.stats = function () {
@@ -406,6 +487,227 @@ Path.prototype.at = function (u) {
   if (this.stepAt > 0 && u > this.stepAt) { const k = Math.min(1, (u - this.stepAt) / 0.04); T += this.stepT * k; H += this.stepH * k; }
   T = Math.min(-0.5, Math.max(-35, T)); H = Math.min(1.06, Math.max(0.80, H));
   return { T, RHw: H, sigma: sigmaIce(T, H), excess: excessDensity(T, H) };
+};
+
+/* ------------------------------------------------------------- the cloud */
+/* A CLOUD THE CRYSTAL ACTUALLY MOVES THROUGH (Joe, 2026-10-11: "Do you model
+   the snowflake as falling from some height?"). Heights in metres above the
+   cloud base. Inside the cloud:
+     temperature falls with height at the moist rate, 5.5-7 C per km, from a
+     base at -1 to -7 C to a top at -18 to -32 C;
+     the air holds liquid droplets, so the humidity sits near water
+     saturation; an updraft pushes it slightly above (droplets cannot keep
+     up), 2% per m/s, at most 3%;
+     up to two drier layers where outside air has been mixed in (86-96% of
+     water saturation), a few hundred metres thick, drifting slowly;
+     an updraft, strong from just above the base and fading near the top,
+     0-1.3 m/s, swelling and fading over some minutes; about a third of
+     clouds are convective (over 0.7 m/s). A small crystal falls only a few
+     cm/s, so an updraft can carry it up into colder air for a while.
+   Below the base the air is dry (the crystal stops growing there); above the
+   top the droplets are gone and the humidity falls. */
+function Cloud(seed) {
+  const r = mulberry32((seed >>> 0) || 1);
+  this.Tbase = -1 - 6 * r();
+  this.lapse = (5.5 + 1.5 * r()) / 1000;                  // C per metre
+  this.Ttop = -18 - 14 * r();
+  this.top = (this.Tbase - this.Ttop) / this.lapse;       // metres above the base
+  this.W0 = r() < 0.33 ? 0.7 + 0.6 * r() : 0.6 * r();
+  this.Wp = 300 + 600 * r(); this.Wph = r() * 6.283;
+  this.dry = [];
+  const nd = r() < 0.25 ? 0 : r() < 0.6 ? 1 : 2;
+  for (let k = 0; k < nd; k++) this.dry.push({ z: this.top * (0.15 + 0.7 * r()), half: 120 + 230 * r(), rh: 0.86 + 0.10 * r(),
+                                             drift: (r() - 0.5) * 0.15 });
+  this.patch = 0.01 + 0.02 * r();                         // in-cloud patchiness of humidity
+  this.pp = r() * 6.283;
+}
+Cloud.prototype.updraft = function (z, t) {
+  if (z < 0 || z > this.top) return 0;
+  /* strong from just above the base (a convective updraft starts there),
+     fading only near the top */
+  const shape = Math.sqrt(Math.sin(Math.PI * Math.min(1, z / this.top)));
+  return this.W0 * shape * (0.55 + 0.45 * Math.sin(6.283 * t / this.Wp + this.Wph));
+};
+Cloud.prototype.at = function (z, t) {
+  const T = this.Tbase - this.lapse * z;
+  let RHw;
+  if (z < 0) RHw = Math.max(0.75, 0.97 + z / 3000);                 // below the base: drier, sublimating
+  else if (z > this.top) RHw = Math.max(0.80, 0.98 - (z - this.top) / 1500);
+  else {
+    const w = this.updraft(z, t);
+    RHw = 0.985 + this.patch * Math.sin(z / 90 + this.pp) + Math.min(0.03, 0.02 * Math.max(0, w));
+    for (const d of this.dry) {
+      const zc = d.z + d.drift * t, k = Math.exp(-Math.pow((z - zc) / d.half, 2));
+      RHw = RHw * (1 - k) + d.rh * k;
+    }
+  }
+  const sigma = sigmaIce(T, RHw);
+  return { T, RHw, sigma, excess: excessDensity(T, RHw), w: this.updraft(z, t), z };
+};
+/* Where does ice first appear? Ice-nucleating particles become active as it
+   gets colder; most crystals in clouds like these start between -10 and -25
+   C, some near -6 C. */
+Cloud.prototype.nucleationHeight = function (r) {
+  const x = r();
+  /* and in a cloud whose top is colder than -24 C, some start right up at
+     the top, in column weather - the start of a capped column */
+  const Tn = x < 0.12 ? -5.5 - 2.5 * r() : x < 0.70 ? -11 - 6.5 * r() : x < 0.86 || this.Ttop > -24 ? -17.5 - 6 * r()
+           : this.Ttop + 0.8 + 2.5 * r();
+  const z = (this.Tbase - Math.max(this.Ttop + 0.5, Math.min(this.Tbase - 0.5, Tn))) / this.lapse;
+  return Math.max(30, Math.min(this.top - 30, z));
+};
+
+/* How fast a crystal of this mass and face area falls in still air: weight
+   against drag, Stokes drag on a disc broadside (16 mu R v) plus form drag
+   (0.5 rho Cd A v^2). Small crystals fall a few cm/s, millimetre ones about
+   half a metre a second. */
+function fallSpeed(mass, area, radius) {
+  const mu = 1.7e-5, rhoA = 1.25, Cd = 1.2, g = 9.81;
+  const a = 0.5 * rhoA * Cd * area, b = 16 * mu * radius, c = mass * g;
+  return (-b + Math.sqrt(b * b + 4 * a * c)) / (2 * a);
+}
+/* How fast the crystal's edge (or a column's end) advances in metres per
+   second at these conditions: about 2 micrometres a second for a dendrite tip
+   near water saturation at -15 C, a few tenths for a faceted plate edge
+   (Libbrecht's measurements). Only sets the clock; the shape comes from the
+   lattice. */
+function growthSpeed(T, sigma) {
+  const m = morphology(T, sigma);
+  /* columns lengthen slowly, a few tenths of a micrometre a second */
+  const v = (0.25e-6 + 1.6e-6 * Math.max(0, Math.min(1.6, m.drive / 1.3))) * (1 - 0.6 * m.col);
+  /* and everything grows in proportion to the vapour actually there to take:
+     the excess density over ice, 0.26 g/m3 at water saturation near -12 C but
+     about half that at -27 C, where cold air holds little vapour at all */
+  const ex = excessDensity(T, (sigma + 1) * esIce(T) / esWater(T));
+  return Math.max(0.03e-6, v * Math.max(0, Math.min(1.3, ex / 0.26)));
+}
+
+/* ------------------------------------------------------------- a flake's life */
+/* One crystal from its frozen droplet to full size: the lattice, its size in
+   real units, and where it is - in a modelled Cloud (default) or on a scripted
+   Path (opts.arch, for forcing a kind). advance(n) runs n lattice steps and
+   moves the crystal through the cloud for the real time those steps stand
+   for. */
+function Flake(seed, opts) {
+  opts = opts || {};
+  const r = mulberry32(((seed >>> 0) || 1) ^ 0x5bd1e995);
+  this.seed = seed; this.r = r;
+  this.scripted = !!opts.arch;
+  if (this.scripted) {
+    this.path = new Path(seed, opts.arch);
+    this.cond = this.path.at(0);
+  } else {
+    this.cloud = new Cloud(seed);
+    this.z = this.z0 = this.cloud.nucleationHeight(r);
+    this.zMax = this.zMin = this.z;
+    this.t = 0;
+    this.cond = this.cloud.at(this.z, 0);
+  }
+  this.m = morphology(this.cond.T, this.cond.sigma);
+  /* a crystal that starts in column weather gets a smaller lattice: it
+     spreads little and grows mostly in length */
+  this.columnish = this.m.col > 0.5 && (this.scripted ? this.path.name === 'column' : true);
+  const R = opts.R || 210;
+  this.R = this.columnish ? Math.round(R * 0.55) : R;
+  this.cr = new Crystal({ R: this.R, params: this.m, seedRadius: 1, seed });
+  /* full size: a plate 0.84 of the lattice across; a crystal that starts as
+     a column may lengthen to 2.6 lattice radii, so a column high in a cold
+     cloud keeps growing until it falls into plate weather (a capped column)
+     rather than stopping as a stub */
+  this.rFin = this.R * 0.84; this.hFin = this.R * (this.columnish ? 2.6 : 1.6);
+  this.noise = 0.002 + 0.004 * r();
+  /* real size at full growth (mm): sets mm per lattice cell */
+  /* a column's full size is its LENGTH, 1-2 mm: long enough that one started
+     at a cold cloud top is usually still growing when it falls into plate
+     weather, where plates grow on its ends */
+  this.D = this.columnish ? 1.0 + 1.0 * r() : 2.2 + 2.6 * r();
+  this.cell = this.columnish ? (this.D / 2) / (this.hFin * 0.5) : (this.D / 2) / this.rFin;
+  this.u = 0; this.done = false; this.why = '';
+  this.vFall = 0; this.history = [];
+  this.T0 = this.cond.T; this.RH0 = this.cond.RHw;
+}
+Flake.prototype.progress = function () {
+  return Math.min(1, Math.max(this.cr.rmax / this.rFin, this.cr.thickness(0) / this.hFin));
+};
+Flake.prototype.advance = function (n) {
+  const cr = this.cr;
+  for (let k = 0; k < n && !this.done; k++) {
+    if (cr.steps % 10 === 0) {
+      const u0 = this.u;
+      this.u = this.progress();
+      {
+        /* the real time these steps stood for, and (in a cloud) where the
+           crystal went. A scripted path keeps the same clock, so its faces
+           thicken under the same diffusion limit. */
+        const du = this.u - u0;
+        if (du > 0) {
+          const half = (this.columnish ? this.hFin * 0.5 : this.rFin) * this.cell * 1e-3;   // m
+          const dt = du * half / growthSpeed(this.cond.T, this.cond.sigma);
+          if (!this.scripted) this.moveFor(dt);
+          else this.t = (this.t || 0) + dt;
+          /* THICKENING IS FED BY DIFFUSION. A crystal's whole mass gain is
+             limited by how fast vapour diffuses to it, 4 pi C D drho (C its
+             electrical capacitance: 2R/pi for a plate, about a third of the
+             length for a column). Spread over its face, half of that is the
+             most its faces can thicken - 0.02 um/s for a 3 mm plate, a few
+             tenths of a um/s for the end of a small column. Without this a
+             big plate falling through column weather near the cloud base
+             thickened as fast as a column lengthens and fell at 2 m/s. */
+          const st = this.statsQuick(), cm = this.cell * 1e-3;
+          const Rm = Math.max(1, cr.rmax) * cm, Lm = cr.thickness(0) * cm;
+          const C = Math.max(2 * Rm / Math.PI, Lm / 3), A = Math.max(1e-12, st.area * cm * cm * 0.866);
+          const drho = Math.max(0, this.cond.excess) * 1e-3;                              // kg/m3
+          const dhdt = 0.5 * 4 * Math.PI * C * 2.2e-5 * drho / (917 * A);                 // m/s
+          cr.kbCap = dhdt * dt / 10 / cm;                                                 // cells per lattice step
+        }
+      }
+      this.cond = this.scripted ? this.path.at(this.u) : this.cloud.at(this.z, this.t);
+      this.m = morphology(this.cond.T, this.cond.sigma);
+      this.m.sigmaNoise = this.noise;
+      cr.setParams(this.m);
+      if (this.u >= 1) { this.done = true; this.why = 'full size'; break; }
+      /* below the cloud base the air is drier than ice saturation: the
+         crystal has left the cloud and falls out as snow, whatever its size */
+      if (!this.scripted && this.z < -40) { this.done = true; this.why = 'fell out of the cloud'; break; }
+      /* in air below ice saturation (a dry layer) nothing deposits: time
+         passes and the crystal moves, but the lattice does not grow */
+      if (!this.scripted && this.cond.sigma < 0.004) {
+        this.stalled = true;
+        this.moveFor(15);
+        this.cond = this.cloud.at(this.z, this.t);
+        continue;
+      }
+      this.stalled = false;
+    }
+    cr.step();
+  }
+};
+/* move through the cloud for dt real seconds: up with the updraft, down at
+   the crystal's own fall speed */
+Flake.prototype.moveFor = function (dt) {
+  const st = this.statsQuick();
+  const cellM = this.cell * 1e-3;
+  const mass = 917 * st.vol * cellM * cellM * cellM * 0.866;
+  /* a column falls broadside: its drag is on its long side, not its end */
+  const len = this.cr.thickness(0) * cellM, wid = 2 * Math.max(1, this.cr.rmax) * cellM;
+  const area = Math.max(1e-12, st.area * cellM * cellM * 0.866, this.columnish ? len * wid : 0);
+  this.vFall = fallSpeed(mass, area, Math.max(wid, this.columnish ? len : 0) / 2);
+  this.mass = mass;
+  let left = dt;
+  while (left > 0) {
+    const h = Math.min(left, 5);
+    const w = this.cloud.updraft(this.z, this.t);
+    this.z += (w - this.vFall) * h; this.t += h; left -= h;
+  }
+  this.zMax = Math.max(this.zMax, this.z); this.zMin = Math.min(this.zMin, this.z);
+  if (!this.history.length || this.t - this.history[this.history.length - 1].t > 30)
+    this.history.push({ t: this.t, z: this.z, T: this.cond.T, RHw: this.cond.RHw, u: this.u });
+};
+/* area and volume, refreshed every few hundred steps (a full pass over the
+   wedge is cheap but not free) */
+Flake.prototype.statsQuick = function () {
+  if (!this._st || this.cr.steps - this._stAt > 200) { this._st = this.cr.stats(); this._stAt = this.cr.steps; }
+  return this._st;
 };
 
 /* ------------------------------------------------------------- falling */
@@ -515,7 +817,7 @@ Faller.prototype.step = function (dt) {
 };
 
 const SnowEngine = { version: '0.1', mulberry32, esWater, esIce, sigmaIce, excessDensity, habit, branchSigma,
-                     morphology, habitName, aspect, canon, buildWedge, Crystal, Path, ARCH, Faller, qrot };
+                     morphology, habitName, aspect, canon, buildWedge, Cloud, Flake, fallSpeed, growthSpeed, Crystal, Path, ARCH, Faller, qrot };
 if (typeof module !== 'undefined' && module.exports) module.exports = SnowEngine;
 global.SnowEngine = SnowEngine;
 })(typeof window !== 'undefined' ? window : this);

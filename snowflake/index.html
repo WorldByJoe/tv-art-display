@@ -25,7 +25,7 @@
 <script>
 'use strict';
 /* ==========================================================================
-  snowflake.html · v0.1 · 2026-10-11
+  snowflake.html · v0.2 · 2026-10-11
 
   One snow crystal at a time, grown from vapour on a winter day (Joe,
   2026-10-11: "model the growth of a snowflake ... different temperatures,
@@ -35,16 +35,18 @@
   new snowflake appears").
 
   A FLAKE'S LIFE. A supercooled cloud droplet freezes (the ice nucleus) and
-  becomes a tiny hexagonal prism. Vapour then deposits on it while it falls
-  through the cloud: the growth model is snowflake_engine.js (a hexagonal
-  lattice of vapour, edge layer and ice; Gravner & Griffeath 2008), steered
-  by the temperature and humidity around the crystal through the
-  morphology diagram. Each flake draws a path through the cloud, so the
-  conditions change as it grows and the history is written into its shape:
-  a plate that sprouts arms, arms that end in plates, a column that grows a
-  plate. When it is full size the camera lets it go: it falls under gravity
-  and the air's push on its face (the engine's Faller), slowed 25 times so
-  the rocking and turning can be seen, and the next droplet freezes.
+  becomes a tiny hexagonal prism. Vapour then deposits on it: the growth
+  model is snowflake_engine.js (a hexagonal lattice of vapour, edge layer and
+  ice; Gravner & Griffeath 2008), steered by the temperature and humidity
+  around the crystal through the morphology diagram. Each flake grows in a
+  modelled cloud of its own (the engine's Cloud: colder with height, drier
+  layers, an updraft) and is carried up or sinks at the speed its own size
+  and weight give it, in real time at measured growth rates; so where it
+  goes is written into its shape - a plate that sprouts arms, arms that end
+  in plates, a column that grows plates on its ends. When it is full size,
+  or falls out of the cloud's base, the camera lets it go: it falls under
+  gravity and the air's push on its face (the engine's Faller), slowed ten
+  times so the rocking and turning can be seen, and the next droplet freezes.
 
   THE CAMERA keeps the crystal growing on screen: the frozen droplet is
   about a tenth of the screen's height at first and the finished flake
@@ -60,13 +62,19 @@
 
   ALONG THE BOTTOM, in the credit line: the temperature, the humidity (with
   respect to water, and the supersaturation over ice that drives the
-  growth), the crystal's size, and the shape those conditions grow.
+  growth), the crystal's size and the shape grown so far, and whether it is
+  sinking or being carried up.
 
   URL: ?seed=S repeats flakes · ?pin stays · ?solo=N holds the wall N min ·
-       ?arch=stellar|fern|plate|column|... forces a kind · ?grow=S growth
+       ?arch=stellar|fern|plate|column|capped|... forces a kind on a scripted
+       path · ?grow=S growth
        seconds · ?rs=0.5 draws smaller · ?R=lattice radius
 
   CHANGED
+    v0.2  Joe's five: steady growth (pacing by measured progress per step, not
+          a 10% nudge read every 40 steps); a plate grown on a column stays
+          thin and grows on its ends; the caption names the shape grown; plate
+          ridges and inner rings; a modelled cloud instead of a scripted path
     v0.1  first build
 ========================================================================== */
 const CONFIG = { holdMin: 6, nextPage: '' /* standalone: nowhere to hand on to; start again */, growSec: 95, fallSec: 9 };
@@ -202,8 +210,10 @@ const ICE_VERT = `
   varying vec2 vUv; varying vec3 vPos;
   void main(){
     vUv = 0.5 + (uv - 0.5) * uUvScale;     // the sheet covers only the crystal's own square
-    vec4 s = texture2D(uTex, uv);
-    float z = uSide * 0.5 * s.g * uH;
+    vec4 s = texture2D(uTex, vUv);
+    /* this face's height: a cap's offset plus half the local thickness
+       (thickness is stored as its square root) */
+    float z = uSide * (s.b + 0.5 * s.g * s.g) * uH;
     vec4 wp = modelMatrix * vec4(position.xy, z, 1.0);
     vPos = wp.xyz;
     gl_Position = projectionMatrix * viewMatrix * wp;
@@ -219,14 +229,21 @@ const ICE_FRAG = `
   }
   void main(){
     vec4 s = texture2D(uTex, vUv);
-    float aa = max(fwidth(s.r), 0.02);
+    /* the outline's soft edge, never wider than a quarter: on the steep sheet
+       just outside a thick crystal's face (where the map drops to the middle
+       plane) fwidth is large, and an unlimited soft edge drew those sheets as
+       faint striped walls */
+    float aa = clamp(fwidth(s.r), 0.02, 0.25);
     float alpha = smoothstep(0.5 - aa, 0.5 + aa, s.r);
     if (alpha < 0.01) discard;
     float e = uTexel;
     vec4 sL = texture2D(uTex, vUv - vec2(e, 0.0)), sR = texture2D(uTex, vUv + vec2(e, 0.0));
     vec4 sD = texture2D(uTex, vUv - vec2(0.0, e)), sU = texture2D(uTex, vUv + vec2(0.0, e));
-    float hL = sL.g, hR = sR.g, hD = sD.g, hU = sU.g, cL = sL.r, cR = sR.r, cD = sD.r, cU = sU.r;
-    /* slope of the surface: thickness relief, exaggerated so ribs and steps read */
+    /* the face's height at the four neighbours (offset + half thickness) */
+    float hL = sL.b + 0.5 * sL.g * sL.g, hR = sR.b + 0.5 * sR.g * sR.g, hD = sD.b + 0.5 * sD.g * sD.g, hU = sU.b + 0.5 * sU.g * sU.g;
+    float cL = sL.r, cR = sR.r, cD = sD.r, cU = sU.r;
+    /* slope of the surface: thickness relief, exaggerated so ribs, ridges and
+       the steps where growth changed read */
     vec2 g = vec2(hL - hR, hD - hU) * uH / (2.0 * uWorldTexel) * uBump;
     vec3 nObj = normalize(vec3(g, 1.0));
     nObj.z *= uSide;
@@ -366,17 +383,21 @@ function buildTexMap(cr) {
 /* copy the lattice into the crystal map */
 function updateTexture() {
   const cr = F.cr, map = texMap;
-  let hmax = 0;
-  for (let i = 0; i < cr.W.n; i++) if (cr.a[i]) { const h = cr.thickness(i); if (h > hmax) hmax = h; }
-  F.hScale = Math.max(F.hScale || 0, hmax * 1.05, 2);
-  const inv = 255 / F.hScale, st = Math.max(1, cr.steps), beta = cr.p.beta;
+  let hmax = 0, zmax = 0;
+  for (let i = 0; i < cr.W.n; i++) if (cr.a[i]) { const h = cr.thickness(i); if (h > hmax) hmax = h; if (cr.zOff[i] > zmax) zmax = cr.zOff[i]; }
+  F.hScale = Math.max(F.hScale || 0, hmax * 1.05, zmax * 1.05, 2);
+  /* G holds the SQUARE ROOT of thickness over hScale: a thin plate's ridges
+     and rings are a fraction of a cell, and with a linear 8-bit scale a
+     crystal with a thick hub had no levels left for them. B holds how far a
+     plate grown on a column's end sits from the middle plane. */
+  const inv = 1 / F.hScale, beta = cr.p.beta;
   for (let t = 0, o = 0; t < map.length; t++, o += 4) {
     const i = map[t];
     if (i < 0) { texData[o] = 0; texData[o + 1] = 0; texData[o + 2] = 0; texData[o + 3] = 0; continue; }
     if (cr.a[i]) {
       texData[o] = 255;
-      texData[o + 1] = Math.min(255, cr.thickness(i) * inv) | 0;
-      texData[o + 2] = (255 * cr.tA[i] / st) | 0;
+      texData[o + 1] = (255 * Math.sqrt(Math.min(1, cr.thickness(i) * inv))) | 0;
+      texData[o + 2] = (255 * Math.min(1, cr.zOff[i] * inv)) | 0;
       texData[o + 3] = cr.tip[i] ? 255 : 0;
     } else {
       /* an edge cell: its boundary layer as a fraction of what it needs to
@@ -388,20 +409,22 @@ function updateTexture() {
   /* A THICK CRYSTAL'S FACES END SQUARE. The faces are a sheet lifted by the
      thickness map, and just outside the crystal the map falls to zero, so a
      thick crystal grew a sloping skirt from its face down to the middle
-     plane (a column showed it as a fin). Carrying the thickness a few texels
-     past the edge keeps the face flat to its edge; the outline still comes
-     from coverage, and the hub prism supplies the sides. */
-  if (cr.thickness(0) > 6) {
-    const G = TEX, tmp = F._dil || (F._dil = new Uint8Array(G * G));
+     plane (a column showed it as a fin). Carrying the thickness (and a cap's
+     offset) a few texels past the edge keeps the face flat to its edge; the
+     outline still comes from coverage, and the hub prism supplies the sides. */
+  if (cr.thickness(0) > 6 || zmax > 0) {
+    const G = TEX, tmp = F._dil || (F._dil = new Uint8Array(G * G * 2));
     for (let pass = 0; pass < 3; pass++) {
-      for (let t = 0; t < G * G; t++) tmp[t] = texData[t * 4 + 1];
+      for (let t = 0; t < G * G; t++) { tmp[2 * t] = texData[t * 4 + 1]; tmp[2 * t + 1] = texData[t * 4 + 2]; }
       for (let y = 1; y < G - 1; y++) for (let x = 1; x < G - 1; x++) {
         const t = y * G + x;
         if (texData[t * 4] >= 128) continue;
-        let m = tmp[t];
-        const a = tmp[t - 1], b = tmp[t + 1], c = tmp[t - G], d = tmp[t + G];
-        if (a > m) m = a; if (b > m) m = b; if (c > m) m = c; if (d > m) m = d;
-        texData[t * 4 + 1] = m;
+        for (let ch = 0; ch < 2; ch++) {
+          let m = tmp[2 * t + ch];
+          const a = tmp[2 * (t - 1) + ch], b = tmp[2 * (t + 1) + ch], c = tmp[2 * (t - G) + ch], d = tmp[2 * (t + G) + ch];
+          if (a > m) m = a; if (b > m) m = b; if (c > m) m = c; if (d > m) m = d;
+          texData[t * 4 + 1 + ch] = m;
+        }
       }
     }
   }
@@ -414,30 +437,22 @@ function updateTexture() {
 }
 
 /* --------------------------------------------------------- a new flake */
+/* ?arch= forces one kind along a scripted path (snowflake_engine.js Path);
+   otherwise the flake grows in a modelled cloud (Cloud) and its history comes
+   from where the updraft and its own fall speed take it. */
 const ARCH_KEYS = { stellar: 'stellar dendrite', fern: 'fernlike dendrite', 'plate-dendrite': 'plate to dendrite',
                     'dendrite-plate': 'dendrite to plate', sectored: 'sectored plate', broad: 'broad branches',
-                    plate: 'hexagonal plate', warm: 'warm plate', column: 'column', 'plate-column': 'plate on a column' };
+                    plate: 'hexagonal plate', warm: 'warm plate', column: 'column', 'plate-column': 'plate on a column',
+                    capped: 'plate on a column' };
 function newFlake() {
   sceneNo++;
   const seed = (SEED0 + sceneNo * 7919) >>> 0, r = E.mulberry32(seed);
-  const force = ARCH_KEYS[Q.get('arch')] || null;
-  const path = new E.Path(seed, force);
-  const c0 = path.at(0), m0 = E.morphology(c0.T, c0.sigma);
-  const columnish = m0.col > 0.5 && path.name === 'column';
-  const R = columnish ? Math.round(R_PLATE * 0.45) : R_PLATE;
-  const cr = new E.Crystal({ R, params: m0, seedRadius: 1, seed });
+  const fl = new E.Flake(seed, { R: R_PLATE, arch: ARCH_KEYS[Q.get('arch')] || null });
   Object.keys(F).forEach((k) => delete F[k]);
-  Object.assign(F, { seed, r, path, cr, R, u: 0, spf: 4, cond: c0, m: m0, hScale: 0, h0: 1.2, hubR: 0,
-                     noise: 0.002 + 0.004 * r(), rFin: R * 0.84, hFin: R * 1.6, columnish });
-  /* real size: dendrites 3-5 mm across, sectored and broad 2-3 mm, plates
-     1.2-2 mm, warm plates under 1 mm, columns 0.4-0.8 mm long */
-  const nm = path.name;
-  const D = /dendrite|fern/.test(nm) ? 3 + 2 * r() : /sectored|broad/.test(nm) ? 2 + r() : nm === 'warm plate' ? 0.6 + 0.4 * r()
-          : nm === 'column' ? 0.4 + 0.4 * r() : nm === 'plate on a column' ? 1.6 + 0.8 * r() : 1.2 + 0.8 * r();
-  F.D = D;
-  F.cell = columnish ? (D / 2) / (F.hFin * 0.5) : (D / 2) / F.rFin;       // mm per lattice cell
-  if (texMapR !== R) { texMap = buildTexMap(cr); texMapR = R; }
-  const half = (R + 1) * F.cell;                                           // the map's half width, mm
+  Object.assign(F, { seed, r, fl, cr: fl.cr, R: fl.R, cell: fl.cell, D: fl.D, columnish: fl.columnish, rFin: fl.rFin, hFin: fl.hFin,
+                     u: 0, cond: fl.cond, hScale: 0, h0: 1.2, hubR: 0, acc: 0, hist: [], kind: 'hexagonal prism', kindAt: 0 });
+  if (texMapR !== F.R) { texMap = buildTexMap(F.cr); texMapR = F.R; }
+  const half = (F.R + 1) * F.cell;                                         // the map's half width, mm
   for (const m of [topMesh, botMesh]) { m.material.uniforms.uWorldTexel.value = 2 * half / TEX; m.material.uniforms.uFade.value = 1; }
   hubMat.uniforms.uFade.value = 1;
   updateTexture();
@@ -466,33 +481,37 @@ function seedDroplets() {
 }
 
 /* ---------------------------------------------------------- growing */
+/* PACING. Each flake is shown growing over about GROW_SEC. The lattice needs
+   anything from ~2,000 steps (a dendrite) to ~90,000 (a plate), so every
+   frame asks: at the rate progress has been coming per step lately, how many
+   steps bring progress to where it should be by now - and runs that many
+   (fractions carry to the next frame), within the frame's time budget.
+   v0.1 instead nudged the step rate up or down by 10% a frame and read
+   progress only every 40 steps, so it overshot both ways: bursts of 20-37
+   steps in a quarter second, then up to two seconds nearly still (Joe saw
+   the growth "pulsed"). */
 function growFrame(dt) {
-  const cr = F.cr;
-  /* PACING: aim to finish in about GROW_SEC; never spend more than the step
-     budget per frame. Progress is by size, so a slow-growing plate simply
-     takes the time it takes. */
-  const want = Math.min(1, phaseT / GROW_SEC);
-  /* steps per frame may fall below one (a dendrite needs only ~2,000 steps,
-     a plate ~90,000): the fraction carries over to the next frame */
-  F.spf = F.u < want ? Math.min(400, F.spf * 1.10 + 0.05) : Math.max(0.05, F.spf * 0.90);
-  F.acc = (F.acc || 0) + F.spf;
+  const fl = F.fl, cr = F.cr;
+  /* progress per step, measured over at least the last 40 steps */
+  const h = F.hist;
+  h.push({ s: cr.steps, u: fl.u });
+  while (h.length > 2 && h[1].s <= cr.steps - 40) h.shift();
+  if (h.length > 1 && cr.steps - h[0].s >= 20 && fl.u > h[0].u) F.dps = (fl.u - h[0].u) / (cr.steps - h[0].s);
+  const dps = F.dps || 2e-4;
+  const want = (1 - fl.u) / Math.max(5, GROW_SEC - phaseT) * dt;           // progress due this frame
+  F.acc = Math.min(F.acc + Math.min(600, want / dps), 600);
   const t0 = performance.now();
   let n = 0;
-  while (F.acc >= 1 && performance.now() - t0 < STEP_BUDGET_MS) {
-    F.acc -= 1;
-    if (cr.steps % 40 === 0) {
-      F.u = Math.min(1, Math.max(cr.rmax / F.rFin, cr.thickness(0) / F.hFin));
-      F.cond = F.path.at(F.u);
-      F.m = E.morphology(F.cond.T, F.cond.sigma);
-      F.m.sigmaNoise = F.noise;
-      cr.setParams(F.m);
-    }
-    cr.step(); n++;
+  while (F.acc >= 1 && !fl.done && performance.now() - t0 < STEP_BUDGET_MS) {
+    const k = Math.min(10, Math.floor(F.acc));
+    fl.advance(k); F.acc -= k; n += k;
   }
-  if (F.acc > 2) F.acc = 2;                       // budget-limited: do not bank a backlog
+  if (F.acc > 3) F.acc = 3;                       // budget-limited: do not bank a backlog
   if (n) F.stepMs = (performance.now() - t0) / n;
+  F.u = fl.u; F.cond = fl.cond;
   if (n && F.frame++ % 2 === 0) updateTexture();
-  if (F.u >= 1 || (phaseT > GROW_SEC * 2.4 && F.u > 0.55)) { updateTexture(); startFall(); }
+  if (phaseT - F.kindAt > 1) { F.kind = cr.describe(); F.kindAt = phaseT; }
+  if (fl.done || (phaseT > GROW_SEC * 2.4 && fl.u > 0.55)) { updateTexture(); F.kind = cr.describe(); startFall(); }
 }
 
 /* the crystal's extent in mm, for framing */
@@ -672,9 +691,17 @@ function readout() {
   } else if (phase === 'nucleate') {
     items.push(n1(c.T) + ' °C (' + n0(Tf) + ' °F)', 'a supercooled droplet freezes', n0(F.dropR * 2000) + ' µm');
   } else {
+    /* the shape GROWN SO FAR (the crystal's own geometry), not the shape the
+       present conditions favour - v0.1 named the latter, so a plain hexagon
+       read "sectored plate" (Joe, 2026-10-11) */
     items.push(n1(c.T) + ' °C (' + n0(Tf) + ' °F)',
-               'humidity ' + n0(c.RHw * 100) + '% of water saturation, ' + n0(c.sigma * 100) + '% over ice',
-               n1(2 * extentMm()) + ' mm', 'growing as ' + E.habitName(c.T, c.sigma));
+               n0(c.RHw * 100) + '% of water saturation, ' + n0(c.sigma * 100) + '% over ice',
+               n1(2 * extentMm()) + ' mm ' + F.kind);
+    const fl = F.fl;
+    if (!fl.scripted) {
+      const net = (c.w || 0) - fl.vFall;                 // m/s, up positive
+      items.push(fl.stalled ? 'too dry to grow' : net > 0.005 ? 'carried up ' + n0(net * 100) + ' cm/s' : 'sinking ' + n0(-net * 100) + ' cm/s');
+    }
   }
   el.textContent = items.join('  ·  ');
 }
@@ -739,7 +766,7 @@ function frame(now) {
   renderer.render(scene, camera);
   if ((fpsN++ & 15) === 0) readout();
   if (now - fpsT > 2000) { window.SNOW.fps = Math.round(fpsN * 1000 / (now - fpsT)); fpsN = 0; fpsT = now;
-    window.SNOW.stepMs = F.stepMs; window.SNOW.spf = F.spf; window.SNOW.u = F.u; window.SNOW.steps = F.cr.steps; window.SNOW.phase = phase; }
+    window.SNOW.stepMs = F.stepMs; window.SNOW.acc = F.acc; window.SNOW.u = F.u; window.SNOW.steps = F.cr.steps; window.SNOW.phase = phase; }
   requestAnimationFrame(frame);
 }
 

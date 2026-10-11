@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.3 · 2026-10-11
+   about.js · v2.4 · 2026-10-11
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,11 +35,11 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v2.4  Snowflakes: the crystal's own cloud (height, updraft, trip) and the shape grown so far
      v2.3  Snowflakes: the cloud's temperature and humidity, the shape they grow, the fall
      v2.2  Kite Flying: choose the kite with left/right; mph, feet and pounds
      v2.1  Kite Flying: what the flyer is doing, the wind, the kite and its line
      v2.0  Spinning Mirrors: eight settings (servo speed and wave properties added); Scene row dropped
-     v1.9  Spinning Mirrors at 3 rpm, aligned with waves by default
 */
 (function (global) {
   'use strict';
@@ -73,22 +73,27 @@
   }
 
   /* ===== snowflake.html ===== */
-  /* The page's state is the global F (the flake now) and phase. */
+  /* The page's state is the global F (the flake now; F.fl is the engine's
+     Flake, with its cloud) and phase. */
   ABOUT['index.html'] = {
-    what: 'One snow crystal at a time, grown from water vapour. A supercooled cloud droplet freezes into a tiny hexagonal prism, and vapour then freezes onto its edges: a lattice model of snow crystal growth (Gravner and Griffeath, 2008) in which vapour diffuses toward the crystal and joins it more easily at corners than on flat faces when the air is humid, so corners outrun facets as branches. Temperature sets plates or columns (thinnest plates and most branching near \u221215 \u00b0C, columns near \u22125 \u00b0C: the morphology diagram first mapped by Ukichiro Nakaya), and each crystal takes its own path through the cloud, so its history of temperature and humidity is written into its shape; all six arms share that history, which is why they match. Full grown it falls, slowed ten times, rocking in the cloud\u2019s eddies.',
-    params: () => [
-      A('Path through the cloud', () => F.path.name),
-      A('Temperature', () => n(F.cond.T, 1) + ' \u00b0C (' + n(F.cond.T * 9 / 5 + 32) + ' \u00b0F)'),
-      A('Humidity', () => n(F.cond.RHw * 100) + '% of water saturation; ' + n(F.cond.sigma * 100, 1) + '% over ice'),
-      A('Excess vapour', () => n(F.cond.excess, 2) + ' g/m\u00b3 above ice saturation'),
-      A('Growing now as', () => phase === 'grow' ? SnowEngine.habitName(F.cond.T, F.cond.sigma) : null),
-      A('Began at', () => { const c = F.path.at(0); return n(c.T, 1) + ' \u00b0C, ' + n(c.RHw * 100) + '% of water saturation (' + SnowEngine.habitName(c.T, c.sigma) + ')'; }),
-      A('Size', () => phase === 'nucleate' ? n(F.dropR * 2000) + ' \u00b5m droplet' :
-        F.columnish ? n(F.h0 * F.cell, 2) + ' mm long, ' + n(2 * F.cr.rmax * F.cell, 2) + ' mm across'
-                    : n(2 * F.cr.rmax * F.cell, 2) + ' mm across, ' + n(F.h0 * F.cell * 1000) + ' \u00b5m thick at the centre'),
-      A('Falling', () => phase === 'fall' ? n(Math.abs(F.fall.vel[2]) * 100, 1) + ' cm/s; ' + n(F.fallMass * 1e6, 3) + ' mg; slowed ' + SLOWMO + ' times' : null),
-      A('Lattice', () => n(F.cr.steps) + ' steps on ' + n(F.cr.W.n) + ' cells (one twelfth; the rest is symmetry)'),
-      A('Frame rate', () => SNOW.fps ? n(SNOW.fps) + ' fps' : null),
-    ],
+    what: 'One snow crystal at a time, grown from water vapour in a cloud. A supercooled droplet freezes into a tiny hexagonal prism; vapour then freezes onto its edges in a lattice model of snow crystal growth (Gravner and Griffeath, 2008), where vapour joins more easily at corners than on flat faces when the air is humid, so corners outrun facets as branches. Temperature sets plates or columns (the thinnest, most branched plates near −15 °C, columns near −5 °C and below about −22 °C: the diagram Ukichiro Nakaya first mapped). Each crystal grows in a cloud of its own - cold at the top, with drier layers and an updraft - and is carried up or sinks at the speed its own size gives it, so where it goes is written into its shape; all six arms share that history, which is why they match. Full grown, or once it falls out of the cloud, it falls on, slowed ten times.',
+    params: () => {
+      const fl = F.fl, c = F.cond, cl = fl.cloud;
+      const km = (z) => n(z / 1000, 2) + ' km';
+      return [
+        A('Grown so far', () => phase === 'nucleate' ? 'a freezing droplet' : F.kind + ', ' + (F.columnish ? n(F.h0 * F.cell, 2) + ' mm long' : n(2 * F.cr.rmax * F.cell, 2) + ' mm across')),
+        A('These conditions grow', () => phase === 'grow' ? SnowEngine.habitName(c.T, c.sigma) : null),
+        A('Temperature', () => n(c.T, 1) + ' °C (' + n(c.T * 9 / 5 + 32) + ' °F)'),
+        A('Humidity', () => n(c.RHw * 100) + '% of water saturation; ' + n(c.sigma * 100, 1) + '% over ice; ' + n(c.excess, 2) + ' g/m³ of vapour to spare'),
+        A('Height', () => cl ? km(fl.z) + ' above the cloud base (base ' + n(cl.Tbase, 1) + ' °C, top ' + n(cl.Ttop, 1) + ' °C, ' + km(cl.top) + ' deep)' : null),
+        A('Air and fall', () => cl ? 'updraft ' + n((c.w || 0) * 100) + ' cm/s; the crystal falls ' + n(fl.vFall * 100) + ' cm/s through the air' : null),
+        A('Its trip', () => cl ? 'formed at ' + n(fl.T0, 1) + ' °C, ' + km(fl.z0) + '; highest ' + km(fl.zMax) + ', lowest ' + km(fl.zMin) : 'scripted: ' + fl.path.name),
+        A('Cloud', () => cl ? (cl.dry.length ? cl.dry.length + ' drier layer' + (cl.dry.length > 1 ? 's' : '') + ' (' + cl.dry.map((d) => n(d.rh * 100) + '% at ' + km(d.z)).join(', ') + ')' : 'no dry layers') + '; updraft up to ' + n(cl.W0 * 100) + ' cm/s' : null),
+        A('Time since it froze', () => cl ? n(fl.t / 60, 1) + ' minutes (the screen runs it in about a minute and a half)' : null),
+        A('Falling', () => phase === 'fall' ? n(Math.abs(F.fall.vel[2]) * 100, 1) + ' cm/s; ' + n(F.fallMass * 1e6, 3) + ' mg; slowed ' + SLOWMO + ' times' + (fl.why === 'fell out of the cloud' ? '; it left the cloud before full size' : '') : null),
+        A('Lattice', () => n(F.cr.steps) + ' steps on ' + n(F.cr.W.n) + ' cells (one twelfth; the rest is symmetry)'),
+        A('Frame rate', () => SNOW.fps ? n(SNOW.fps) + ' fps' : null),
+      ];
+    },
   };
 })(window);
