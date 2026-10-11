@@ -1,5 +1,5 @@
 /* ==========================================================================
-  snowflake_engine.js · v0.2 · 2026-10-11
+  snowflake_engine.js · v0.3 · 2026-10-11
 
   The physics behind snowflake.html: one snow crystal growing from water
   vapour in a cloud, and then falling.
@@ -61,6 +61,8 @@
   Pure JavaScript, no DOM: runs in a page or in jsc for tests.
 
   CHANGED
+    v0.3  rime (droplets swept up from the cloud's liquid water, frozen on as
+          beads, their mass in the fall); the cloud's base altitude
     v0.2  Cloud (a crystal's conditions from where it actually is) and Flake
           (one crystal's life, shared by the page and the tests); edge growth
           no thicker than the weather allows (rings; capped columns grow on the
@@ -520,6 +522,17 @@ function Cloud(seed) {
                                              drift: (r() - 0.5) * 0.15 });
   this.patch = 0.01 + 0.02 * r();                         // in-cloud patchiness of humidity
   this.pp = r() * 6.283;
+  /* the base's height above the ground (for the altitude readout) */
+  this.baseAGL = 400 + 1400 * r();
+  /* LIQUID WATER: the supercooled droplets the crystal can sweep up (rime).
+     Most snow falls from layered clouds holding 0.01-0.08 g/m3 of liquid,
+     some almost none (the ice has eaten it); convective clouds hold 0.08-0.38
+     and make the heavily rimed crystals and graupel. Droplets 6-12
+     micrometres in radius. (A first set, 0.03-0.8, rimed nearly every flake
+     into graupel.) */
+  const lw = r();
+  this.lwc = this.W0 > 0.7 ? 0.08 + 0.3 * lw : lw < 0.4 ? 0.002 + 0.01 * lw : 0.01 + 0.07 * lw;
+  this.rDrop = (6 + 6 * r()) * 1e-6;
 }
 Cloud.prototype.updraft = function (z, t) {
   if (z < 0 || z > this.top) return 0;
@@ -542,7 +555,13 @@ Cloud.prototype.at = function (z, t) {
     }
   }
   const sigma = sigmaIce(T, RHw);
-  return { T, RHw, sigma, excess: excessDensity(T, RHw), w: this.updraft(z, t), z };
+  /* droplets only inside the cloud, thinner where outside air has mixed in */
+  let lwc = 0;
+  if (z >= 0 && z <= this.top) {
+    lwc = this.lwc * Math.sin(Math.PI * Math.min(1, z / this.top)) ** 0.5;
+    for (const d of this.dry) lwc *= 1 - Math.exp(-Math.pow((z - (d.z + d.drift * t)) / d.half, 2));
+  }
+  return { T, RHw, sigma, excess: excessDensity(T, RHw), w: this.updraft(z, t), z, lwc, alt: this.baseAGL + z };
 };
 /* Where does ice first appear? Ice-nucleating particles become active as it
    gets colder; most crystals in clouds like these start between -10 and -25
@@ -625,6 +644,10 @@ function Flake(seed, opts) {
   this.u = 0; this.done = false; this.why = '';
   this.vFall = 0; this.history = [];
   this.T0 = this.cond.T; this.RH0 = this.cond.RHw;
+  /* RIME: droplets frozen onto the crystal, kept as beads in the full
+     lattice's coordinates (not the twelfth: rime is random, not symmetric) */
+  this.beads = []; this.rimeMass = 0; this._beadAcc = 0;
+  this.rbead = mulberry32(((seed >>> 0) || 1) ^ 0x2545f491);
 }
 Flake.prototype.progress = function () {
   return Math.min(1, Math.max(this.cr.rmax / this.rFin, this.cr.thickness(0) / this.hFin));
@@ -687,7 +710,7 @@ Flake.prototype.advance = function (n) {
 Flake.prototype.moveFor = function (dt) {
   const st = this.statsQuick();
   const cellM = this.cell * 1e-3;
-  const mass = 917 * st.vol * cellM * cellM * cellM * 0.866;
+  const mass = 917 * st.vol * cellM * cellM * cellM * 0.866 + this.rimeMass;
   /* a column falls broadside: its drag is on its long side, not its end */
   const len = this.cr.thickness(0) * cellM, wid = 2 * Math.max(1, this.cr.rmax) * cellM;
   const area = Math.max(1e-12, st.area * cellM * cellM * 0.866, this.columnish ? len * wid : 0);
@@ -700,8 +723,56 @@ Flake.prototype.moveFor = function (dt) {
     this.z += (w - this.vFall) * h; this.t += h; left -= h;
   }
   this.zMax = Math.max(this.zMax, this.z); this.zMin = Math.min(this.zMin, this.z);
+  this.rime(dt, area);
   if (!this.history.length || this.t - this.history[this.history.length - 1].t > 30)
     this.history.push({ t: this.t, z: this.z, T: this.cond.T, RHw: this.cond.RHw, u: this.u });
+};
+/* RIMING. A falling crystal sweeps up supercooled droplets in its path, and
+   each freezes where it hits. How many: collection efficiency x face area x
+   fall speed x droplets per m3 (from the liquid water content). Small
+   crystals catch almost none - the air flowing round them carries the
+   droplets aside - so the efficiency rises from zero at 0.4 mm across to 0.4
+   at 2 mm. Beads land mostly on the face that leads as it falls (the
+   underside) and nearer the edges, which meet the air first. */
+Flake.prototype.rime = function (dt, area) {
+  const c = this.cond;
+  if (!c.lwc || c.T >= 0) return;
+  const Dmm = 2 * Math.max(1, this.cr.rmax) * this.cell;
+  const E = Math.max(0, Math.min(0.4, (Dmm - 0.4) / 4.0));
+  if (E <= 0) return;
+  const rd = this.cloud.rDrop, md = 1000 * 4 / 3 * Math.PI * rd * rd * rd;    // kg per droplet
+  const perM3 = (c.lwc * 1e-3) / md;
+  const n = E * area * this.vFall * perM3 * dt;
+  this._beadAcc += n;
+  const cr = this.cr, W = cr.W, r = this.rbead;
+  while (this._beadAcc >= 1) {
+    this._beadAcc -= 1;
+    this.rimeMass += md;
+    if (this.beads.length >= 1600) continue;          // enough to show; the mass still counts
+    /* a crystal cell, picked with weight rising toward the rim */
+    let i = -1;
+    for (let tries = 0; tries < 40 && i < 0; tries++) {
+      const j = (r() * W.n) | 0;
+      if (cr.a[j] && r() < 0.25 + 0.75 * W.dist[j] / Math.max(1, cr.rmax)) i = j;
+    }
+    if (i < 0) continue;
+    /* one of its twelve images: a rotation by k x 60 degrees, maybe mirrored */
+    const k = (r() * 6) | 0, mir = r() < 0.5 ? -1 : 1;
+    const x0 = W.A[i] + W.B[i] * 0.5, y0 = W.B[i] * 0.8660254 * mir;
+    const th = k * Math.PI / 3, cs = Math.cos(th), sn = Math.sin(th);
+    this.beads.push({ i, x: x0 * cs - y0 * sn + (r() - 0.5), y: x0 * sn + y0 * cs + (r() - 0.5),
+                      side: r() < 0.8 ? -1 : 1, rad: rd * (0.9 + 0.3 * r()) });
+  }
+};
+/* the shape grown, with its rime if it has any worth naming */
+Flake.prototype.describe = function () {
+  const base = this.cr.describe();
+  const st = this.statsQuick(), cm = this.cell * 1e-3;
+  const ice = 917 * st.vol * cm * cm * cm * 0.866;
+  if (this.rimeMass > 2 * ice) return 'graupel (a ' + base + ' buried in rime)';
+  if (this.rimeMass > 0.4 * ice) return 'heavily rimed ' + base;
+  if (this.rimeMass > 0.04 * ice) return 'rimed ' + base;
+  return base;
 };
 /* area and volume, refreshed every few hundred steps (a full pass over the
    wedge is cheap but not free) */

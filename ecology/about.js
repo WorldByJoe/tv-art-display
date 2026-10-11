@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.4 · 2026-10-11
+   about.js · v2.5 · 2026-10-11
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,11 +35,11 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v2.5  Snowflakes: three settings (kind, light, cloud strip), altitude, rime, the mitten
      v2.4  Snowflakes: the crystal's own cloud (height, updraft, trip) and the shape grown so far
      v2.3  Snowflakes: the cloud's temperature and humidity, the shape they grow, the fall
      v2.2  Kite Flying: choose the kite with left/right; mph, feet and pounds
      v2.1  Kite Flying: what the flyer is doing, the wind, the kite and its line
-     v2.0  Spinning Mirrors: eight settings (servo speed and wave properties added); Scene row dropped
 */
 (function (global) {
   'use strict';
