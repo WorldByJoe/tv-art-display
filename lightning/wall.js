@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v2.6 · 2026-10-10
+   wall.js · v2.7 · 2026-10-11
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,6 +39,8 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.7  snowflake.html joins the ring as 'Snowflakes', after Kite Flying: one
+           snow crystal at a time grown from vapour, then let fall
      v2.6  kite.html joins the ring as 'Kite Flying', after Spinning Mirrors: a
            person flying a kite in a gusty field, the kite and line from physics
      v2.5  mirrors.html joins the ring as 'Spinning Mirrors', after Ripples: 160 x 90
@@ -48,8 +50,6 @@
      v2.3  a page opened by its folder (every GitHub piece: .../ripples/) is
            index.html, not the mosaic - the arrows sent published pieces to a
            ring file that is not there, and the card showed 'Mosaic Wall'
-     v2.2  a card may carry its own hint line (about.js `hint`), for a page that
-           claims keys while its card is open - Ripples' left/right pick a pool shape
 */
 (function (global) {
   'use strict';
@@ -602,6 +602,13 @@
        every three minutes; it never finishes, so it takes minutes. The only
        text is one small credit-style line of readings. */
     { file:'kite.html',          name:'Kite Flying',      kind:'time', unit:'minutes',    def:6,  loop:'time'   },
+    /* One snow crystal at a time, grown from vapour (Joe, 2026-10-11): a
+       droplet freezes, the crystal grows through a cloud path of its own
+       (temperature and humidity steer its shape), then it falls, slowed ten
+       times, and the next droplet freezes. About two minutes a flake; it never
+       finishes, so it takes minutes, and hands on between flakes. The only
+       text is one small credit-style line of readings. */
+    { file:'snowflake.html',     name:'Snowflakes',       kind:'time', unit:'minutes',    def:6,  loop:'time'   },
     /* A live Vikings or Colorado State game, when there is one (Joe,
        2026-09-27). The page decides for itself whether to stay: it holds the
        wall for as long as the game is actually being played, keeps a finished

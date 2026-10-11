@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snowflakes</title>
+<link rel="stylesheet" href="wall.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #bfe0f7; overflow: hidden; cursor: none; }
+  #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #fade { position: fixed; inset: 0; background: #cfe7fa; opacity: 1; transition: opacity 0.9s ease; pointer-events: none; }
+  /* the readings ride in the wall's credit line, as on Kite Flying */
+  #readout { transition: opacity .6s ease; color: rgba(20, 50, 80, .78); text-shadow: none; }
+  body.showabout #readout { opacity: 0; }
+</style>
+<script src="wall.js"></script>
+<script src="nav.js"></script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="readout" class="signature"></div>
+<div id="fade"></div>
+<script src="three.min.js"></script>
+<script src="snowflake_engine.js"></script>
+<script>
+'use strict';
+/* ==========================================================================
+  snowflake.html · v0.1 · 2026-10-11
+
+  One snow crystal at a time, grown from vapour on a winter day (Joe,
+  2026-10-11: "model the growth of a snowflake ... different temperatures,
+  humidities, condensation crystals ... a bright, light-blue background of a
+  winter day, with focus on a single snowflake as it grows. Once it reaches
+  a threshold size, we let it fall and tumble according to physics, and a
+  new snowflake appears").
+
+  A FLAKE'S LIFE. A supercooled cloud droplet freezes (the ice nucleus) and
+  becomes a tiny hexagonal prism. Vapour then deposits on it while it falls
+  through the cloud: the growth model is snowflake_engine.js (a hexagonal
+  lattice of vapour, edge layer and ice; Gravner & Griffeath 2008), steered
+  by the temperature and humidity around the crystal through the
+  morphology diagram. Each flake draws a path through the cloud, so the
+  conditions change as it grows and the history is written into its shape:
+  a plate that sprouts arms, arms that end in plates, a column that grows a
+  plate. When it is full size the camera lets it go: it falls under gravity
+  and the air's push on its face (the engine's Faller), slowed 25 times so
+  the rocking and turning can be seen, and the next droplet freezes.
+
+  THE CAMERA keeps the crystal growing on screen: the frozen droplet is
+  about a tenth of the screen's height at first and the finished flake
+  about four fifths. Cloud droplets drift nearby at their true size (10-20
+  micrometres) and the ones close to the crystal shrink: ice holds less
+  vapour than water at the same temperature, so near the crystal the air is
+  below water saturation and the droplets evaporate to feed it (the
+  Wegener-Bergeron-Findeisen process).
+
+  THE ICE is drawn from the crystal's own thickness map: flat faces show the
+  sky through them, slopes (ribs, ridges, the steps where conditions
+  changed) bend it, and the edges catch the light.
+
+  ALONG THE BOTTOM, in the credit line: the temperature, the humidity (with
+  respect to water, and the supersaturation over ice that drives the
+  growth), the crystal's size, and the shape those conditions grow.
+
+  URL: ?seed=S repeats flakes · ?pin stays · ?solo=N holds the wall N min ·
+       ?arch=stellar|fern|plate|column|... forces a kind · ?grow=S growth
+       seconds · ?rs=0.5 draws smaller · ?R=lattice radius
+
+  CHANGED
+    v0.1  first build
+========================================================================== */
+const CONFIG = { holdMin: 6, nextPage: '' /* standalone: nowhere to hand on to; start again */, growSec: 95, fallSec: 9 };
+const Q = new URLSearchParams(location.search);
+const PINNED = Q.has('pin');
+const SOLO_MIN = parseFloat(Q.get('solo') || '0');
+const STANDALONE = !CONFIG.nextPage;                 // the GitHub build empties nextPage
+const DPR = STANDALONE ? Math.min(2, window.devicePixelRatio || 1) : 1;
+const RS = Math.min(1, Math.max(0.3, parseFloat(Q.get('rs') || (STANDALONE ? '1' : '0.5'))));
+const SEED0 = Q.has('seed') ? parseInt(Q.get('seed'), 10) : (Date.now() % 1e9);
+const E = SnowEngine;
+const GROW_SEC = parseFloat(Q.get('grow') || CONFIG.growSec);
+/* lattice and texture: the Pi computes a smaller lattice and draws a coarser
+   map; a desktop gets more detail */
+const R_PLATE = parseInt(Q.get('R') || (STANDALONE ? '260' : '210'), 10);
+const TEX = STANDALONE ? 1024 : 512;
+const GRID = STANDALONE ? 384 : 256;
+const STEP_BUDGET_MS = STANDALONE ? 9 : 7;
+const SLOWMO = 10;                                   // the fall, slowed this many times
+
+/* --------------------------------------------------------------- three */
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: STANDALONE, powerPreference: 'high-performance', alpha: false });
+renderer.setClearColor(0xbfe0f7, 1);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, 16 / 9, 0.001, 5000);
+const SUN = new THREE.Vector3(-0.45, 0.62, 0.64).normalize();
+/* the engine works z up; the scene y up. CONV turns one into the other.
+   A column's axis is its local z; it falls with that axis level, so in the
+   fall the engine's broadside normal is the column's side (COLROT). */
+const CONV = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+const COLROT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+
+/* ------------------------------------------------------------------ sky */
+/* A bright winter sky drawn behind everything: deeper blue overhead, pale
+   toward the horizon, a glow where the sun is, a few thin high clouds.
+   BAKED ONCE into a panorama (longitude x latitude) and looked up by view
+   direction: computing the cloud noise for every pixel every frame cost the
+   Pi 33 ms a frame on its own (measured 2026-10-11). The clouds drift by
+   turning the panorama. */
+const SKY_GLSL = `
+    float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+      return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y); }
+    float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int k = 0; k < 5; k++){ s += a*vnoise(p); p *= 2.03; a *= 0.5; } return s; }
+    vec3 skyCol(vec3 d, vec3 sun){
+      float t = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
+      vec3 top = vec3(0.50, 0.75, 0.96), hor = vec3(0.86, 0.94, 0.995);
+      vec3 c = mix(hor, top, pow(t, 0.85));
+      float s = max(dot(d, sun), 0.0);
+      c += vec3(1.0, 0.97, 0.9) * (0.10 * pow(s, 8.0) + 0.35 * pow(s, 90.0));
+      return c;
+    }`;
+const SKY_W = 2048, SKY_H = 1024;
+const skyRT = new THREE.WebGLRenderTarget(SKY_W, SKY_H, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                                                          wrapS: THREE.RepeatWrapping, depthBuffer: false });
+skyRT.texture.wrapS = THREE.RepeatWrapping;
+function bakeSky() {
+  const m = new THREE.ShaderMaterial({
+    depthWrite: false, depthTest: false, uniforms: { uSun: { value: SUN } },
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+    fragmentShader: SKY_GLSL + `
+      uniform vec3 uSun; varying vec2 vUv;
+      void main(){
+        float lon = (vUv.x - 0.5) * 6.2831853, lat = (vUv.y - 0.5) * 3.1415927;
+        vec3 d = vec3(cos(lat) * cos(lon), sin(lat), cos(lat) * sin(lon));
+        vec3 c = skyCol(d, uSun);
+        /* thin high cloud, laid out by direction (not by longitude, whose
+           lines all meet overhead - that drew radial streaks at the zenith,
+           which is where this camera looks) */
+        vec2 q = d.xz / max(0.12, d.y + 0.35) * 1.6;
+        float cl = smoothstep(0.55, 0.86, fbm(q * 1.3)) * smoothstep(-0.2, 0.4, d.y);
+        c = mix(c, vec3(0.97, 0.985, 1.0), cl * 0.55);
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+  });
+  const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), m), sc = new THREE.Scene();
+  sc.add(q);
+  renderer.setRenderTarget(skyRT); renderer.render(sc, camera); renderer.setRenderTarget(null);
+  m.dispose(); q.geometry.dispose();
+}
+const skyMat = new THREE.ShaderMaterial({
+  depthWrite: false, depthTest: false,
+  uniforms: { uInvProj: { value: new THREE.Matrix4() }, uCamRot: { value: new THREE.Matrix4() },
+              uSky: { value: skyRT.texture }, uTime: { value: 0 } },
+  vertexShader: `varying vec2 vNdc; void main(){ vNdc = position.xy; gl_Position = vec4(position.xy, 0.999, 1.0); }`,
+  fragmentShader: `
+    uniform mat4 uInvProj, uCamRot; uniform sampler2D uSky; uniform float uTime; varying vec2 vNdc;
+    void main(){
+      vec4 v = uInvProj * vec4(vNdc, 1.0, 1.0); v /= v.w;
+      vec3 d = normalize((uCamRot * vec4(normalize(v.xyz), 0.0)).xyz);
+      vec2 uv = vec2(atan(d.z, d.x) / 6.2831853 + 0.5 + uTime * 0.0006, asin(clamp(d.y, -1.0, 1.0)) / 3.1415927 + 0.5);
+      gl_FragColor = vec4(texture2D(uSky, uv).rgb, 1.0);
+    }`,
+});
+const skyQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), skyMat);
+skyQuad.frustumCulled = false; skyQuad.renderOrder = -10;
+scene.add(skyQuad);
+
+/* ---------------------------------------------------- far snowflakes */
+/* Out of focus flakes falling far behind, soft discs at their own speed. */
+const BOKEH_N = 70;
+const bokehGeo = new THREE.BufferGeometry();
+const bokehPos = new Float32Array(BOKEH_N * 3), bokehSeed = new Float32Array(BOKEH_N);
+for (let i = 0; i < BOKEH_N; i++) bokehSeed[i] = Math.random();
+bokehGeo.setAttribute('position', new THREE.BufferAttribute(bokehPos, 3));
+bokehGeo.setAttribute('seed', new THREE.BufferAttribute(bokehSeed, 1));
+const bokehMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { uScale: { value: 1 }, uRef: { value: 1 } },
+  vertexShader: `attribute float seed; varying float vS; uniform float uScale, uRef;
+    void main(){ vS = seed; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = uScale * (20.0 + 60.0 * seed) * uRef / max(1e-6, -mv.z); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `varying float vS; void main(){ vec2 p = gl_PointCoord * 2.0 - 1.0; float r = length(p);
+      float a = smoothstep(1.0, 0.7, r) * (0.10 + 0.10 * vS) + 0.06 * smoothstep(1.0, 0.92, r) * smoothstep(0.8, 0.92, r);
+      gl_FragColor = vec4(vec3(1.0), a); }`,
+});
+const bokeh = new THREE.Points(bokehGeo, bokehMat);
+bokeh.frustumCulled = false; bokeh.renderOrder = -5;
+scene.add(bokeh);
+
+/* --------------------------------------------------------- the crystal */
+/* The crystal map: a TEX x TEX texture over the lattice's square, R = how
+   much of the crystal covers each texel (1 inside, a fraction on the edge so
+   the outline is smooth), G = thickness (of hScale), B = when the cell
+   joined (0 first .. 1 last), A = a rib (it joined as a growing tip). */
+const texData = new Uint8Array(TEX * TEX * 4);
+const crystalTex = new THREE.DataTexture(texData, TEX, TEX, THREE.RGBAFormat);
+crystalTex.minFilter = THREE.LinearFilter; crystalTex.magFilter = THREE.LinearFilter;
+crystalTex.generateMipmaps = false;
+const ICE_VERT = `
+  uniform sampler2D uTex; uniform float uH; uniform float uSide; uniform float uUvScale;
+  varying vec2 vUv; varying vec3 vPos;
+  void main(){
+    vUv = 0.5 + (uv - 0.5) * uUvScale;     // the sheet covers only the crystal's own square
+    vec4 s = texture2D(uTex, uv);
+    float z = uSide * 0.5 * s.g * uH;
+    vec4 wp = modelMatrix * vec4(position.xy, z, 1.0);
+    vPos = wp.xyz;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }`;
+const ICE_FRAG = `
+  uniform sampler2D uTex; uniform float uSide, uBump, uTexel, uFade, uH, uWorldTexel; uniform vec3 uSun; uniform mat3 uRot;
+  varying vec2 vUv; varying vec3 vPos;
+  vec3 skyCol(vec3 d){
+    float t = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 c = mix(vec3(0.86, 0.94, 0.995), vec3(0.50, 0.75, 0.96), pow(t, 0.85));
+    float s = max(dot(d, uSun), 0.0);
+    return c + vec3(1.0, 0.97, 0.9) * (0.10 * pow(s, 8.0) + 0.35 * pow(s, 90.0));
+  }
+  void main(){
+    vec4 s = texture2D(uTex, vUv);
+    float aa = max(fwidth(s.r), 0.02);
+    float alpha = smoothstep(0.5 - aa, 0.5 + aa, s.r);
+    if (alpha < 0.01) discard;
+    float e = uTexel;
+    vec4 sL = texture2D(uTex, vUv - vec2(e, 0.0)), sR = texture2D(uTex, vUv + vec2(e, 0.0));
+    vec4 sD = texture2D(uTex, vUv - vec2(0.0, e)), sU = texture2D(uTex, vUv + vec2(0.0, e));
+    float hL = sL.g, hR = sR.g, hD = sD.g, hU = sU.g, cL = sL.r, cR = sR.r, cD = sD.r, cU = sU.r;
+    /* slope of the surface: thickness relief, exaggerated so ribs and steps read */
+    vec2 g = vec2(hL - hR, hD - hU) * uH / (2.0 * uWorldTexel) * uBump;
+    vec3 nObj = normalize(vec3(g, 1.0));
+    nObj.z *= uSide;
+    vec3 n = normalize(uRot * nObj);
+    vec3 v = normalize(cameraPosition - vPos);
+    if (dot(n, v) < 0.0) n = -n;
+    float cosT = clamp(dot(n, v), 0.0, 1.0);
+    float F = 0.03 + 0.97 * pow(1.0 - cosT, 5.0);
+    vec3 refl = skyCol(reflect(-v, n));
+    /* light through a thin slab leaves parallel to how it came in, shifted;
+       where the faces slope (ribs, steps, edges) it is bent and the sky
+       behind shows from another direction, darker and bluer */
+    vec3 bent = normalize(-v + (n - dot(n, v) * v) * 0.9);
+    vec3 thru = skyCol(bent);
+    float slope = length(g) / (1.0 + length(g));
+    float edge = clamp(length(vec2(cL - cR, cD - cU)) * 1.4, 0.0, 1.0);
+    float thick = s.g;
+    vec3 ice = thru * mix(vec3(0.98, 1.0, 1.0), vec3(0.80, 0.90, 0.98), clamp(thick * 1.3, 0.0, 1.0));
+    ice *= 1.0 - 0.30 * slope - 0.10 * edge;
+    vec3 col = mix(ice, refl, F);
+    /* scattering from the ice's inner structure whitens it a little */
+    col = mix(col, vec3(0.97, 0.99, 1.0), 0.42 + 0.30 * thick + 0.15 * s.a);
+    /* the sun glinting off the faces */
+    vec3 h = normalize(uSun + v);
+    col += vec3(1.0, 0.98, 0.93) * (0.7 * pow(max(dot(n, h), 0.0), 220.0) + 0.18 * pow(max(dot(n, h), 0.0), 30.0));
+    col += vec3(0.95, 0.98, 1.0) * edge * 0.45;
+    gl_FragColor = vec4(col, alpha * uFade);
+  }`;
+function iceMaterial(side) {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthWrite: true, side: THREE.DoubleSide,
+    uniforms: { uTex: { value: crystalTex }, uH: { value: 0.01 }, uSide: { value: side }, uBump: { value: 6 }, uUvScale: { value: 1 },
+                uTexel: { value: 1 / TEX }, uWorldTexel: { value: 0.001 }, uFade: { value: 1 }, uSun: { value: SUN },
+                uRot: { value: new THREE.Matrix3() } },
+    vertexShader: ICE_VERT, fragmentShader: ICE_FRAG,
+    extensions: { derivatives: true },
+  });
+}
+const flake = new THREE.Group();
+scene.add(flake);
+const plateGeo = new THREE.PlaneGeometry(1, 1, GRID, GRID);
+const topMesh = new THREE.Mesh(plateGeo, iceMaterial(1)), botMesh = new THREE.Mesh(plateGeo, iceMaterial(-1));
+topMesh.frustumCulled = botMesh.frustumCulled = false;
+flake.add(topMesh); flake.add(botMesh);
+/* THE HUB: a crystal that grew as a column has sides as well as faces. A
+   hexagonal prism of the hub's radius and length gives it its walls. */
+const hubMat = new THREE.ShaderMaterial({
+  transparent: true, side: THREE.DoubleSide, depthWrite: true,
+  uniforms: { uSun: { value: SUN }, uFade: { value: 1 } },
+  vertexShader: `varying vec3 vN; varying vec3 vPos; void main(){ vN = normalize(mat3(modelMatrix) * normal);
+    vec4 wp = modelMatrix * vec4(position, 1.0); vPos = wp.xyz; gl_Position = projectionMatrix * viewMatrix * wp; }`,
+  fragmentShader: `uniform vec3 uSun; uniform float uFade; varying vec3 vN; varying vec3 vPos;
+    vec3 skyCol(vec3 d){ float t = clamp(d.y*0.5+0.5,0.0,1.0); return mix(vec3(0.86,0.94,0.995), vec3(0.50,0.75,0.96), pow(t,0.85)); }
+    void main(){ vec3 v = normalize(cameraPosition - vPos), n = normalize(vN); if (dot(n,v) < 0.0) n = -n;
+      float F = 0.03 + 0.97 * pow(1.0 - clamp(dot(n,v),0.0,1.0), 5.0);
+      vec3 col = mix(skyCol(-v) * vec3(0.85,0.93,0.99), skyCol(reflect(-v,n)), F);
+      col = mix(col, vec3(0.96,0.985,1.0), 0.35);
+      vec3 h = normalize(uSun + v); col += vec3(1.0,0.98,0.93) * 0.45 * pow(max(dot(n,h),0.0), 120.0);
+      gl_FragColor = vec4(col, 0.92 * uFade); }`,
+});
+/* thetaStart pi/2 puts a corner on the local x axis, where the crystal's are */
+const hubMesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 6, 1, true, Math.PI / 2), hubMat);
+hubMesh.rotation.x = Math.PI / 2;            // cylinder axis (y) onto the plate normal (z)
+hubMesh.rotation.y = 0;
+hubMesh.visible = false;
+flake.add(hubMesh);
+
+/* --------------------------------------------------- the frozen droplet */
+/* The droplet that freezes to start each flake, drawn as a small glassy
+   sphere that turns frosty and then gives way to the hexagonal seed. */
+const dropMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { uFrost: { value: 0 }, uFade: { value: 1 }, uSun: { value: SUN } },
+  vertexShader: `varying vec3 vN; varying vec3 vPos; void main(){ vN = normalize(mat3(modelMatrix) * normal);
+    vec4 wp = modelMatrix * vec4(position, 1.0); vPos = wp.xyz; gl_Position = projectionMatrix * viewMatrix * wp; }`,
+  fragmentShader: `uniform float uFrost, uFade; uniform vec3 uSun; varying vec3 vN; varying vec3 vPos;
+    void main(){ vec3 v = normalize(cameraPosition - vPos), n = normalize(vN);
+      float c = clamp(dot(n, v), 0.0, 1.0); float rim = pow(1.0 - c, 2.5);
+      vec3 water = vec3(0.80, 0.90, 0.98) * (0.25 + 0.75 * rim) + vec3(1.0) * pow(max(dot(reflect(-v, n), uSun), 0.0), 60.0);
+      vec3 frost = vec3(0.95, 0.98, 1.0) * (0.75 + 0.25 * c);
+      vec3 col = mix(water, frost, uFrost);
+      float a = mix(0.20 + 0.75 * rim, 0.95, uFrost);
+      gl_FragColor = vec4(col, a * uFade); }`,
+});
+const dropMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), dropMat);
+scene.add(dropMesh);
+
+/* ---------------------------------------------------- cloud droplets */
+/* Supercooled droplets around the crystal, at their real size, about 400
+   per cubic centimetre (a continental cloud). They evaporate where the
+   crystal has drawn the vapour down (the lattice's own vapour field). */
+const DROPS = 60;
+const dropGeo = new THREE.BufferGeometry();
+const dPos = new Float32Array(DROPS * 3), dRad = new Float32Array(DROPS);
+dropGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
+dropGeo.setAttribute('rad', new THREE.BufferAttribute(dRad, 1));
+const dropsMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { uPx: { value: 1000 } },
+  vertexShader: `attribute float rad; varying float vR; uniform float uPx;
+    void main(){ vR = rad; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = max(0.0, 2.0 * rad * uPx / max(1e-6, -mv.z)); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `varying float vR; void main(){ vec2 p = gl_PointCoord * 2.0 - 1.0; float r = length(p); if (r > 1.0) discard;
+      float rim = smoothstep(0.55, 1.0, r); float glint = smoothstep(0.35, 0.0, length(p - vec2(-0.35, -0.35)));
+      gl_FragColor = vec4(mix(vec3(0.82, 0.92, 1.0), vec3(1.0), glint), 0.18 + 0.55 * rim * (1.0 - smoothstep(0.92, 1.0, r)) + 0.6 * glint); }`,
+});
+const drops = new THREE.Points(dropGeo, dropsMat);
+drops.frustumCulled = false;
+scene.add(drops);
+const dropState = [];        // {x, y, z (mm), r0, r (mm), vx, vy}
+
+/* --------------------------------------------------------------- state */
+const F = {};                 // the current flake
+let sceneNo = 0, phase = 'nucleate', phaseT = 0, last = 0, fading = false;
+window.SNOW = { fps: 0 };
+let texMap = null, texMapR = -1;
+
+/* map every texel to the wedge cell it shows (built once per lattice size) */
+function buildTexMap(cr) {
+  const W = cr.W, R = cr.R, map = new Int32Array(TEX * TEX);
+  const scale = (R + 1) / (TEX / 2);             // cells per texel
+  for (let py = 0; py < TEX; py++) for (let px = 0; px < TEX; px++) {
+    const X = (px + 0.5 - TEX / 2) * scale, Y = (py + 0.5 - TEX / 2) * scale;
+    const bf = Y / (Math.sqrt(3) / 2), af = X - bf / 2;
+    let x = af, z = bf, y = -x - z;
+    let rx = Math.round(x), ry = Math.round(y), rz = Math.round(z);
+    const dx = Math.abs(rx - x), dy = Math.abs(ry - y), dz = Math.abs(rz - z);
+    if (dx > dy && dx > dz) rx = -ry - rz; else if (dy > dz) ry = -rx - rz; else rz = -rx - ry;
+    if (Math.max(Math.abs(rx), Math.abs(ry), Math.abs(rz)) > R) { map[py * TEX + px] = -1; continue; }
+    const cc = E.canon(rx, rz, ry);
+    const i = W.index.get(W.key(cc[0], cc[1]));
+    map[py * TEX + px] = i === undefined ? -1 : i;
+  }
+  return map;
+}
+
+/* copy the lattice into the crystal map */
+function updateTexture() {
+  const cr = F.cr, map = texMap;
+  let hmax = 0;
+  for (let i = 0; i < cr.W.n; i++) if (cr.a[i]) { const h = cr.thickness(i); if (h > hmax) hmax = h; }
+  F.hScale = Math.max(F.hScale || 0, hmax * 1.05, 2);
+  const inv = 255 / F.hScale, st = Math.max(1, cr.steps), beta = cr.p.beta;
+  for (let t = 0, o = 0; t < map.length; t++, o += 4) {
+    const i = map[t];
+    if (i < 0) { texData[o] = 0; texData[o + 1] = 0; texData[o + 2] = 0; texData[o + 3] = 0; continue; }
+    if (cr.a[i]) {
+      texData[o] = 255;
+      texData[o + 1] = Math.min(255, cr.thickness(i) * inv) | 0;
+      texData[o + 2] = (255 * cr.tA[i] / st) | 0;
+      texData[o + 3] = cr.tip[i] ? 255 : 0;
+    } else {
+      /* an edge cell: its boundary layer as a fraction of what it needs to
+         join, so the outline moves smoothly between steps */
+      const b = cr.inEdge[i] ? Math.min(1, cr.b[i] / beta) : 0;
+      texData[o] = (b * 115) | 0; texData[o + 1] = 0; texData[o + 2] = 0; texData[o + 3] = 0;
+    }
+  }
+  /* A THICK CRYSTAL'S FACES END SQUARE. The faces are a sheet lifted by the
+     thickness map, and just outside the crystal the map falls to zero, so a
+     thick crystal grew a sloping skirt from its face down to the middle
+     plane (a column showed it as a fin). Carrying the thickness a few texels
+     past the edge keeps the face flat to its edge; the outline still comes
+     from coverage, and the hub prism supplies the sides. */
+  if (cr.thickness(0) > 6) {
+    const G = TEX, tmp = F._dil || (F._dil = new Uint8Array(G * G));
+    for (let pass = 0; pass < 3; pass++) {
+      for (let t = 0; t < G * G; t++) tmp[t] = texData[t * 4 + 1];
+      for (let y = 1; y < G - 1; y++) for (let x = 1; x < G - 1; x++) {
+        const t = y * G + x;
+        if (texData[t * 4] >= 128) continue;
+        let m = tmp[t];
+        const a = tmp[t - 1], b = tmp[t + 1], c = tmp[t - G], d = tmp[t + G];
+        if (a > m) m = a; if (b > m) m = b; if (c > m) m = c; if (d > m) m = d;
+        texData[t * 4 + 1] = m;
+      }
+    }
+  }
+  crystalTex.needsUpdate = true;
+  /* the hub: the region much thicker than the plate around it */
+  const h0 = cr.thickness(0);
+  let hubR = 0;
+  if (h0 > 6) for (let i = 0; i < cr.W.n; i++) if (cr.a[i] && cr.thickness(i) > 0.55 * h0 && cr.W.dist[i] > hubR) hubR = cr.W.dist[i];
+  F.h0 = h0; F.hubR = hubR;
+}
+
+/* --------------------------------------------------------- a new flake */
+const ARCH_KEYS = { stellar: 'stellar dendrite', fern: 'fernlike dendrite', 'plate-dendrite': 'plate to dendrite',
+                    'dendrite-plate': 'dendrite to plate', sectored: 'sectored plate', broad: 'broad branches',
+                    plate: 'hexagonal plate', warm: 'warm plate', column: 'column', 'plate-column': 'plate on a column' };
+function newFlake() {
+  sceneNo++;
+  const seed = (SEED0 + sceneNo * 7919) >>> 0, r = E.mulberry32(seed);
+  const force = ARCH_KEYS[Q.get('arch')] || null;
+  const path = new E.Path(seed, force);
+  const c0 = path.at(0), m0 = E.morphology(c0.T, c0.sigma);
+  const columnish = m0.col > 0.5 && path.name === 'column';
+  const R = columnish ? Math.round(R_PLATE * 0.45) : R_PLATE;
+  const cr = new E.Crystal({ R, params: m0, seedRadius: 1, seed });
+  Object.keys(F).forEach((k) => delete F[k]);
+  Object.assign(F, { seed, r, path, cr, R, u: 0, spf: 4, cond: c0, m: m0, hScale: 0, h0: 1.2, hubR: 0,
+                     noise: 0.002 + 0.004 * r(), rFin: R * 0.84, hFin: R * 1.6, columnish });
+  /* real size: dendrites 3-5 mm across, sectored and broad 2-3 mm, plates
+     1.2-2 mm, warm plates under 1 mm, columns 0.4-0.8 mm long */
+  const nm = path.name;
+  const D = /dendrite|fern/.test(nm) ? 3 + 2 * r() : /sectored|broad/.test(nm) ? 2 + r() : nm === 'warm plate' ? 0.6 + 0.4 * r()
+          : nm === 'column' ? 0.4 + 0.4 * r() : nm === 'plate on a column' ? 1.6 + 0.8 * r() : 1.2 + 0.8 * r();
+  F.D = D;
+  F.cell = columnish ? (D / 2) / (F.hFin * 0.5) : (D / 2) / F.rFin;       // mm per lattice cell
+  if (texMapR !== R) { texMap = buildTexMap(cr); texMapR = R; }
+  const half = (R + 1) * F.cell;                                           // the map's half width, mm
+  for (const m of [topMesh, botMesh]) { m.material.uniforms.uWorldTexel.value = 2 * half / TEX; m.material.uniforms.uFade.value = 1; }
+  hubMat.uniforms.uFade.value = 1;
+  updateTexture();
+  /* the view: near face-on for a plate (a little tilt to show it is a slab
+     and let it glint), well off-axis for a column so its length shows */
+  F.tilt0 = 0.08 + 0.10 * r();
+  F.spin0 = r() * Math.PI * 2;
+  F.swayP = r() * 6.28;
+  flake.position.set(0, 0, 0);
+  flake.quaternion.identity();
+  /* the droplet that freezes: 10-25 micrometres across */
+  F.dropR = (0.010 + 0.0075 * r());
+  dropMesh.scale.setScalar(F.dropR); dropMesh.visible = true; dropMat.uniforms.uFrost.value = 0; dropMat.uniforms.uFade.value = 1;
+  seedDroplets();
+  phase = 'nucleate'; phaseT = 0; F.camDist = null;
+}
+
+function seedDroplets() {
+  dropState.length = 0;
+  const r = F.r, box = Math.max(3, F.D * 1.4);
+  for (let k = 0; k < DROPS; k++) {
+    const rr = 0.005 + 0.006 * r();                      // radius 5-11 micrometres
+    dropState.push({ x: (r() - 0.5) * 2 * box, y: (r() - 0.5) * 2 * box, z: (r() - 0.5) * box * 0.8, r0: rr, r: rr,
+                     vx: (r() - 0.5) * 0.002, vy: (r() - 0.5) * 0.002 });
+  }
+}
+
+/* ---------------------------------------------------------- growing */
+function growFrame(dt) {
+  const cr = F.cr;
+  /* PACING: aim to finish in about GROW_SEC; never spend more than the step
+     budget per frame. Progress is by size, so a slow-growing plate simply
+     takes the time it takes. */
+  const want = Math.min(1, phaseT / GROW_SEC);
+  /* steps per frame may fall below one (a dendrite needs only ~2,000 steps,
+     a plate ~90,000): the fraction carries over to the next frame */
+  F.spf = F.u < want ? Math.min(400, F.spf * 1.10 + 0.05) : Math.max(0.05, F.spf * 0.90);
+  F.acc = (F.acc || 0) + F.spf;
+  const t0 = performance.now();
+  let n = 0;
+  while (F.acc >= 1 && performance.now() - t0 < STEP_BUDGET_MS) {
+    F.acc -= 1;
+    if (cr.steps % 40 === 0) {
+      F.u = Math.min(1, Math.max(cr.rmax / F.rFin, cr.thickness(0) / F.hFin));
+      F.cond = F.path.at(F.u);
+      F.m = E.morphology(F.cond.T, F.cond.sigma);
+      F.m.sigmaNoise = F.noise;
+      cr.setParams(F.m);
+    }
+    cr.step(); n++;
+  }
+  if (F.acc > 2) F.acc = 2;                       // budget-limited: do not bank a backlog
+  if (n) F.stepMs = (performance.now() - t0) / n;
+  if (n && F.frame++ % 2 === 0) updateTexture();
+  if (F.u >= 1 || (phaseT > GROW_SEC * 2.4 && F.u > 0.55)) { updateTexture(); startFall(); }
+}
+
+/* the crystal's extent in mm, for framing */
+function extentMm() {
+  const r = Math.max(F.cr.rmax, 1.5) * F.cell, h = (F.h0 || 1.2) * F.cell;
+  return F.columnish ? Math.max(r, h * 0.55) : Math.max(r, h * 0.5);
+}
+
+/* ------------------------------------------------------------ falling */
+function startFall() {
+  const cr = F.cr, st = cr.stats();
+  const cellM = F.cell * 1e-3;
+  /* mass from the ice actually grown; area from the crystal's face */
+  const mass = 917 * st.vol * cellM * cellM * cellM * (Math.sqrt(3) / 2);
+  const area = st.area * cellM * cellM * (Math.sqrt(3) / 2);
+  const radius = Math.max(st.rmax, 2) * cellM;
+  F.fall = new E.Faller({ mass, radius: F.columnish ? F.h0 * cellM * 0.5 : radius,
+                          area: F.columnish ? F.h0 * cellM * 2 * radius : area, thick: 2 * cellM, seed: F.seed });
+  /* start from the attitude it was shown in */
+  const qe0 = CONV.clone().invert().multiply(flake.quaternion.clone());
+  if (F.columnish) qe0.multiply(COLROT.clone().invert());
+  F.fall.q = [qe0.x, qe0.y, qe0.z, qe0.w];
+  F.fallMass = mass; F.fallArea = area;
+  phase = 'fall'; phaseT = 0;
+  F.camAtFall = F.camDist;
+}
+function fallFrame(dt) {
+  const real = dt / SLOWMO, sub = Math.max(1, Math.ceil(real / 2e-5)), h = real / sub;
+  for (let k = 0; k < sub; k++) F.fall.step(h);
+  /* engine: z up, metres. Scene: y up, millimetres; the plate's normal is
+     its local z. */
+  const p = F.fall.pos, q = F.fall.q;
+  flake.position.set(p[0] * 1000, p[2] * 1000, -p[1] * 1000);
+  F.flakeVy = F.fall.vel[2] * 1000 / SLOWMO;        // mm per displayed second
+  /* rotate the engine's frame (z up) into the scene's (y up): x stays,
+     z -> y, y -> -z */
+  flake.quaternion.copy(CONV).multiply(new THREE.Quaternion(q[0], q[1], q[2], q[3]));
+  if (F.columnish) flake.quaternion.multiply(COLROT);
+  /* a soft fade to the next droplet */
+  if (phaseT > CONFIG.fallSec - 0.9 && !F.fadeOut) { F.fadeOut = true; if (!fading) document.getElementById('fade').style.opacity = 1; }
+  if (phaseT > CONFIG.fallSec) { newFlake(); if (!fading) document.getElementById('fade').style.opacity = 0; }
+}
+
+/* -------------------------------------------------------------- camera */
+/* A falling crystal lies flat, face down, so the camera is BELOW it looking
+   up: the classic face-on view, with the sky behind. When it lets go the
+   camera swings out to the side and backs off, and the flake drops across
+   the frame. */
+const camTarget = new THREE.Vector3();
+const FOLLOW_SEC = 6.5;                              // the camera falls with the flake this long, then stops
+function placeCamera(dt) {
+  const fov = camera.fov * Math.PI / 180;
+  let want, elev;
+  const elevGrow = F.columnish ? -0.75 : -1.30;           // radians; negative = below
+  if (phase === 'fall') {
+    /* swing out to the side and back off over the first few seconds while
+       falling WITH the flake; then stop, and let it drop out of the frame */
+    const k = Math.min(1, phaseT / 3.5), ks = k * k * (3 - 2 * k);
+    want = F.camAtFall * (1 + 1.6 * ks);
+    elev = elevGrow + (-0.62 - elevGrow) * ks;
+    if (phaseT < FOLLOW_SEC) { F.camX = flake.position.x; F.camY = flake.position.y; F.camZ = flake.position.z; F.camVy = F.flakeVy; }
+    else { F.camVy *= Math.exp(-dt * 1.4); F.camY += F.camVy * dt; }
+    camTarget.set(F.camX, F.camY, F.camZ);
+  } else {
+    /* the crystal grows on screen: about a tenth of the height at first,
+       about three quarters at the end */
+    const ext = phase === 'nucleate' ? F.dropR * 1.2 : extentMm();
+    const frac = 0.12 + 0.63 * Math.sqrt(Math.max(0, F.u));
+    want = ext / (frac * Math.tan(fov / 2));
+    elev = elevGrow;
+    camTarget.set(0, 0, 0);
+  }
+  if (F.camDist == null) F.camDist = want;
+  F.camDist += (want - F.camDist) * Math.min(1, dt * (phase === 'fall' ? 4 : 0.8));
+  camera.position.set(camTarget.x, camTarget.y + F.camDist * Math.sin(elev), camTarget.z + F.camDist * Math.cos(elev));
+  camera.up.set(0, 1, 0);
+  camera.lookAt(camTarget);
+  camera.near = F.camDist * 0.02; camera.far = F.camDist * 60;
+  camera.updateProjectionMatrix(); camera.updateMatrixWorld(true);
+}
+
+/* the flake's attitude while it grows: lying flat, turned gently */
+function growAttitude(t) {
+  const tilt = F.tilt0 + 0.05 * Math.sin(t * 0.21 + F.swayP);
+  const spin = F.spin0 + t * 0.012;
+  const qs = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), spin);
+  const qt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), tilt);
+  if (F.columnish) {
+    /* a column lies with its axis level, turning slowly about the vertical */
+    const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.6 + 0.25 * Math.sin(t * 0.05));
+    flake.quaternion.copy(qy).multiply(qs);
+  } else flake.quaternion.copy(CONV).multiply(qt).multiply(qs);
+}
+
+/* ------------------------------------------------------------ droplets */
+function updateDroplets(dt) {
+  const cr = F.cr, W = cr.W;
+  const showDrops = true;
+  if (phase === 'fall') return fallDroplets(dt);
+  let n = 0;
+  for (let k = 0; k < dropState.length; k++) {
+    const d = dropState[k];
+    d.x += d.vx * dt; d.y += d.vy * dt;
+    /* EVAPORATION where the crystal has drawn the vapour down: read the
+       lattice's vapour at the droplet's place in the plate's plane */
+    const cx = d.x / F.cell, cy = d.y / F.cell;
+    const rr = Math.hypot(cx, cy);
+    let dep = 0;
+    if (rr < cr.R) {
+      const bf = cy / (Math.sqrt(3) / 2), af = cx - bf / 2;
+      let x = Math.round(af), z = Math.round(bf), y = -x - z;
+      const cc = E.canon(x, z, y), i = W.index.get(W.key(cc[0], cc[1]));
+      if (i !== undefined) dep = cr.a[i] ? 1 : 1 - Math.min(1, cr.d[i] / Math.max(0.05, cr.p.rho));
+    } else dep = 0;
+    /* r dr/dt ~ -G * (water saturation deficit): evaporate where depleted */
+    if (phase === 'grow' && dep > 0.06) d.r = Math.sqrt(Math.max(0, d.r * d.r - 2.0e-6 * dep * dt * (GROW_SEC / 95)));
+    if (d.r < 0.0015) {           // gone: another drifts in elsewhere
+      const box = Math.max(3, F.D * 1.4), r = F.r;
+      d.x = (r() - 0.5) * 2 * box; d.y = (r() - 0.5) * 2 * box; d.r = d.r0;
+      if (Math.hypot(d.x, d.y) < F.D * 0.7) d.x += Math.sign(d.x || 1) * F.D;
+    }
+    const o = n * 3;
+    /* the droplets share the flake's plane, in the scene's frame */
+    /* the plate's plane is level: its (x, y) is the scene's (x, -z) */
+    dPos[o] = d.x; dPos[o + 1] = d.z; dPos[o + 2] = -d.y;
+    dRad[n] = showDrops ? d.r : 0;
+    n++;
+  }
+  dropGeo.attributes.position.needsUpdate = true; dropGeo.attributes.rad.needsUpdate = true;
+}
+
+/* In the fall the droplets are the still air the flake falls through: they
+   hang where they are and the falling camera passes them, so they stream
+   upward. Those left far above are put back below. */
+function fallDroplets(dt) {
+  const r = F.r, span = Math.max(3, F.D * 2.2), fy = flake.position.y, fx = flake.position.x, fz = flake.position.z;
+  if (!F.fallDropsInit) {
+    F.fallDropsInit = true;
+    for (const d of dropState) { d.fx = fx + (r() - 0.5) * span * 2; d.fy = fy + (r() - 0.5) * span * 2; d.fz = fz + (r() - 0.5) * span; d.r = d.r0; }
+  }
+  for (let k = 0; k < dropState.length; k++) {
+    const d = dropState[k];
+    if (d.fy > fy + span) { d.fy -= 2 * span; d.fx = fx + (r() - 0.5) * span * 2; d.fz = fz + (r() - 0.5) * span; }
+    dPos[k * 3] = d.fx; dPos[k * 3 + 1] = d.fy; dPos[k * 3 + 2] = d.fz; dRad[k] = d.r;
+  }
+  dropGeo.attributes.position.needsUpdate = true; dropGeo.attributes.rad.needsUpdate = true;
+}
+
+/* ------------------------------------------------------------- bokeh */
+function updateBokeh(t) {
+  const d = F.camDist || 1;
+  for (let i = 0; i < BOKEH_N; i++) {
+    const s = bokehSeed[i];
+    const depth = d * (6 + 30 * ((i * 0.618) % 1));
+    const span = depth * 0.7;
+    const fall = ((t * (0.02 + 0.03 * s) + s) % 1);
+    bokehPos[i * 3] = (((i * 0.37) % 1) - 0.5) * span * 2.4 + Math.sin(t * 0.3 + i) * span * 0.03;
+    bokehPos[i * 3 + 1] = (0.5 - fall) * span * 1.6;
+    bokehPos[i * 3 + 2] = -depth + d;
+  }
+  bokehGeo.attributes.position.needsUpdate = true;
+}
+
+/* -------------------------------------------------------------- readout */
+const n0 = (v) => Math.round(v).toString();
+const n1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
+function readout() {
+  const el = document.getElementById('readout');
+  const c = F.cond || {};
+  const Tf = c.T * 9 / 5 + 32;
+  const items = [];
+  if (phase === 'fall') {
+    const v = Math.abs(F.fall.vel[2]);
+    items.push('falling ' + n1(v * 100) + ' cm/s (' + n1(v * 2.237) + ' mph)', 'slowed ' + SLOWMO + ' times',
+               F.columnish ? n1(F.h0 * F.cell) + ' mm long, ' + n1(2 * Math.max(F.cr.rmax, 1) * F.cell) + ' mm across'
+                           : n1(2 * Math.max(F.cr.rmax, 1) * F.cell) + ' mm across', (F.fallMass * 1e6).toFixed(3) + ' mg');
+  } else if (phase === 'nucleate') {
+    items.push(n1(c.T) + ' °C (' + n0(Tf) + ' °F)', 'a supercooled droplet freezes', n0(F.dropR * 2000) + ' µm');
+  } else {
+    items.push(n1(c.T) + ' °C (' + n0(Tf) + ' °F)',
+               'humidity ' + n0(c.RHw * 100) + '% of water saturation, ' + n0(c.sigma * 100) + '% over ice',
+               n1(2 * extentMm()) + ' mm', 'growing as ' + E.habitName(c.T, c.sigma));
+  }
+  el.textContent = items.join('  ·  ');
+}
+
+/* ---------------------------------------------------------------- card */
+window.SNOWCARD = () => F;
+
+/* ---------------------------------------------------------------- loop */
+let fpsN = 0, fpsT = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  phaseT += dt;
+  if (phase === 'nucleate') {
+    /* 0-1.2 s the droplet hangs; 1.2-2.2 s it freezes (frosts over);
+       2.2-3.2 s the hexagonal seed shows through and the droplet fades */
+    dropMat.uniforms.uFrost.value = Math.min(1, Math.max(0, (phaseT - 1.2) / 1.0));
+    dropMat.uniforms.uFade.value = 1 - Math.min(1, Math.max(0, (phaseT - 2.2) / 1.0));
+    for (const m of [topMesh, botMesh]) m.material.uniforms.uFade.value = Math.min(1, Math.max(0, (phaseT - 1.8) / 1.0));
+    if (phaseT > 3.2) { phase = 'grow'; phaseT = 0; F.frame = 0; dropMesh.visible = false; }
+    growAttitude(phaseT);
+  } else if (phase === 'grow') {
+    growFrame(dt);
+    growAttitude(phaseT + 3.2);
+  } else if (phase === 'fall') {
+    fallFrame(dt);
+  }
+  /* THE SHEET COVERS ONLY THE CRYSTAL: while it is small, a sheet the size of
+     the whole lattice filled the screen and every pixel ran the ice shader
+     (56 ms a frame on the Pi). */
+  const ext = Math.min(F.R + 1, Math.max(F.cr.rmax * 1.12 + 4, 6));
+  const uvs = ext / (F.R + 1);
+  /* a thin plate is drawn as one sheet, the face toward the camera; a thick
+     crystal needs both */
+  const thin = F.h0 < Math.max(8, 0.06 * F.cr.rmax);
+  const nW = new THREE.Vector3(0, 0, 1).applyMatrix4(new THREE.Matrix4().extractRotation(flake.matrixWorld));
+  const camSide = nW.dot(camera.position.clone().sub(flake.position)) > 0 ? 1 : -1;
+  for (const m of [topMesh, botMesh]) {
+    m.scale.set(2 * ext * F.cell, 2 * ext * F.cell, 1);
+    m.material.uniforms.uUvScale.value = uvs;
+    m.material.uniforms.uH.value = F.hScale * F.cell;
+    m.material.uniforms.uRot.value.setFromMatrix4(flake.matrixWorld);
+  }
+  topMesh.visible = !thin || camSide > 0; botMesh.visible = !thin || camSide < 0;
+  /* the hub prism */
+  /* only a crystal that is thick for its size has sides worth drawing (a
+     column, a warm-weather plate, a plate on a column); a thin plate with
+     thick tips drew a stray hexagon joining them */
+  if (F.hubR > 0 && F.h0 > 6 && F.h0 > 0.12 * F.cr.rmax) {
+    hubMesh.visible = true;
+    const rad = F.hubR * F.cell, len = F.h0 * F.cell;
+    hubMesh.scale.set(rad, len, rad);
+  } else hubMesh.visible = false;
+  flake.updateMatrixWorld(true);
+  placeCamera(dt);
+  updateDroplets(dt);
+  dropsMat.uniforms.uPx.value = renderer.domElement.height / (2 * Math.tan(camera.fov * Math.PI / 360));
+  bokehMat.uniforms.uRef.value = (F.camDist || 1) * 6 * renderer.domElement.height / 1080;
+  updateBokeh(now / 1000);
+  skyMat.uniforms.uTime.value = now / 1000;
+  skyMat.uniforms.uInvProj.value.copy(camera.projectionMatrixInverse);
+  skyMat.uniforms.uCamRot.value.extractRotation(camera.matrixWorld);
+  renderer.render(scene, camera);
+  if ((fpsN++ & 15) === 0) readout();
+  if (now - fpsT > 2000) { window.SNOW.fps = Math.round(fpsN * 1000 / (now - fpsT)); fpsN = 0; fpsT = now;
+    window.SNOW.stepMs = F.stepMs; window.SNOW.spf = F.spf; window.SNOW.u = F.u; window.SNOW.steps = F.cr.steps; window.SNOW.phase = phase; }
+  requestAnimationFrame(frame);
+}
+
+/* --------------------------------------------------------- the wall */
+function holding() {
+  if (PINNED || !CONFIG.nextPage) return true;
+  const so = window.Wall && Wall.soloNow && Wall.soloNow();
+  return !!(so && so.file === 'snowflake.html');
+}
+const shownAt = Date.now();
+const shownFor = () => Date.now() - shownAt;
+const dwell = () => (window.Wall && Wall.holdMs) ? Wall.holdMs(CONFIG.holdMin) : CONFIG.holdMin * 60000;
+let handedOff = false;
+function handOff() {
+  if (handedOff) return; handedOff = true;
+  location.href = (window.Wall && Wall.nextPage) ? Wall.nextPage(CONFIG.nextPage) : CONFIG.nextPage;
+}
+/* hand on between flakes, not in the middle of one */
+setInterval(() => {
+  if (holding() || fading || handedOff) return;
+  if (shownFor() >= dwell() && phase === 'fall' && phaseT > CONFIG.fallSec - 2) {
+    fading = true; document.getElementById('fade').style.opacity = 1; setTimeout(handOff, 1700);
+  }
+}, 500);
+addEventListener('keydown', (e) => { if (e.key === 'n') newFlake(); if (e.key === 'f' && phase === 'grow') startFall(); });   // desk testing
+
+function resize() {
+  renderer.setPixelRatio(DPR * RS);
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+}
+if (SOLO_MIN > 0 && window.Wall && Wall.startSolo) Wall.startSolo('snowflake.html', SOLO_MIN);
+addEventListener('resize', resize);
+resize();
+bakeSky();
+newFlake();
+requestAnimationFrame((t) => { last = t; document.getElementById('fade').style.opacity = 0; requestAnimationFrame(frame); });
+</script>
+</body>
+</html>
