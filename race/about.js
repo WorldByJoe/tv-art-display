@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.5 · 2026-10-11
+   about.js · v2.6 · 2026-10-13
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,11 +35,11 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v2.6  The Race: one lap laid round the map, two-track share, distance in place of laps
      v2.5  Snowflakes: three settings (kind, light, cloud strip), altitude, rime, the mitten
      v2.4  Snowflakes: the crystal's own cloud (height, updraft, trip) and the shape grown so far
      v2.3  Snowflakes: the cloud's temperature and humidity, the shape they grow, the fall
      v2.2  Kite Flying: choose the kite with left/right; mph, feet and pounds
-     v2.1  Kite Flying: what the flyer is doing, the wind, the kite and its line
 */
 (function (global) {
   'use strict';
@@ -74,7 +74,7 @@
 
   /* ===== race.html ===== */
   ABOUT['index.html'] = {
-    what: 'A mountain-bike race on a landscape the wall makes first: folded rock beds rained on and eroded for 300,000 model years, then frozen. A route-finder cuts a 2-5 mile loop under a grade limit with cliffs off limits, so the switchbacks are found, not drawn. Eight riders with randomly drawn power, skill, nerve, stamina and heat tolerance race two laps at four times real speed; physics sets every corner limit and crash.',
+    what: 'A mountain-bike race on a landscape the wall makes first: folded rock beds rained on and eroded for 300,000 model years, then frozen. A route-finder lays one 4-7 mile lap round the map under a grade limit, benching singletrack into the hillsides with switchbacks where it must, with two-track on the gentle ground, and only cliffs off limits. Eight riders with randomly drawn power, skill, nerve, stamina and heat tolerance race it at four times real speed, passing only on the two-track; physics sets every corner limit and crash.',
     params: () => [
       A('Seed', () => String(seed)),
       A('Stage', () => act === 1 ? (frozen ? 'Land frozen, setting the scale' : 'Land eroding')
@@ -82,9 +82,9 @@
       A('Land', () => (w.nx * CONFIG.raceCell / 1000).toFixed(1) + ' × ' + (w.ny * CONFIG.raceCell / 1000).toFixed(1)
                       + ' km, ' + Math.round(w.step * w.P.dt / 1000) + ' thousand years of erosion'),
       A('Rock worn away', () => pct(w.removed, 0)),
-      A('Course', () => plan ? ({ easy: 'Easy', medium: 'Middling', hard: 'Hard' }[plan.tier] || 'Course') + ', '
-                      + (plan.length / 1000).toFixed(1) + ' km × ' + lapsFor() + ' laps' : null),
-      A('Climb per lap', () => plan ? Math.round(plan.climb) + ' m, ' + plan.switchbacks + ' switchbacks' : null),
+      A('Course', () => plan ? ({ easy: 'Easy', medium: 'Middling', hard: 'Hard' }[plan.tier] || 'Course') + ', one lap of '
+                      + (plan.length / 1000).toFixed(1) + ' km, ' + Math.round(100 * (plan.twoTrack ? plan.twoTrack.frac : 0)) + '% two-track' : null),
+      A('Climbing', () => plan ? Math.round(plan.climb) + ' m, ' + plan.switchbacks + ' switchbacks' : null),
       A('Grades', () => plan && plan.grade ? 'average ' + (100 * plan.grade.mean).toFixed(1) + '%, steepest '
                       + Math.round(100 * plan.grade.max) + '%' : null),
       A('Race day', () => day ? Math.round(day.tempC) + ' °C, ' + Math.round(100 * day.rh) + '% humidity, sun '
@@ -95,8 +95,8 @@
         const fin = race.riders.filter(r => r.finish).sort((a, b) => a.finish - b.finish);
         if (fin.length) return '#' + fin[0].num + ' ' + fin[0].name + ' won in ' + clockStr(fin[0].finish) + out;
         const ld = race.riders.find(r => r.pos === 1);
-        return ld ? '#' + ld.num + ' ' + ld.name + ' leads, lap ' + Math.min(race.laps, ld.lap + 1) + ' of '
-                    + race.laps + ', ' + clockStr(race.t) + ' in' + out : null;
+        return ld ? '#' + ld.num + ' ' + ld.name + ' leads at ' + (Math.max(0, ld.lap * trail.L + ld.s) / 1000).toFixed(1) + ' of '
+                    + (trail.L * race.laps / 1000).toFixed(1) + ' km, ' + clockStr(race.t) + ' in' + out : null;
       }),
       A('Show this turn', () => (Wall.runCount('race.html') + 1) + ' of ' + Wall.repeats(1)),
     ],

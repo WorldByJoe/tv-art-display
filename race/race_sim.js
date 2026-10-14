@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_sim.js · v1.0 · 2026-09-13
+   race_sim.js · v2.0 · 2026-10-13
    the riders and the race, on a course cut by race_planner.js
    into a frozen Strata world. Joe, 2026-09-07:
      "n riders ... randomly drawn skill and strength for hill climbing ... a
@@ -13,9 +13,12 @@
 
    THE TRAIL. The planner's path, smoothed, sampled every 2 m: elevation,
    grade, curvature, the BED underfoot (grip and roughness by rock type -
-   sandstone is slickrock, shale is loose), EXPOSURE (a cliff drops away
-   within two cells) and WIDTH (the two-track, and gentle straight slickrock,
-   where passing is possible).
+   sandstone is slickrock, shale is loose), EXPOSURE (a cliff at least 5 m
+   high drops away within two cells) and WIDTH: the planner marks which
+   stretches are two-track, and only there can one rider pass another
+   (Joe, 2026-10-13). The tread's elevation is the ground's averaged over
+   20 m, because a benched trail is cut and filled: it rides smoother than
+   the hillside it is cut into.
 
    A RIDER each tick (dt 0.1 s):
      power      sustainable W/kg x mass, scaled by energy left; the sprint
@@ -23,7 +26,8 @@
                 store, easy riding refills it slowly
      forces     gravity on the grade, rolling drag by bed, air drag; traction
                 caps drive on the climbs
-     the limit  the true cornering/technical speed limit over the next 12 m
+     the limit  the true cornering/technical speed limit over the next 50 m,
+                each corner discounted by the braking distance to it
                 (grip, curvature, roughness); the rider PERCEIVES it with an
                 error that shrinks with perception and grows with fatigue,
                 then rides at a fraction of what they perceive set by
@@ -59,6 +63,12 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.0  two-track from the planner is the only place to pass; tread
+           smoothed over 20 m (cut and fill); exposure means a real cliff
+           (5 m at race scale, not 2); riders carry a random three-digit
+           plate number; four names added to the pool (Joe, 2026-10-13);
+           riders look 50 m ahead and brake for what they see; a climb the
+           legs cannot ride at balance speed is walked
      v1.0  versioning starts here; this file predates the scheme
 */
 function RaceSimFactory(global){
@@ -87,34 +97,41 @@ const BED={ sandstone:{mu:0.90,crr:0.008,rough:0.15,walk:0.38}, limestone:{mu:0.
    Hike-a-bike on loose rock really begins around a fifth, so every limit moved
    up by about six points and the ORDER - which is the part that matters - is
    unchanged. */
-const NAMES=['Ruiz','Okafor','Lindqvist','Tanaka','Moreau','Adeyemi','Novak','Castellano','Byrne','Haddad','Kowalski','Ferreira','Iversen','Mbeki','Salazar','Petrova'];
+const NAMES=['Ruiz','Okafor','Lindqvist','Tanaka','Moreau','Adeyemi','Novak','Castellano','Byrne','Haddad','Kowalski','Ferreira','Iversen','Mbeki','Salazar','Petrova',
+             'Cooley','von Fischer','Domanski','Farley'];      // the last four at Joe's ask, 2026-10-13
 const INKS=['#e34948','#2a78d6','#f2d43d','#ffffff','#eb6834','#33c2c2','#a463f2','#5ad45a'];
 
 /* ---- the trail ---------------------------------------------------------- */
 function buildTrail(plan, w, cell, ds){
   ds=ds||2;
   const nx=w.nx, scale=cell/w.dx;
-  let pts=plan.path.map(c=>{ const x=c%nx; return [x+0.5,(c-x)/nx+0.5]; });
-  for(let k=0;k<2;k++){ const q=[pts[0]]; for(let i=0;i<pts.length-1;i++){ const a=pts[i], b=pts[i+1]; q.push([0.75*a[0]+0.25*b[0],0.75*a[1]+0.25*b[1]]); q.push([0.25*a[0]+0.75*b[0],0.25*a[1]+0.75*b[1]]); } q.push(pts[pts.length-1]); pts=q; }
+  /* each point carries whether it is two-track ([2]) through the smoothing */
+  const tt=plan.twoTrack?plan.twoTrack.mask:null;
+  let pts=plan.path.map((c,i)=>{ const x=c%nx; return [x+0.5,(c-x)/nx+0.5,tt?tt[i]:(i<20?1:0)]; });
+  for(let k=0;k<2;k++){ const q=[pts[0]]; for(let i=0;i<pts.length-1;i++){ const a=pts[i], b=pts[i+1]; q.push([0.75*a[0]+0.25*b[0],0.75*a[1]+0.25*b[1],a[2]]); q.push([0.25*a[0]+0.75*b[0],0.25*a[1]+0.75*b[1],b[2]&&a[2]]); } q.push(pts[pts.length-1]); pts=q; }
   const zAt=(x,y)=>{ const xi=Math.max(0,Math.min(nx-2,x|0)), yi=Math.max(0,Math.min(w.ny-2,y|0)), fx=x-xi, fy=y-yi, c=yi*nx+xi;
     return ((w.z[c]*(1-fx)+w.z[c+1]*fx)*(1-fy)+(w.z[c+nx]*(1-fx)+w.z[c+nx+1]*fx)*fy); };
   /* cumulative length in race metres, then resample every ds */
   const cum=[0]; for(let i=1;i<pts.length;i++) cum.push(cum[i-1]+Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1])*cell);
   const L=cum[cum.length-1], n=Math.floor(L/ds), S=[]; let j=0;
   for(let i=0;i<n;i++){ const d=i*ds; while(j<cum.length-2 && cum[j+1]<d) j++; const f=(d-cum[j])/Math.max(1e-6,cum[j+1]-cum[j]);
-    const x=pts[j][0]+(pts[j+1][0]-pts[j][0])*f, y=pts[j][1]+(pts[j+1][1]-pts[j][1])*f; S.push({x,y,zE:zAt(x,y)}); }
+    const x=pts[j][0]+(pts[j+1][0]-pts[j][0])*f, y=pts[j][1]+(pts[j+1][1]-pts[j][1])*f; S.push({x,y,zE:zAt(x,y),two:!!(f<0.5?pts[j][2]:pts[j+1][2])}); }
+  /* the tread: the ground averaged over 20 m (benched, cut and filled) */
+  for(let i=0;i<n;i++){ let a=0; for(let k=-5;k<=5;k++) a+=S[(i+k+n)%n].zE; S[i].zT=a/11; }
   const slope=plan.slope;
   for(let i=0;i<n;i++){
     const s=S[i], p=S[(i-3+n)%n], q=S[(i+3)%n];
-    s.z=s.zE*scale;
-    s.grade=((q.zE-p.zE)*scale)/(6*ds);
+    s.z=s.zT*scale;
+    s.grade=((q.zT-p.zT)*scale)/(6*ds);
     const h1=Math.atan2(s.y-p.y,s.x-p.x), h2=Math.atan2(q.y-s.y,q.x-s.x); let dh=h2-h1; while(dh>Math.PI) dh-=2*Math.PI; while(dh<-Math.PI) dh+=2*Math.PI;
     s.curv=Math.abs(dh)/(6*ds); s.heading=h2;
     const cx=s.x|0, cy=s.y|0, c=cy*nx+cx, k=Strata.layerAt(w,c,s.zE);
     s.bed=k<0?'basement':w.layers[k].type; const b=BED[s.bed]; s.mu=b.mu; s.crr=b.crr; s.rough=b.rough; s.walk=b.walk; s.color=k<0?[92,86,88]:w.layers[k].color;
-    let exposed=false; for(let dy=-3;dy<=3&&!exposed;dy++) for(let dx=-3;dx<=3;dx++){ const xx=cx+dx, yy=cy+dy; if(xx<0||yy<0||xx>=nx||yy>=w.ny) continue; const cc=yy*nx+xx; if(slope[cc]>0.7 && slope[cc]<5 && w.z[cc]<s.zE-10){ exposed=true; break; } }
+    /* exposed: a cliff (steeper than any trail may cut) within two cells, and
+       at least 5 m lower than the tread - a fall worth the name */
+    let exposed=false; for(let dy=-2;dy<=2&&!exposed;dy++) for(let dx=-2;dx<=2;dx++){ const xx=cx+dx, yy=cy+dy; if(xx<0||yy<0||xx>=nx||yy>=w.ny) continue; const cc=yy*nx+xx; if(slope[cc]>0.95 && slope[cc]<5 && (s.zE-w.z[cc])*scale>5){ exposed=true; break; } }
     s.exposed=exposed;
-    s.wide=(i*ds<220) || (Math.abs(s.grade)<0.05 && s.curv<0.02 && s.rough<0.3);
+    s.wide=s.two;                                        // passing only on the two-track
   }
   /* the true speed limit of each stretch: cornering on the grip, less on rough ground */
   for(let i=0;i<n;i++){ const s=S[i]; const vc=Math.sqrt(s.mu*G/Math.max(s.curv,0.004)); s.vlim=Math.min(21,vc*(1-0.45*s.rough)*(s.grade<-0.08?0.85:1)); }
@@ -127,7 +144,8 @@ function makeRiders(seed,count){
   for(let i=0;i<count;i++){
     let name; do{ name=NAMES[Math.floor(R()*NAMES.length)]; }while(used.has(name)); used.add(name);
     const kg=r(56,92), bike=12, mass=kg+bike, wkg=r(2.8,4.8), sprint=r(650,1250), perception=r(0.25,1), execution=r(0.25,1), nerve=r(0.3,1), stamina=r(45,110), heat=r(0.2,1);
-    riders.push({i,num:i+1,name,color:INKS[i%INKS.length],kg,bike,mass,wkg,sprint,perception,execution,nerve,stamina,heat,
+    let num; do{ num=100+Math.floor(R()*900); }while(riders.some(o=>o.num===num));   // a random three-digit plate
+    riders.push({i,num,name,color:INKS[i%INKS.length],kg,bike,mass,wkg,sprint,perception,execution,nerve,stamina,heat,
       s:0,v:0,lap:0,E:stamina*1000,E0:stamina*1000,status:'ready',down:0,crashes:0,finish:null,gapAhead:0,pos:i+1,lastSeg:-1,note:'',
       core:37.0,peakCore:37.0,sweat:0,water:0,drank:0,work:0,climbed:0,heatStops:0});
   }
@@ -168,6 +186,7 @@ function makeRace(trail,riders,laps,seed,day){
   riders.forEach((rd,i)=>{ rd.s=-(i*2.2); rd.v=0; rd.lap=0; rd.status='riding'; rd.sprintLeft=25; rd.powerMul=1; rd.errMul=1; rd.core=37; rd.peakCore=37; rd.water=0; rd.drank=0; rd.work=0; rd.climbed=0; rd.heatStops=0; });
   return {trail,riders,laps,t:0,R,day,events:[],finished:0,out:0,done:false};
 }
+function segAt(trail,rd){ return trail.S[((Math.floor(rd.s/trail.ds)%trail.n)+trail.n)%trail.n]; }
 function hash01(a,b){ let h=(a*374761393+b*668265263)|0; h=(h^(h>>>13))*1274126177|0; return ((h^(h>>>16))>>>0)/4294967296; }
 function step(race,dt){
   const {trail,riders}=race, S=trail.S, n=trail.n, L=trail.L;
@@ -179,7 +198,12 @@ function step(race,dt){
     const idx=((Math.floor(rd.s/trail.ds)%n)+n)%n, seg=S[idx];
     const fat=1-rd.E/rd.E0;                                              // 0 fresh .. 1 empty
     /* the limit over the next 12 m, as the rider perceives it */
-    let vlim=Infinity; for(let j=0;j<6;j++) vlim=Math.min(vlim,S[(idx+j)%n].vlim);
+    /* ...and far enough ahead to stop for it: a corner 40 m away limits the speed
+       now to what can still be braked off before it (v^2 = vl^2 + 2 b d, the
+       brakes worth 60% of the grip, less on a descent). Looking only 12 m ahead,
+       a rider at 20 m/s met every hairpin too fast to stop for, and on the
+       steeper 2026-10-13 courses that was nine crashes in ten. */
+    let vlim=Infinity; for(let j=0;j<25;j++){ const sj=S[(idx+j)%n], b=Math.max(1.5,sj.mu*G*0.6+G*sj.grade), vj=Math.sqrt(sj.vlim*sj.vlim+2*b*j*trail.ds); if(vj<vlim) vlim=vj; }
     const err=(hash01(idx>>2,rd.i)-0.5)*2*(1-rd.perception)*(0.25+0.6*fat)*(rd.errMul||1);
     const perceived=vlim*(1+0.4*err);
     const vt=perceived*(0.55+0.35*rd.execution)*(0.85+0.25*rd.nerve);
@@ -197,8 +221,16 @@ function step(race,dt){
        awkwardly, so it is charged at a 15% premium and the awkwardness is why
        nobody chooses it. No crash test while walking - a rider on foot with a
        bike beside them is the one place on the course that is safe. */
-    if(seg.walk != null && seg.grade > seg.walk){
-      const vw=Math.max(0.55, Math.min(1.65, (0.95+0.5*(rd.wkg-2.8)/2.0)*(0.75+0.25*(rd.E/rd.E0))));
+    /* ...and past what the LEGS can ride. Below about 1.5 m/s a bike will not
+       stay upright on a climb, so a rider whose climbing watts cannot hold that
+       speed against gravity and rolling gets off and walks too, at walking pace
+       - which up a 20% pitch is faster than the 1.4 km/h floor the sim used to
+       let them crawl at (measured on the 2026-10-13 hard courses). */
+    const legsOut = seg.grade>0.08 && rd.sprintLeft<=0 && Psus*1.25/1.5 < m*G*(sinT+seg.crr*cosT);   // the same 1.5 m/s the drive force is reckoned at
+    if((seg.walk != null && seg.grade > seg.walk) || legsOut){
+      let vw=Math.max(0.55, Math.min(1.65, (0.95+0.5*(rd.wkg-2.8)/2.0)*(0.75+0.25*(rd.E/rd.E0))));
+      /* single file on foot too: nobody shoulders past on a singletrack pitch */
+      if(k>0){ const ah=order[k-1], gap=(ah.lap*L+ah.s)-(rd.lap*L+rd.s); if(gap>=0 && gap<3 && !(seg.wide && segAt(trail,ah).wide)) vw=Math.min(vw,Math.max(0.3,ah.v)); }
       a=(vw-rd.v)/Math.max(dt,1e-3);
       P=m*G*sinT*vw*1.15;
       mode='pushing'; rd.pushed=(rd.pushed||0)+vw*dt;
@@ -216,11 +248,15 @@ function step(race,dt){
     else { const Fdrive=Math.min(P/Math.max(rd.v,1.5), seg.mu*m*G*cosT*0.8); a=(Fdrive-Fres)/m;
       mode=rd.sprintLeft>0?'sprinting':seg.grade>0.03?'climbing':seg.grade<-0.03?'descending':'pedalling'; }
     /* traffic: on narrow trail you sit behind the rider ahead */
-    if(k>0){ const ah=order[k-1]; const gap=(ah.lap*L+ah.s)-(rd.lap*L+rd.s); rd.gapAhead=gap;
-      if(ah.status==='riding' && gap<4 && gap>=0 && !seg.wide && rd.v>ah.v){ a=Math.min(a,(ah.v-rd.v)/dt); rd.note='held up'; mode='held up'; } else if(ah.status==='down' && gap<3 && gap>=0 && !seg.wide){ a=Math.min(a,(0.8-rd.v)/dt); mode='held up'; } else rd.note=''; }
+    /* a pass needs BOTH riders on the two-track: the one behind cannot come
+       past while the one ahead is already into the singletrack */
+    if(k>0){ const ah=order[k-1]; const gap=(ah.lap*L+ah.s)-(rd.lap*L+rd.s); rd.gapAhead=gap; const wide=seg.wide && segAt(trail,ah).wide;
+      if(ah.status==='riding' && gap<4 && gap>=0 && !wide && rd.v>ah.v){ a=Math.min(a,(ah.v-rd.v)/dt); rd.note='held up'; mode='held up'; } else if(ah.status==='down' && gap<3 && gap>=0 && !wide){ a=Math.min(a,(0.8-rd.v)/dt); mode='held up'; } else rd.note=''; }
     /* what the board and the physics strip show */
     rd.mode=mode; rd.P=P; rd.vlim=vlim; rd.perceived=perceived; rd.vt=vt; rd.seg=seg; rd.fat=fat;
     rd.v=Math.max(0.4,rd.v+a*dt); rd.s+=rd.v*dt;
+    /* and never through the rider ahead on singletrack, whatever the step did */
+    if(k>0){ const ah=order[k-1]; if(ah.status!=='down' && !(seg.wide && segAt(trail,ah).wide)){ const lim=(ah.lap*L+ah.s)-1.5-rd.lap*L; if(rd.s>lim && (ah.lap*L+ah.s)>=(rd.lap*L+rd.s-rd.v*dt)){ rd.s=Math.max(lim,rd.s-rd.v*dt); rd.v=Math.min(rd.v,Math.max(0.4,ah.v)); mode='held up'; rd.mode=mode; } } }
     rd.work+=P*dt; if(seg.grade>0) rd.climbed+=seg.grade*rd.v*dt;
     physiology(rd,P,dt,race.day);
     if(rd.core>40){ rd.status='down'; rd.cooling=true; rd.down=30; rd.v=0; rd.core-=0.5; rd.heatStops++; race.events.push({t:race.t,kind:'heat',rider:rd,seg}); continue; }
@@ -290,7 +326,7 @@ function crash(race,rd,seg,over,vAt){
   const e=0.5*v*v*absorb + G*drop;                      // joules per kilogram
   rd.v=0; rd.lastCrashE=e;
   if(e>110){ rd.status='out'; race.out++;
-    race.events.push({t:race.t,kind:'out',rider:rd,seg,over,e}); return; }
+    race.events.push({t:race.t,kind:'out',rider:rd,seg,over,e,v}); return; }
   rd.status='down';
   if(e<10){ rd.down=1.5+race.R()*2.5; rd.E=Math.max(0,rd.E-800); }
   else if(e<40){ rd.down=6+race.R()*9; rd.E=Math.max(0,rd.E-3200); }
@@ -300,7 +336,7 @@ function crash(race,rd,seg,over,vAt){
     rd.powerMul=(rd.powerMul||1)*0.90;
     rd.hurt=(rd.hurt||0)+1;
   }
-  race.events.push({t:race.t,kind:'crash',rider:rd,seg,over,e});
+  race.events.push({t:race.t,kind:'crash',rider:rd,seg,over,e,down:rd.down,v});
 }
 /* where a rider is, in erosion-grid cells, for drawing */
 function place(trail,rd){ const n=trail.n; const f=rd.s/trail.ds, i=((Math.floor(f)%n)+n)%n, j=(i+1)%n, t=f-Math.floor(f); const a=trail.S[i], b=trail.S[j];

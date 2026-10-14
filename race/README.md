@@ -1,6 +1,6 @@
 # The Race
 
-A mountain-bike race on a landscape that did not exist a minute ago. First the land: folded sedimentary beds rained on for three hundred thousand years, then frozen. Then the course: the engine sets the scale, finds a straight two-track for the start, and searches for a loop with the grade capped at 12 % and cliffs off limits, so the switchbacks fall out of the rules. Then eight riders with their traits, and two laps at four times real time: an overview of the whole course, a chase window on the moment that matters, and a board of what each rider is doing on which rock.
+A mountain-bike race on a landscape that did not exist a minute ago. First the land: folded sedimentary beds rained on for three hundred thousand years, then frozen. Then the course: one lap of 4-7 miles laid round the map through alternately high and low ground, the singletrack benched into the hillsides with switchbacks where the grade cap demands them, two-track on the gentle ground, and only cliffs off limits. Then eight riders with their traits, and the race at four times real time: an overview of the whole course with a chart of every rider's place against distance, a 3D chase window on the moment that matters, and a board of what each rider is doing on which rock.
 
 ## Running it
 
@@ -13,7 +13,8 @@ a pointer. A standalone copy starts itself again when a run ends; add
 
 ## What it is doing
 
-- Every rider is a physics model: watts against gravity, rolling drag by rock type and air; a true cornering limit from grip and curvature, perceived with an error that shrinks with skill and grows with fatigue; a slide when a bend is entered too fast - down for a few seconds on open ground, out over an edge. Narrow trail holds a faster rider behind a slower one until a wide stretch. Each rider is also a heat balance: metabolic heat, the sun, convection, sweat capped by what humid air will take, a core temperature that throttles power past a threshold heat tolerance raises.
+- Every rider is a physics model: watts against gravity, rolling drag by rock type and air; a true cornering limit from grip and curvature, perceived with an error that shrinks with skill and grows with fatigue; a slide when a bend is entered too fast - down for a few seconds on open ground, out over an edge. Singletrack holds a faster rider behind a slower one; passing happens only on the two-track. Each rider is also a heat balance: metabolic heat, the sun, convection, sweat capped by what humid air will take, a core temperature that throttles power past a threshold heat tolerance raises.
+- The chase window is WebGL: the frozen surface as a lit mesh coloured by the rock bed at every height, terrain shadows from the day's sun, the trail cut into the hillside as real geometry (tread level across, cut bank above, fill below), juniper and sage, and each rider pedalling a bike in their colour.
 - The results cards rank the field with calories burned, litres sweated, feet climbed and peak core temperature. Press n for a new land, i for the seed and the model settings.
 
 ---
