@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_sim.js · v2.0 · 2026-10-13
+   race_sim.js · v2.1 · 2026-10-14
    the riders and the race, on a course cut by race_planner.js
    into a frozen Strata world. Joe, 2026-09-07:
      "n riders ... randomly drawn skill and strength for hill climbing ... a
@@ -63,6 +63,12 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.1  descending skill and heat made to matter (Joe, 2026-10-14): a technical
+           limit on every descent set by skill (walk it if it cannot be ridden),
+           crashes past it; acclimatised riders sweat sooner, hold power to a
+           higher core, and do not pay the hot-day cardiovascular strain; a bad
+           crash's lasting cost now actually lasts; climbing power drawn from
+           one category's spread, 3.4-4.4 W/kg (was 2.8-4.8)
      v2.0  two-track from the planner is the only place to pass; tread
            smoothed over 20 m (cut and fill); exposure means a real cliff
            (5 m at race scale, not 2); riders carry a random three-digit
@@ -143,7 +149,10 @@ function makeRiders(seed,count){
   const R=rng32(seed), r=(a,b)=>a+(b-a)*R(); const used=new Set(), riders=[];
   for(let i=0;i<count;i++){
     let name; do{ name=NAMES[Math.floor(R()*NAMES.length)]; }while(used.has(name)); used.add(name);
-    const kg=r(56,92), bike=12, mass=kg+bike, wkg=r(2.8,4.8), sprint=r(650,1250), perception=r(0.25,1), execution=r(0.25,1), nerve=r(0.3,1), stamina=r(45,110), heat=r(0.2,1);
+    /* climbing power 3.4-4.4 W/kg, the spread of one race category (real races are
+       run in categories). 2.8-4.8 was a 70% spread: measured over 128 races, it alone
+       explained 63% of finishing times and drowned skill and heat (Joe, 2026-10-14) */
+    const kg=r(56,92), bike=12, mass=kg+bike, wkg=r(3.4,4.4), sprint=r(650,1250), perception=r(0.25,1), execution=r(0.25,1), nerve=r(0.3,1), stamina=r(45,110), heat=r(0.2,1);
     let num; do{ num=100+Math.floor(R()*900); }while(riders.some(o=>o.num===num));   // a random three-digit plate
     riders.push({i,num,name,color:INKS[i%INKS.length],kg,bike,mass,wkg,sprint,perception,execution,nerve,stamina,heat,
       s:0,v:0,lap:0,E:stamina*1000,E0:stamina*1000,status:'ready',down:0,crashes:0,finish:null,gapAhead:0,pos:i+1,lastSeg:-1,note:'',
@@ -168,23 +177,48 @@ function physiology(rd,P,dt,day){
   const vair=Math.max(0.5,rd.v+day.wind), h=8.3*Math.pow(vair,0.6), A=1.8, Tsk=34;
   const conv=h*A*(Tsk-day.tempC);                                // W lost (negative: gained)
   const Pa=day.rh*psat(day.tempC), Emax=Math.max(0,16.5*h*A*(5.3-Pa));   // W the air will evaporate
+  /* HEAT TOLERANCE (made to matter, Joe 2026-10-14). Acclimatised riders start
+     sweating sooner and sweat more for each degree of core (gain 0.5-1.3 L/h per
+     degree C, up to 1.2-2.0 L/h), so their cores sit lower on the same day. */
   const srMax=1.2+0.8*rd.heat;                                   // L/h, higher with tolerance
-  const sr=Math.min(srMax,0.25+0.9*Math.max(0,rd.core-37.0));    // L/h sweated
+  const sr=Math.min(srMax,0.25+(0.5+0.8*rd.heat)*Math.max(0,rd.core-37.0));   // L/h sweated
   const evap=Math.min(sr*675,Emax);                              // W removed by evaporation
   const store=heatIn+solar-conv-evap;                            // W into the core
   rd.core+=store*dt/(rd.kg*3490); rd.sweat=sr; rd.water+=sr*dt/3600; rd.drank+=0.4*dt/3600;
   if(rd.core>rd.peakCore) rd.peakCore=rd.core;
-  /* the price of heat and thirst */
-  const thr=38.3+0.9*rd.heat, over=Math.max(0,rd.core-thr);
+  /* the price of heat and thirst. Power falls 22% per degree of core above a
+     threshold that tolerance raises from 38.0 to 39.2 C; and on a hot day the
+     skin's share of the heart's output is taken from the legs - cardiovascular
+     strain, 1.2% of power per degree of air above 20 C for the least tolerant,
+     nothing for the fully acclimatised (time trials in 35-40 C run 10-20% slower
+     for unacclimatised riders, and acclimatisation wins most of that back).
+     A bad crash's lasting cost (hurtP, hurtE) rides on top: it used to be
+     written into powerMul and errMul and wiped out by the next tick of this. */
+  const thr=38.0+1.2*rd.heat, over=Math.max(0,rd.core-thr);
   const dehyd=Math.max(0,(rd.water-rd.drank)/rd.kg-0.02);
-  rd.powerMul=Math.max(0.3,(1-0.22*over)*(1-3*dehyd));
-  rd.errMul=1+0.6*over+10*dehyd;
+  const strain=1-0.012*(1-rd.heat)*Math.max(0,day.tempC-20);
+  rd.powerMul=Math.max(0.3,(1-0.22*over)*(1-3*dehyd)*strain*(rd.hurtP||1));
+  rd.errMul=(1+0.6*over+10*dehyd)*(rd.hurtE||1);
 }
 function makeRace(trail,riders,laps,seed,day){
   const R=rng32(seed^0x9e3779b9); day=day||makeDay(seed);
   /* the two-track start: staggered on the line, sprint clocks armed */
   riders.forEach((rd,i)=>{ rd.s=-(i*2.2); rd.v=0; rd.lap=0; rd.status='riding'; rd.sprintLeft=25; rd.powerMul=1; rd.errMul=1; rd.core=37; rd.peakCore=37; rd.water=0; rd.drank=0; rd.work=0; rd.climbed=0; rd.heatStops=0; });
   return {trail,riders,laps,t:0,R,day,events:[],finished:0,out:0,done:false};
+}
+/* THE TECHNICAL LIMIT of a descending stretch for one rider: the speed they can
+   still stop from within the trail they can see (12 m on singletrack, 30 m on
+   two-track). Braking has the bed's grip less the pull of the slope; a skilled
+   rider uses 90% of the grip, a novice 45%, and on rough ground the novice loses
+   a further third of that (the wheel skips, the line wanders); fatigue costs up
+   to a fifth. 0 = cannot be ridden at all by this rider: walk it.
+   Worked: shale (grip 0.55, rough 0.75) at -20%: expert 8.3 m/s, novice 3.3;
+   slickrock (0.90, 0.15) at -25%: expert 11.3, novice 7.3. */
+function techLimit(rd,s,fat){
+  const th=Math.atan(-s.grade), c=Math.cos(th), sn=Math.sin(th);
+  const use=(0.45+0.45*rd.execution)*(1-0.35*s.rough*(1-rd.execution))*(1-0.2*(fat||0))/Math.sqrt(rd.errMul||1);
+  const a=G*(s.mu*c*use-sn), d=s.wide?30:12;
+  return a<=0.35?0:Math.sqrt(2*a*d);
 }
 function segAt(trail,rd){ return trail.S[((Math.floor(rd.s/trail.ds)%trail.n)+trail.n)%trail.n]; }
 function hash01(a,b){ let h=(a*374761393+b*668265263)|0; h=(h^(h>>>13))*1274126177|0; return ((h^(h>>>16))>>>0)/4294967296; }
@@ -206,7 +240,13 @@ function step(race,dt){
     let vlim=Infinity; for(let j=0;j<25;j++){ const sj=S[(idx+j)%n], b=Math.max(1.5,sj.mu*G*0.6+G*sj.grade), vj=Math.sqrt(sj.vlim*sj.vlim+2*b*j*trail.ds); if(vj<vlim) vlim=vj; }
     const err=(hash01(idx>>2,rd.i)-0.5)*2*(1-rd.perception)*(0.25+0.6*fat)*(rd.errMul||1);
     const perceived=vlim*(1+0.4*err);
-    const vt=perceived*(0.55+0.35*rd.execution)*(0.85+0.25*rd.nerve);
+    let vt=perceived*(0.55+0.35*rd.execution)*(0.85+0.25*rd.nerve);
+    /* ON A DESCENT, SKILL SETS THE SPEED (Joe, 2026-10-14). The technical limit
+       over the next 10 m (techLimit): what the rider can still stop from, which
+       on steep loose rock is little; nerve decides how near it they ride (88-112%).
+       Where even a crawl cannot be held, they walk the bike down. */
+    let vtech=Infinity; for(let j=0;j<5;j++){ const sj=S[(idx+j)%n]; if(sj.grade<-0.03) vtech=Math.min(vtech,techLimit(rd,sj,fat)); }
+    if(vtech<Infinity) vt=Math.min(vt,vtech*(0.88+0.24*rd.nerve));
     /* power */
     const Psus=rd.wkg*rd.kg*(0.72+0.28*(rd.E/rd.E0))*(rd.powerMul||1);
     let P=Psus; if(rd.sprintLeft>0){ P=rd.sprint; rd.sprintLeft-=dt; } else if(seg.grade>0.03 && rd.v<vt) P=Psus*1.25;
@@ -226,14 +266,16 @@ function step(race,dt){
        speed against gravity and rolling gets off and walks too, at walking pace
        - which up a 20% pitch is faster than the 1.4 km/h floor the sim used to
        let them crawl at (measured on the 2026-10-13 hard courses). */
+    const walkDown = vtech===0;
     const legsOut = seg.grade>0.08 && rd.sprintLeft<=0 && Psus*1.25/1.5 < m*G*(sinT+seg.crr*cosT);   // the same 1.5 m/s the drive force is reckoned at
-    if((seg.walk != null && seg.grade > seg.walk) || legsOut){
+    if((seg.walk != null && seg.grade > seg.walk) || legsOut || walkDown){
       let vw=Math.max(0.55, Math.min(1.65, (0.95+0.5*(rd.wkg-2.8)/2.0)*(0.75+0.25*(rd.E/rd.E0))));
       /* single file on foot too: nobody shoulders past on a singletrack pitch */
       if(k>0){ const ah=order[k-1], gap=(ah.lap*L+ah.s)-(rd.lap*L+rd.s); if(gap>=0 && gap<3 && !(seg.wide && segAt(trail,ah).wide)) vw=Math.min(vw,Math.max(0.3,ah.v)); }
+      if(walkDown) vw=Math.min(vw,1.1);
       a=(vw-rd.v)/Math.max(dt,1e-3);
-      P=m*G*sinT*vw*1.15;
-      mode='pushing'; rd.pushed=(rd.pushed||0)+vw*dt;
+      P=walkDown?0:m*G*sinT*vw*1.15;
+      mode=walkDown?'walking down':'pushing'; rd.pushed=(rd.pushed||0)+vw*dt;
       rd.mode=mode; rd.P=P; rd.vlim=vlim; rd.perceived=perceived; rd.vt=vt; rd.seg=seg; rd.fat=fat;
       rd.v=Math.max(0.3,rd.v+a*dt); rd.s+=rd.v*dt;
       rd.work+=P*dt; if(seg.grade>0) rd.climbed+=seg.grade*rd.v*dt;
@@ -280,6 +322,10 @@ function step(race,dt){
          three riders on easy ground and rather more on hard. */
       const pm=0.0005*sg.rough*(1-rd.execution)*(0.3+fat)*Math.min(2,rd.errMul||1);
       if(race.R()<pm) { crash(race,rd,sg,0,rd.v); continue; }
+      /* past the technical limit on a descent - the daring and the clumsy - is
+         a fall waiting to happen */
+      if(sg.grade<-0.03){ const vtl=techLimit(rd,sg,fat), ot=vtl>0?rd.v/vtl-1.06:0;
+        if(ot>0 && race.R()<Math.min(1,ot*0.08)*(1-0.55*rd.execution)*Math.min(2,rd.errMul||1)) { crash(race,rd,sg,ot,rd.v); continue; } }   /* 12% over: about one fall per 700 m of such ground (at 1.2 it was every 30 m: 31 crashes a race) */
     }
     /* laps */
     if(rd.s>=L){ rd.s-=L; rd.lap++; race.events.push({t:race.t,kind:'lap',rider:rd,lap:rd.lap});
@@ -332,8 +378,8 @@ function crash(race,rd,seg,over,vAt){
   else if(e<40){ rd.down=6+race.R()*9; rd.E=Math.max(0,rd.E-3200); }
   else {
     rd.down=28+race.R()*80; rd.E=Math.max(0,rd.E-9000);
-    rd.errMul=Math.min(2.2,(rd.errMul||1)*1.35);        // rides shy from here on
-    rd.powerMul=(rd.powerMul||1)*0.90;
+    rd.hurtE=Math.min(2.2,(rd.hurtE||1)*1.35);          // rides shy from here on
+    rd.hurtP=(rd.hurtP||1)*0.90;
     rd.hurt=(rd.hurt||0)+1;
   }
   race.events.push({t:race.t,kind:'crash',rider:rd,seg,over,e,down:rd.down,v});

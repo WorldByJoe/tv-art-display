@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html · v2.0 · 2026-10-13
+  race.html · v2.1 · 2026-10-14
   a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
@@ -45,6 +45,9 @@
 ==========================================================================
 
   CHANGED
+    v2.1  descending skill and heat matter (race_sim v2.1); the chase camera keeps
+          its distance round switchbacks (race_chase3d v1.1); time doubles past 40
+          race-minutes; the climb bar scaled to the new 3.4-4.4 W/kg field
     v2.0  Joe, 2026-10-13: one longer lap (6-11 km) laid round the map by the
           new planner, two-track drawn as a double line and the only place to
           pass, a place-by-distance chart under the map, crash alerts give the
@@ -292,7 +295,9 @@ function tick(){
     if(plan){ const total=plan.segs.reduce((a,s)=>a+s.explored.length,0)+plan.path.length*2+320; revealed+=Math.max(0.4,total/40/180); if(revealed*40>total) startRoster(); } }
   else if(act===3){ if(now-actAt>CONFIG.rosterSec*1000) startRace(); }
   else if(act===4){
-    if(!race.done && !race.resultsAt){ const n=CONFIG.timeScale*(race.finished>0?CONFIG.finishScale:1);
+    /* four times real speed; twice that past 40 race-minutes (the slowest courses
+       run 70) and four times more once the winner is home, so a show stays near 15 min */
+    if(!race.done && !race.resultsAt){ const n=CONFIG.timeScale*(race.t>2400?2:1)*(race.finished>0?CONFIG.finishScale:1);
       for(const r of race.riders) r._prevD=r.lap*trail.L+r.s; tickAt=now;      // the 3D window interpolates from here
       for(let i=0;i<n;i++){ RaceSim.step(race,0.1); if(race.done) break; }
       passes(); record();
@@ -496,7 +501,7 @@ function drawRiders(M){
 function drawRoster(W,H,results){
   const SX=134*WU, SY=76*WU, floor=(200*TS+260)*WU, top=SY+T('t1')*1.5, gap=28*WU;   // the lane needs the bottom band
   const cols=4, rows=2, cw=(W-2*SX-(cols-1)*gap)/cols, ch=(H-floor-top-(rows-1)*gap)/rows;
-  const bars=[['climb',r=>(r.wkg-2.8)/2.0,r=>r.wkg.toFixed(1)+' W/kg'],['sprint',r=>(r.sprint-650)/600,r=>Math.round(r.sprint)+' W'],
+  const bars=[['climb',r=>(r.wkg-3.3)/1.2,r=>r.wkg.toFixed(1)+' W/kg'],['sprint',r=>(r.sprint-650)/600,r=>Math.round(r.sprint)+' W'],
               ['reads the ground',r=>r.perception,null],['rides the limit',r=>r.execution,null],['dares',r=>r.nerve,null],['lasts',r=>(r.stamina-45)/65,null],['takes the heat',r=>r.heat,null]];
   const list=results?race.riders.slice().sort((a,b)=>{ if(a.finish&&b.finish) return a.finish-b.finish; if(a.finish) return -1; if(b.finish) return 1; return a.pos-b.pos; }):riders;
   list.forEach((rd,i)=>{

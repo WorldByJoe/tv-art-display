@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_chase3d.js · v1.0 · 2026-10-13
+   race_chase3d.js · v1.1 · 2026-10-14
    the chase window of race.html, in WebGL (three.js r128).
    Joe, 2026-10-13: "The quality of the landscape rendering is really poor in
    the upper right rider focus graph." The old window was the strata ray-
@@ -33,8 +33,9 @@
      THE RIDERS    a rider on a bike in their colour, pedalling at their own
                    cadence, pitched with the grade, lying on their side when
                    down; a plate-number tag over each.
-   The camera rides 10 m behind the followed rider ALONG THE TRAIL (so it
-   follows a switchback round instead of cutting through the hill), 3.6 m up,
+   The camera rides behind the followed rider ALONG THE TRAIL (so it follows a
+   switchback round instead of cutting through the hill), as far back as it takes
+   to be 10 m from them in a straight line, 3.6 m up,
    never below the ground, looking just ahead of the rider.
 
    One call per frame: render(subject, race, alpha) - alpha interpolates rider
@@ -43,6 +44,9 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.1  a cut, not a glide, when the followed rider changes (the camera eased
+           back through the new rider); the camera keeps 10 m from the rider in a
+           straight line round switchbacks; a tag within 6 m of the lens is hidden
      v1.0  new: replaces the CPU ray-marcher in the chase window
 */
 function RaceChase3DFactory(global){
@@ -186,7 +190,7 @@ function create(canvas){
   const scene=new THREE.Scene();
   const camera=new THREE.PerspectiveCamera(52,canvas.width/canvas.height,0.3,5000);
   let world=null, chunks=[], corridor=null, riders=[], sky=null, mats=null, tread=null, cam=null, scrub=[];
-  let trailRef=null, nS=0, ds=2, cell=10, scale=0.2, groundAt=null;
+  let trailRef=null, nS=0, ds=2, cell=10, scale=0.2, groundAt=null, lastSubject=null;
 
   function setSize(w,h){ renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
 
@@ -429,17 +433,35 @@ function create(canvas){
       R.body.rotation.set(down?1.35:0,0,down?0:Math.atan(p.grade)*0.9); R.body.position.y=down?0.12:0;
       if(!down){ R.crank+=(r.v||0)*(dtReal||0.03)/2.1*2*Math.PI*0.9; setLegs(R,R.crank); }
       R.tag.position.set(0,down?1.3:2.35,0);
-      /* the tag keeps one size on screen, near or far: about a tenth of the window's height for the followed rider */
-      const dc=Math.max(3,camera.position.distanceTo(R.root.position)), sz=dc*(r===subject?0.085:0.07); R.tag.scale.set(sz,sz,1);
       R.blob.position.set(0.05,0.04,0); }
-    /* the camera: 16 m back along the trail, 6 m up, looking just ahead */
-    const ds0=D(subject), me=at(ds0), bk=at(ds0-BACK), ah=at(ds0+AHEAD);
+    /* the camera: back along the trail until it is BACK metres from the rider IN
+       A STRAIGHT LINE, 3.6 m up, looking just ahead. Measured on the TV
+       (2026-10-14): 10 m back along the trail round a switchback is 2-4 m from
+       the rider across the hairpin, and for the second it took to round the turn
+       the camera sat on top of them and their number tag filled the window. */
+    const ds0=D(subject), me=at(ds0), ah=at(ds0+AHEAD);
+    let back=BACK, bk=at(ds0-back);
+    for(let k=0;k<30 && Math.hypot(bk.x-me.x,bk.z-me.z)<BACK*0.92;k++){ back+=2; bk=at(ds0-back); }
     const want={x:bk.x,y:Math.max(bk.y+UP,groundAt(bk.x,bk.z)+3,me.y+3),z:bk.z, lx:(me.x*0.55+ah.x*0.45), ly:me.y+1.0, lz:(me.z*0.55+ah.z*0.45)};
-    if(!cam || Math.hypot(want.x-cam.x,want.z-cam.z)>60) cam=Object.assign({},want);
+    /* a new rider to follow is a CUT, as a television director would make it. Measured
+       on the TV (2026-10-14): every frame that came within a few metres of the rider
+       was in the first 0.3 s after a switch - the new rider is usually the one just
+       behind, standing where the camera already was, and the camera eased back
+       through them. */
+    if(!cam || subject!==lastSubject || Math.hypot(want.x-cam.x,want.z-cam.z)>60) cam=Object.assign({},want);
     else { const k=1-Math.exp(-(dtReal||0.033)*3.2); for(const key in want) cam[key]+=(want[key]-cam[key])*k; }
+    lastSubject=subject;
     const gUnder=groundAt(cam.x,cam.z); if(cam.y<gUnder+2) cam.y=gUnder+2;
     camera.position.set(cam.x,cam.y,cam.z); camera.lookAt(cam.lx,cam.ly,cam.lz);
     sky.position.copy(camera.position);
+    /* the tags, sized from where the camera now is: one size on screen near or far
+       (about a tenth of the window's height for the followed rider), and hidden
+       when the TAG itself is within 6 m of the lens - a rider bunched just behind
+       the followed one carries theirs at camera height, and it filled the window */
+    const tp=new THREE.Vector3();
+    for(const R of riders){ if(!R.root.visible) continue; R.root.updateMatrixWorld(true); R.tag.getWorldPosition(tp);
+      const dTag=tp.distanceTo(camera.position), sz=Math.max(3,dTag)*(R.r===subject?0.085:0.07);
+      R.tag.scale.set(sz,sz,1); R.tag.visible=dTag>6; R.body.visible=camera.position.distanceTo(R.root.position)>1.5; }
     mats.terrMat.uniforms.camPos.value.copy(camera.position); mats.corrMat.uniforms.camPos.value.copy(camera.position);
     /* detail by distance */
     for(const m of chunks){ const u=m.userData, d=Math.hypot(u.cx-cam.x,u.cz-cam.z), lod=api.forceLod!=null?api.forceLod:d<420?0:d<900?1:d<1600?2:3;   // full detail well out: a coarse chunk sits a little off the exact trail strip, and the bed colours follow height
