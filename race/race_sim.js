@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_sim.js · v2.1 · 2026-10-14
+   race_sim.js · v3.0 · 2026-10-14
    the riders and the race, on a course cut by race_planner.js
    into a frozen Strata world. Joe, 2026-09-07:
      "n riders ... randomly drawn skill and strength for hill climbing ... a
@@ -20,10 +20,33 @@
    20 m, because a benched trail is cut and filled: it rides smoother than
    the hillside it is cut into.
 
+   THE ENGINE (Joe, 2026-10-14: "aerobic & anaerobic capacity, and recovery
+   from anaerobic activity ... tradeoffs where those are reasonably based in
+   biology"). The critical-power model of exercise physiology:
+     aerobic power  CP, what the rider can hold for about an hour (W/kg)
+     reserve        W', a fixed store of work above CP (10-30 kJ); spent on
+                    surges, it refills only below CP, faster the further below
+                    (Skiba's fit: time constant 546 e^(-0.01 (CP-P)) + 316 s,
+                    times the rider's own recovery factor)
+     sprint         peak power for a few seconds; what is available above CP
+                    shrinks as the reserve empties (sqrt of the share left)
+     oxygen uptake  the aerobic supply follows demand with a lag of 20-40 s; a
+                    quarter of the gap at every surge is drawn from the reserve
+     efficiency     19.5-23.5% of the metabolic energy reaches the pedals; the
+                    rest is heat, which the body model must shed
+   FIBRE TYPE ties these together, as muscle biopsies say it does: the share of
+   fast-twitch muscle (25-75%) raises the reserve and the sprint and slows
+   recovery, the oxygen response and efficiency; slow-twitch muscle gives
+   aerobic power relative to the rider's ceiling. Training sets the level of
+   aerobic power independently. Each trait is nudged by fibre type plus its own
+   scatter, so the types are tendencies, not rules.
+   RACE CRAFT is the judgement of when to spend the reserve (pace()): everyone
+   goes for the hole shot; a crafty rider climbs at a pace the reserve can last,
+   keeps some for a pass on the two-track or a bridge before the singletrack,
+   and times the run-in so the reserve runs out at the line; an artless one
+   rides every climb hard, blows up, and misjudges the finish.
    A RIDER each tick (dt 0.1 s):
-     power      sustainable W/kg x mass, scaled by energy left; the sprint
-                watts for the first 25 s; a dig above sustainable drains the
-                store, easy riding refills it slowly
+     power      what pace() asks for, capped by what the engine can give
      forces     gravity on the grade, rolling drag by bed, air drag; traction
                 caps drive on the climbs
      the limit  the true cornering/technical speed limit over the next 50 m,
@@ -41,8 +64,8 @@
    RACE DAY AND THE BODY (Joe, 2026-09-08: "add insolation, humidity and
    temperature ... heat tolerance as a rider trait ... principles of human
    physiology"). Each rider is a two-node heat balance every tick:
-     heat in    metabolic heat at 22% gross efficiency (3.5 W of heat per W
-                at the pedals) plus 80 W basal, plus the sun on 0.25 m2 of
+     heat in    metabolic heat at the rider's gross efficiency (3.3-4.1 W of heat
+                per W at the pedals) plus 80 W basal, plus the sun on 0.25 m2 of
                 rider at 0.7 absorptance
      heat out   convection from 1.8 m2 of skin at 34 C, the coefficient rising
                 with air speed (a rider's own speed plus a light wind), and
@@ -57,12 +80,15 @@
                 rise; at 40 C the rider stops to cool for half a minute;
                 water lost beyond 2% of body weight costs 3% of power per
                 further percent. Riders drink 0.4 L/h from the bottle.
-   Tallied for the cards: work at the pedals -> kilocalories at 22%, litres
+   Tallied for the cards: work at the pedals -> kilocalories at the rider's own efficiency, litres
    sweated, vertical metres climbed, peak core temperature.
    Pure and seeded. Distances in metres along the loop, speeds m/s.
 ---------------------------------------------------------------------------
 
    CHANGED
+     v3.0  the engine: critical power, an anaerobic reserve with recovery, peak
+           power, oxygen-uptake lag and efficiency, tied by fibre type; race craft
+           paces the reserve (Joe, 2026-10-14). 'Lasts' and the fixed sprint go
      v2.1  descending skill and heat made to matter (Joe, 2026-10-14): a technical
            limit on every descent set by skill (walk it if it cannot be ridden),
            crashes past it; acclimatised riders sweat sooner, hold power to a
@@ -75,7 +101,6 @@
            plate number; four names added to the pool (Joe, 2026-10-13);
            riders look 50 m ahead and brake for what they see; a climb the
            legs cannot ride at balance speed is walked
-     v1.0  versioning starts here; this file predates the scheme
 */
 function RaceSimFactory(global){
 'use strict';
@@ -139,6 +164,11 @@ function buildTrail(plan, w, cell, ds){
     s.exposed=exposed;
     s.wide=s.two;                                        // passing only on the two-track
   }
+  /* how far each sample is from the top of the climb it is on, and from the end
+     of the two-track it is on (for pace(): a climb plan, a bridge before the
+     singletrack); two passes round the loop so the wrap is right */
+  for(let pass=0;pass<2;pass++) for(let i=n-1;i>=0;i--){ const s=S[i], nx2=S[(i+1)%n];
+    s.toTop=s.grade>0.02?ds+(nx2.toTop||0):0; s.wideLeft=s.two?ds+(nx2.wideLeft||0):0; }
   /* the true speed limit of each stretch: cornering on the grip, less on rough ground */
   for(let i=0;i<n;i++){ const s=S[i]; const vc=Math.sqrt(s.mu*G/Math.max(s.curv,0.004)); s.vlim=Math.min(21,vc*(1-0.45*s.rough)*(s.grade<-0.08?0.85:1)); }
   return {S,n,ds,L,cell};
@@ -149,19 +179,33 @@ function makeRiders(seed,count){
   const R=rng32(seed), r=(a,b)=>a+(b-a)*R(); const used=new Set(), riders=[];
   for(let i=0;i<count;i++){
     let name; do{ name=NAMES[Math.floor(R()*NAMES.length)]; }while(used.has(name)); used.add(name);
-    /* climbing power 3.4-4.4 W/kg, the spread of one race category (real races are
-       run in categories). 2.8-4.8 was a 70% spread: measured over 128 races, it alone
-       explained 63% of finishing times and drowned skill and heat (Joe, 2026-10-14) */
-    const kg=r(56,92), bike=12, mass=kg+bike, wkg=r(3.4,4.4), sprint=r(650,1250), perception=r(0.25,1), execution=r(0.25,1), nerve=r(0.3,1), stamina=r(45,110), heat=r(0.2,1);
+    const kg=r(56,92), bike=12, mass=kg+bike, perception=r(0.25,1), execution=r(0.25,1), nerve=r(0.3,1), heat=r(0.2,1);
+    /* the engine (see the header). fn: 0 = 25% fast-twitch, 1 = 75%. Aerobic power
+       stays near one category's spread (about 3.2-4.6 W/kg): a wider spread decides
+       races on its own (2.8-4.8 explained 63% of finishing times), a narrower one
+       (3.3-4.5 with the first engine) let it fall behind the reserve and descending. */
+    const fast=r(0.25,0.75), fn=(fast-0.25)/0.5, train=R(), sc=(w)=>1+w*(2*R()-1);
+    /* critical power, W/kg (about 3.1-4.8). x (kg/72)^-0.25: aerobic power grows with
+       body mass to about the three-quarter power (allometry of VO2max), so a big
+       rider has more watts but fewer per kilogram - more for the flats, the sprint
+       and the two-track, less for the climbs; and less skin per kg to shed heat */
+    const wkg=(3.3+1.1*train-0.3*(fn-0.5)+0.06*(2*R()-1))*Math.pow(kg/72,-0.25);
+    const Wp=kg*(170+190*fn)*sc(0.12);                           // the reserve W', J (12-25 kJ at 70 kg)
+    const pmax=kg*(11+8*fn)*sc(0.08);                            // peak power, W (770-1330 W at 70 kg)
+    const recMul=(0.75+0.7*fn)*sc(0.15);                         // x Skiba's recovery time constant
+    const tauVO2=(20+20*fn)*sc(0.12);                            // oxygen-uptake lag, s
+    const eff=0.235-0.035*fn+0.004*(2*R()-1);                    // gross efficiency
+    const craft=R();                                             // judgement of when to spend the reserve
+    const misjudge=2*R()-1;                                      // which way an artless rider misreads the run-in
     let num; do{ num=100+Math.floor(R()*900); }while(riders.some(o=>o.num===num));   // a random three-digit plate
-    riders.push({i,num,name,color:INKS[i%INKS.length],kg,bike,mass,wkg,sprint,perception,execution,nerve,stamina,heat,
-      s:0,v:0,lap:0,E:stamina*1000,E0:stamina*1000,status:'ready',down:0,crashes:0,finish:null,gapAhead:0,pos:i+1,lastSeg:-1,note:'',
+    riders.push({i,num,name,color:INKS[i%INKS.length],kg,bike,mass,wkg,fast,fn,train,Wp,pmax,sprint:pmax,recMul,tauVO2,eff,craft,misjudge,perception,execution,nerve,heat,
+      s:0,v:0,lap:0,E:Wp,E0:Wp,Pa:0,intent:'',status:'ready',down:0,crashes:0,finish:null,gapAhead:0,pos:i+1,lastSeg:-1,note:'',
       core:37.0,peakCore:37.0,sweat:0,water:0,drank:0,work:0,climbed:0,heatStops:0});
   }
   return riders;
 }
 /* a plain-words rating so a viewer knows who to root for */
-function favourite(riders){ return riders.slice().sort((a,b)=>(b.wkg*0.5+b.execution*1.2+b.perception*0.8+b.nerve*0.4+b.stamina/100)-(a.wkg*0.5+a.execution*1.2+a.perception*0.8+a.nerve*0.4+a.stamina/100))[0]; }
+function favourite(riders){ const sc=r=>r.wkg*1.6+r.E0/20000+r.execution*0.5+r.craft*0.3; return riders.slice().sort((a,b)=>sc(b)-sc(a))[0]; }
 
 /* ---- the race ------------------------------------------------------------ */
 /* the day: air temperature C, relative humidity 0..1, sun W/m2, a light wind m/s */
@@ -172,7 +216,7 @@ function makeDay(seed){
 }
 const psat=(T)=>0.6108*Math.exp(17.27*T/(T+237.3));        // kPa, over water
 function physiology(rd,P,dt,day){
-  const M=P/0.22+80, heatIn=M-P;                                 // metabolic heat, W
+  const M=P/(rd.eff||0.22)+80, heatIn=M-P;                       // metabolic heat, W
   const solar=day.sun*0.7*0.25;                                  // W on the rider
   const vair=Math.max(0.5,rd.v+day.wind), h=8.3*Math.pow(vair,0.6), A=1.8, Tsk=34;
   const conv=h*A*(Tsk-day.tempC);                                // W lost (negative: gained)
@@ -203,21 +247,81 @@ function physiology(rd,P,dt,day){
 function makeRace(trail,riders,laps,seed,day){
   const R=rng32(seed^0x9e3779b9); day=day||makeDay(seed);
   /* the two-track start: staggered on the line, sprint clocks armed */
-  riders.forEach((rd,i)=>{ rd.s=-(i*2.2); rd.v=0; rd.lap=0; rd.status='riding'; rd.sprintLeft=25; rd.powerMul=1; rd.errMul=1; rd.core=37; rd.peakCore=37; rd.water=0; rd.drank=0; rd.work=0; rd.climbed=0; rd.heatStops=0; });
+  riders.forEach((rd,i)=>{ rd.s=-(i*2.2); rd.v=0; rd.lap=0; rd.status='riding'; rd.E=rd.E0; rd.Pa=0.5*rd.wkg*rd.kg; rd.intent=''; rd.powerMul=1; rd.errMul=1; rd.core=37; rd.peakCore=37; rd.water=0; rd.drank=0; rd.work=0; rd.climbed=0; rd.heatStops=0; });
   return {trail,riders,laps,t:0,R,day,events:[],finished:0,out:0,done:false};
+}
+/* ---- the engine ------------------------------------------------------------ */
+/* critical power now (heat and injury take their share), W */
+function cpW(rd){ return rd.wkg*rd.kg*(rd.powerMul||1); }
+/* the most the rider can put out this instant: the aerobic supply already
+   running, plus a share of the way to peak power that shrinks as the reserve
+   empties - an empty rider can only ride at what their lungs deliver */
+function pCap(rd){ const base=Math.max(0.5*cpW(rd),rd.Pa); return base+Math.max(0,rd.pmax*(rd.powerMul||1)-base)*Math.sqrt(Math.max(0,rd.E)/rd.E0); }
+/* one tick of the engine at power P. The aerobic supply follows demand (up to CP)
+   with the rider's oxygen-uptake lag. Work above CP comes out of the reserve (as in
+   Skiba's W'bal); of the lag's shortfall below CP, a quarter is charged to it too -
+   the rest is met by the muscle's phosphocreatine and stored oxygen, which refill
+   in seconds. (Charging the whole lag cost ~5 kJ at every step from a descent onto
+   the flat, and measured, it left most of the field on an empty reserve by
+   10 minutes.) Below CP, with no shortfall, the reserve refills on Skiba's time
+   constant times the rider's own recovery factor. */
+function engine(rd,P,dt){
+  const cp=cpW(rd);
+  rd.Pa+=(Math.min(P,cp)-rd.Pa)*Math.min(1,dt/rd.tauVO2);
+  const draw=Math.max(0,P-cp)+0.25*Math.max(0,Math.min(P,cp)-rd.Pa);
+  if(draw>0) rd.E=Math.max(0,rd.E-draw*dt);
+  else { const tau=(546*Math.exp(-0.01*Math.max(0,cp-P))+316)*rd.recMul; rd.E=Math.min(rd.E0,rd.E+(rd.E0-rd.E)*dt/tau); }
+}
+/* RACE CRAFT: what the rider asks for this tick, in watts. Sets rd.intent
+   ('sprinting', 'attacking', 'bridging', 'defending' when spending the reserve on
+   purpose; '' otherwise). c = craft, 0 artless .. 1 crafty. */
+function pace(race,rd,k,order,seg,idx,cp,cap){
+  const L=race.trail.L, c=rd.craft, D=rd.lap*L+rd.s, left=L*race.laps-D, frac=rd.E/rd.E0;
+  rd.intent='';
+  /* the hole shot: everyone goes hard for the first singletrack; the crafty ease
+     off after about 8 s, the artless hold it for 20 */
+  if(race.t<8+12*(1-c)){ rd.intent='sprinting'; return cp+0.6*Math.max(0,cap-cp); }
+  /* the run-in: spend the reserve so it runs out at the line. The go point is the
+     distance the reserve lasts at the finishing effort; an artless rider misreads
+     it by up to 70% either way */
+  const pFin=cp+0.6*Math.max(0,cap-cp), vEst=Math.max(4,rd.v), go=(rd.E/Math.max(40,pFin-cp))*vEst*(1+0.7*(1-c)*rd.misjudge);
+  if(left<Math.max(150,go) && frac>0.02){ rd.intent='sprinting'; return pFin; }
+  /* on the two-track, the chances to change places */
+  const ah=k>0?order[k-1]:null, bh=k<order.length-1?order[k+1]:null, gapA=ah?(ah.lap*L+ah.s)-D:1e9, gapB=bh?D-(bh.lap*L+bh.s):1e9;
+  if(seg.two){
+    /* attack the rider just ahead while both are on the two-track (a crafty
+       rider only with the reserve to finish the move) */
+    if(ah && ah.status==='riding' && gapA>0 && gapA<14 && seg.wideLeft>40 && frac>0.15+0.25*c){ rd.intent='attacking'; return cp+0.5*Math.max(0,cap-cp); }
+    /* bridge before the singletrack: the last 150 m of two-track with a rider
+       within 30 m ahead - the place to get by, or wait behind them for a long time */
+    if(c>0.45 && ah && ah.status==='riding' && gapA>0 && gapA<30 && seg.wideLeft<150 && frac>0.25){ rd.intent='bridging'; return cp+0.6*Math.max(0,cap-cp); }
+    /* answer an attack from just behind: the artless always, the crafty only with
+       the reserve to spare */
+    if(bh && bh.status==='riding' && gapB>0 && gapB<4 && (bh.intent==='attacking'||bh.intent==='bridging') && frac>(c<0.4?0.08:0.4)){ rd.intent='defending'; return cp+0.5*Math.max(0,cap-cp); }
+  }
+  /* climbing: a crafty rider spends down to a reserve kept for tactics, spread over
+     the rest of the climb; an artless one rides it 30% hard until empty */
+  if(seg.grade>0.03){
+    const keep=rd.E0*(0.15+0.35*c), tLeft=Math.max(20,(seg.toTop||0)/Math.max(2,rd.v));
+    const smart=cp*0.97+Math.max(0,rd.E-keep)/tLeft, artless=frac>0.08?cp*1.3:cp*0.97;
+    return smart*c+artless*(1-c);
+  }
+  if(seg.grade<-0.03) return 0.3*cp;                               // coasting, a few turns of the pedals
+  return 0.85*cp;                                                  // the flats, at a sustainable pace
 }
 /* THE TECHNICAL LIMIT of a descending stretch for one rider: the speed they can
    still stop from within the trail they can see (12 m on singletrack, 30 m on
-   two-track). Braking has the bed's grip less the pull of the slope; a skilled
-   rider uses 90% of the grip, a novice 45%, and on rough ground the novice loses
-   a further third of that (the wheel skips, the line wanders); fatigue costs up
-   to a fifth. 0 = cannot be ridden at all by this rider: walk it.
-   Worked: shale (grip 0.55, rough 0.75) at -20%: expert 8.3 m/s, novice 3.3;
-   slickrock (0.90, 0.15) at -25%: expert 11.3, novice 7.3. */
+   two-track; 15 m on singletrack). Braking has the bed's grip less the pull of
+   the slope; a skilled rider uses 90% of the grip, a novice 55%, and on rough
+   ground the novice loses up to a further quarter (the wheel skips, the line
+   wanders); fatigue costs up to a fifth. 0 = cannot be ridden by this rider:
+   walk it. (At 45% and 12 m, measured over 128 races, descending skill outweighed
+   aerobic power as a predictor of the result, which cross-country racing does not
+   bear out.) */
 function techLimit(rd,s,fat){
   const th=Math.atan(-s.grade), c=Math.cos(th), sn=Math.sin(th);
-  const use=(0.45+0.45*rd.execution)*(1-0.35*s.rough*(1-rd.execution))*(1-0.2*(fat||0))/Math.sqrt(rd.errMul||1);
-  const a=G*(s.mu*c*use-sn), d=s.wide?30:12;
+  const use=(0.55+0.35*rd.execution)*(1-0.25*s.rough*(1-rd.execution))*(1-0.2*(fat||0))/Math.sqrt(rd.errMul||1);
+  const a=G*(s.mu*c*use-sn), d=s.wide?30:15;
   return a<=0.35?0:Math.sqrt(2*a*d);
 }
 function segAt(trail,rd){ return trail.S[((Math.floor(rd.s/trail.ds)%trail.n)+trail.n)%trail.n]; }
@@ -247,9 +351,9 @@ function step(race,dt){
        Where even a crawl cannot be held, they walk the bike down. */
     let vtech=Infinity; for(let j=0;j<5;j++){ const sj=S[(idx+j)%n]; if(sj.grade<-0.03) vtech=Math.min(vtech,techLimit(rd,sj,fat)); }
     if(vtech<Infinity) vt=Math.min(vt,vtech*(0.88+0.24*rd.nerve));
-    /* power */
-    const Psus=rd.wkg*rd.kg*(0.72+0.28*(rd.E/rd.E0))*(rd.powerMul||1);
-    let P=Psus; if(rd.sprintLeft>0){ P=rd.sprint; rd.sprintLeft-=dt; } else if(seg.grade>0.03 && rd.v<vt) P=Psus*1.25;
+    /* power: what pace() asks for, capped by what the engine can give now */
+    const cp=cpW(rd), cap=pCap(rd);
+    let P=Math.min(cap,pace(race,rd,k,order,seg,idx,cp,cap));
     const th=Math.atan(seg.grade), cosT=Math.cos(th), sinT=Math.sin(th), m=rd.mass;
     const Fres=m*G*sinT+seg.crr*m*G*cosT+0.5*RHO*CDA*rd.v*rd.v;
     let a, mode;
@@ -261,15 +365,30 @@ function step(race,dt){
        awkwardly, so it is charged at a 15% premium and the awkwardness is why
        nobody chooses it. No crash test while walking - a rider on foot with a
        bike beside them is the one place on the course that is safe. */
-    /* ...and past what the LEGS can ride. Below about 1.5 m/s a bike will not
+    /* ...and past what the LEGS can ride. Below about 1.1 m/s a bike will not
        stay upright on a climb, so a rider whose climbing watts cannot hold that
        speed against gravity and rolling gets off and walks too, at walking pace
        - which up a 20% pitch is faster than the 1.4 km/h floor the sim used to
        let them crawl at (measured on the 2026-10-13 hard courses). */
     const walkDown = vtech===0;
-    const legsOut = seg.grade>0.08 && rd.sprintLeft<=0 && Psus*1.25/1.5 < m*G*(sinT+seg.crr*cosT);   // the same 1.5 m/s the drive force is reckoned at
+    /* a pitch the legs cannot hold 1.5 m/s up on aerobic power alone is ridden on
+       the reserve if there is enough of it to reach the top; a crafty rider
+       judges that before starting and walks if not, an artless one rides until
+       the reserve is gone */
+    const VBAL=1.1;                                                    // m/s: slower than this a climbing bike falls over
+    const Pneed=m*G*(sinT+seg.crr*cosT)*VBAL;
+    let legsOut=false;
+    if(seg.grade>0.08 && rd.intent!=='start' && Pneed>cp){
+      if(cap<Pneed) legsOut=true;
+      else { let steep=0; for(let j=0;j<120;j++){ const sj=S[(idx+j)%n]; if(m*G*(Math.sin(Math.atan(sj.grade))+sj.crr)*VBAL<=cp) break; steep+=trail.ds; }
+        legsOut = rd.craft>0.5 ? rd.E-0.1*rd.E0<(Pneed-cp)*(steep/VBAL) : rd.E<0.05*rd.E0;
+        if(!legsOut) P=Math.max(P,Math.min(cap,Pneed*1.05)); } }
     if((seg.walk != null && seg.grade > seg.walk) || legsOut || walkDown){
-      let vw=Math.max(0.55, Math.min(1.65, (0.95+0.5*(rd.wkg-2.8)/2.0)*(0.75+0.25*(rd.E/rd.E0))));
+      /* walking pace is set by the legs too: pushing a bike up a pitch costs the lift
+         and 15% more, and a rider walks at what 90% of their aerobic power will lift
+         (a flat 0.95-1.45 m/s by W/kg made a third of a hard race power-blind:
+         measured 2026-10-14, 22% less power cost an intolerant field 2% of its time) */
+      let vw=Math.max(0.45, Math.min(1.65, 0.9*cp/(m*G*(Math.max(0.02,sinT)+0.04)*1.15)));
       /* single file on foot too: nobody shoulders past on a singletrack pitch */
       if(k>0){ const ah=order[k-1], gap=(ah.lap*L+ah.s)-(rd.lap*L+rd.s); if(gap>=0 && gap<3 && !(seg.wide && segAt(trail,ah).wide)) vw=Math.min(vw,Math.max(0.3,ah.v)); }
       if(walkDown) vw=Math.min(vw,1.1);
@@ -279,31 +398,28 @@ function step(race,dt){
       rd.mode=mode; rd.P=P; rd.vlim=vlim; rd.perceived=perceived; rd.vt=vt; rd.seg=seg; rd.fat=fat;
       rd.v=Math.max(0.3,rd.v+a*dt); rd.s+=rd.v*dt;
       rd.work+=P*dt; if(seg.grade>0) rd.climbed+=seg.grade*rd.v*dt;
-      physiology(rd,P,dt,race.day);
-      if(P>Psus) rd.E=Math.max(0,rd.E-(P-Psus)*dt); else rd.E=Math.min(rd.E0,rd.E+(Psus-P)*0.25*dt);
+      physiology(rd,P,dt,race.day); engine(rd,P,dt);
       rd.lastSeg=((Math.floor(rd.s/trail.ds)%n)+n)%n;
       if(rd.s>=L){ rd.s-=L; rd.lap++; race.events.push({t:race.t,kind:'lap',rider:rd,lap:rd.lap});
         if(rd.lap>=race.laps){ rd.status='finished'; rd.finish=race.t; race.finished++; race.events.push({t:race.t,kind:'finish',rider:rd,place:race.finished}); } }
       continue;
     }
     if(rd.v>vt){ a=-Math.min(seg.mu*G*0.75,(rd.v-vt)/dt)-Fres/m; P=0; mode='braking'; }
-    else { const Fdrive=Math.min(P/Math.max(rd.v,1.5), seg.mu*m*G*cosT*0.8); a=(Fdrive-Fres)/m;
-      mode=rd.sprintLeft>0?'sprinting':seg.grade>0.03?'climbing':seg.grade<-0.03?'descending':'pedalling'; }
+    else { const Fdrive=Math.min(P/Math.max(rd.v,VBAL), seg.mu*m*G*cosT*0.8); a=(Fdrive-Fres)/m;
+      mode=rd.intent?rd.intent:seg.grade>0.03?'climbing':seg.grade<-0.03?'descending':'pedalling'; }
     /* traffic: on narrow trail you sit behind the rider ahead */
     /* a pass needs BOTH riders on the two-track: the one behind cannot come
        past while the one ahead is already into the singletrack */
     if(k>0){ const ah=order[k-1]; const gap=(ah.lap*L+ah.s)-(rd.lap*L+rd.s); rd.gapAhead=gap; const wide=seg.wide && segAt(trail,ah).wide;
-      if(ah.status==='riding' && gap<4 && gap>=0 && !wide && rd.v>ah.v){ a=Math.min(a,(ah.v-rd.v)/dt); rd.note='held up'; mode='held up'; } else if(ah.status==='down' && gap<3 && gap>=0 && !wide){ a=Math.min(a,(0.8-rd.v)/dt); mode='held up'; } else rd.note=''; }
+      if(ah.status==='riding' && gap<4 && gap>=0 && !wide && rd.v>ah.v){ a=Math.min(a,(ah.v-rd.v)/dt); rd.note='held up'; mode='held up'; P=Math.min(P,Math.max(0,Fres*rd.v)); } else if(ah.status==='down' && gap<3 && gap>=0 && !wide){ a=Math.min(a,(0.8-rd.v)/dt); mode='held up'; } else rd.note=''; }
     /* what the board and the physics strip show */
     rd.mode=mode; rd.P=P; rd.vlim=vlim; rd.perceived=perceived; rd.vt=vt; rd.seg=seg; rd.fat=fat;
     rd.v=Math.max(0.4,rd.v+a*dt); rd.s+=rd.v*dt;
     /* and never through the rider ahead on singletrack, whatever the step did */
     if(k>0){ const ah=order[k-1]; if(ah.status!=='down' && !(seg.wide && segAt(trail,ah).wide)){ const lim=(ah.lap*L+ah.s)-1.5-rd.lap*L; if(rd.s>lim && (ah.lap*L+ah.s)>=(rd.lap*L+rd.s-rd.v*dt)){ rd.s=Math.max(lim,rd.s-rd.v*dt); rd.v=Math.min(rd.v,Math.max(0.4,ah.v)); mode='held up'; rd.mode=mode; } } }
     rd.work+=P*dt; if(seg.grade>0) rd.climbed+=seg.grade*rd.v*dt;
-    physiology(rd,P,dt,race.day);
+    physiology(rd,P,dt,race.day); engine(rd,P,dt);
     if(rd.core>40){ rd.status='down'; rd.cooling=true; rd.down=30; rd.v=0; rd.core-=0.5; rd.heatStops++; race.events.push({t:race.t,kind:'heat',rider:rd,seg}); continue; }
-    /* energy: digging above sustainable drains the store; easy riding refills */
-    if(P>Psus) rd.E=Math.max(0,rd.E-(P-Psus)*dt); else rd.E=Math.min(rd.E0,rd.E+(Psus-P)*0.25*dt);
     /* entering a new stretch: the physics check */
     const idx2=((Math.floor(rd.s/trail.ds)%n)+n)%n;
     if(idx2!==rd.lastSeg && rd.s>=0){
@@ -374,10 +490,10 @@ function crash(race,rd,seg,over,vAt){
   if(e>110){ rd.status='out'; race.out++;
     race.events.push({t:race.t,kind:'out',rider:rd,seg,over,e,v}); return; }
   rd.status='down';
-  if(e<10){ rd.down=1.5+race.R()*2.5; rd.E=Math.max(0,rd.E-800); }
-  else if(e<40){ rd.down=6+race.R()*9; rd.E=Math.max(0,rd.E-3200); }
+  if(e<10){ rd.down=1.5+race.R()*2.5; rd.E=Math.max(0,rd.E-0.04*rd.E0); }
+  else if(e<40){ rd.down=6+race.R()*9; rd.E=Math.max(0,rd.E-0.15*rd.E0); }
   else {
-    rd.down=28+race.R()*80; rd.E=Math.max(0,rd.E-9000);
+    rd.down=28+race.R()*80; rd.E=Math.max(0,rd.E-0.4*rd.E0);
     rd.hurtE=Math.min(2.2,(rd.hurtE||1)*1.35);          // rides shy from here on
     rd.hurtP=(rd.hurtP||1)*0.90;
     rd.hurt=(rd.hurt||0)+1;
@@ -389,7 +505,7 @@ function place(trail,rd){ const n=trail.n; const f=rd.s/trail.ds, i=((Math.floor
   return {x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t, zE:a.zE+(b.zE-a.zE)*t, heading:a.heading, seg:a}; }
 
 /* the tallies for the cards */
-function tally(rd){ return {kcal:rd.work/0.22/4184, litres:rd.water, climbedFt:rd.climbed*3.281, peakCore:rd.peakCore}; }
-global.RaceSim={buildTrail, makeRiders, favourite, makeRace, makeDay, step, place, tally, BED, INKS};
+function tally(rd){ return {kcal:rd.work/(rd.eff||0.22)/4184, litres:rd.water, climbedFt:rd.climbed*3.281, peakCore:rd.peakCore}; }
+global.RaceSim={buildTrail, makeRiders, favourite, makeRace, makeDay, step, place, tally, cpW, pCap, BED, INKS};
 }
 RaceSimFactory(typeof window!=='undefined'?window:globalThis);

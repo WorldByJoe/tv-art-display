@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_planner.js · v2.0 · 2026-10-13
+   race_planner.js · v2.1 · 2026-10-14
    cuts a mountain-bike course into a frozen Strata world.
    Joe, 2026-09-07: the race is a loop; the start is a wide two-track so the
    field spreads out; the route takes switchbacks on the steep parts and
@@ -49,6 +49,9 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.1  the shape of a race: the first and last legs are roads (a start that
+           sorts the field, a run-in where it can still change) and passing places
+           break any singletrack over 2 km; a budget in search steps, not ms
      v2.0  sixteen headings, cut and fill, no sidehill penalty (hillsides and
            rims are preferred); the loop is laid round an ellipse through
            alternating high and low waypoints, legs repel each other; one
@@ -339,7 +342,17 @@ function loopTier(z,nx,ny,cell,opts,tier,R){
            pattern - and the climbs are where the speeds differ most, so that is
            where passing is wanted. A road keeps to gentle side slopes and bends
            less; a singletrack seeks the hillside. */
-        const climbs=z[goal]>z[cur]+8, road=climbs && (R()<0.6 || (w>=K-1 && roads===0));
+        /* THE SHAPE OF A RACE (Joe, 2026-10-14: is the two-track where an
+           interesting race wants it?). Measured on 16 courses it was not: the
+           start two-track was usually 200-300 m, so the order out of the start
+           sprint froze on the first singletrack; the longest stretch with no
+           chance to pass was 1.8-7.3 km; and on 9 of 16 the last chance to pass
+           came 1.3-7.3 km before the line. So the FIRST leg is a road (a start
+           long enough to sort the field), the LAST leg is a road (a run-in where
+           a race can still change), climbs are roads more often than not, and
+           twoTrack() adds passing places so no singletrack runs on for more than
+           2 km where the ground allows a wider spot. */
+        const climbs=z[goal]>z[cur]+8, road=(w===1) || last || (climbs && R()<0.6);
         const r=route(z,nx,ny,cell,slope,cur,goal,road?PR:P,road?terrRoad:terr,rep,blocked,hd,ws); diag.legs++;
         if(!r){ diag.legFail++; continue; } diag.pops+=r.pops;
         if(revisits(r.path,nx)){ diag.rev++; continue; }
@@ -363,7 +376,7 @@ function loopTier(z,nx,ny,cell,opts,tier,R){
     const length=segs.reduce((a,s)=>a+s.length,0); diag.lens.push(Math.round(length));
     const path=[], roadMask=[], legOf=[];
     segs.forEach((sg,i)=>{ const from=i?1:0; for(let j=from;j<sg.path.length;j++){ path.push(sg.path[j]); roadMask.push(sg.road?1:0); legOf.push(i); } });
-    const cand={start:{cells:[c0,c1],cell:c1}, waypoints:wps, segs, length, path, roadMask, ringK:k};
+    const cand={start:{cells:[c0,c1],cell:c1}, waypoints:wps, segs, length, path, roadMask, legOf, ringK:k};
     /* how good is it: in the asked length, never crossing itself, never running
        beside itself, round, and on the hillsides */
     cand.q=quality(cand,slope,nx,cell,legOf);
@@ -405,17 +418,46 @@ function headingOf(a,b,nx){ const ax=a%nx, ay=(a-ax)/nx, bx=b%nx, by=(b-bx)/nx, 
    slope is under 0.3 and the line is not a hairpin; on a singletrack leg, only
    where it crosses flat open ground (under 0.1) in a straight line. Either way
    a stretch must be at least 120 m long to count (short gaps are closed first),
-   and the start strip is always two-track. Returned per path point (mask), plus
-   the share of the length. */
+   and the start strip is always two-track; then passing places (below). Returned
+   per path point (mask), plus the share of the length. */
 function twoTrack(L,slope,nx,cell){
   const P=L.path, n=P.length, xy=P.map(c=>[c%nx,(c-c%nx)/nx]), road=L.roadMask||[];
   const seg=(i)=>i>0?Math.hypot(xy[i][0]-xy[i-1][0],xy[i][1]-xy[i-1][1])*cell:0;
-  const stripN=L.segs[0].path.length, m=new Uint8Array(n);
+  const stripN=L.segs[0].path.length, legOf=L.legOf||[], lastLeg=legOf.length?legOf[n-1]:-1;
+  const bendAt=new Float32Array(n);
   for(let i=0;i<n;i++){ const a=xy[Math.max(0,i-3)], b=xy[i], c=xy[Math.min(n-1,i+3)];
-    const h1=Math.atan2(b[1]-a[1],b[0]-a[0]), h2=Math.atan2(c[1]-b[1],c[0]-b[0]); let d=Math.abs(h2-h1); if(d>Math.PI) d=2*Math.PI-d;
-    const s=slope[P[i]]; m[i]=(i<stripN)||(road[i]?(s<0.3&&d<2.2):(s<0.1&&d<0.6))?1:0; }
-  for(let i=1;i<n;i++) if(!m[i]){ let j=i; while(j<n&&!m[j]) j++; if(j<n && j-i<=3 && m[i-1]) for(let t=i;t<j;t++) m[t]=1; i=j; }   // close short gaps
-  for(let i=0;i<n;){ if(!m[i]){ i++; continue; } let j=i, len=0; while(j<n&&m[j]){ len+=seg(j); j++; } if(i>=stripN && len<120) for(let t=i;t<j;t++) m[t]=0; i=j; }
+    const h1=Math.atan2(b[1]-a[1],b[0]-a[0]), h2=Math.atan2(c[1]-b[1],c[0]-b[0]); let d=Math.abs(h2-h1); if(d>Math.PI) d=2*Math.PI-d; bendAt[i]=d; }
+  /* a road between the first and last legs keeps to side slopes under `inner`;
+     0.3 at first, 0.15 when that leaves more than half the lap two-track (a lap
+     that is mostly road is not a mountain-bike race) */
+  const build=(inner)=>{ const m=new Uint8Array(n);
+    for(let i=0;i<n;i++){ const s=slope[P[i]], d=bendAt[i], end=legOf[i]===1||legOf[i]===lastLeg;
+      m[i]=(i<stripN)||(road[i]?(s<(end?0.3:inner)&&d<2.2):(s<0.1&&d<0.6))?1:0; }
+    for(let i=1;i<n;i++) if(!m[i]){ let j=i; while(j<n&&!m[j]) j++; if(j<n && j-i<=3 && m[i-1]) for(let t=i;t<j;t++) m[t]=1; i=j; }   // close short gaps
+    for(let i=0;i<n;){ if(!m[i]){ i++; continue; } let j=i, len=0; while(j<n&&m[j]){ len+=seg(j); j++; } if(i>=stripN && len<120) for(let t=i;t<j;t++) m[t]=0; i=j; }
+    return m; };
+  const share=(m)=>{ let tl=0, all=0; for(let i=1;i<n;i++){ const d=seg(i); all+=d; if(m[i]&&m[i-1]) tl+=d; } return all?tl/all:0; };
+  let m=build(0.3); if(share(m)>0.5) m=build(0.15);
+  /* PASSING PLACES: wherever singletrack runs on for more than 2 km, the gentlest
+     straight 90 m near the middle of it is widened to two-track (side slope under
+     0.3, no hairpin) - what a trail builder does - until no such stretch is left
+     or the ground offers no place. */
+  const cum=[0]; for(let i=1;i<n;i++) cum.push(cum[i-1]+seg(i));
+  const GAP=2000, WIN=90, tried=new Set();
+  for(let guard=0;guard<30;guard++){
+    let best=null;
+    for(let i=0;i<n;){ if(m[i]){ i++; continue; } let j=i; while(j<n&&!m[j]) j++; const len=cum[Math.min(j,n-1)]-cum[i]; if(!tried.has(i) && len>GAP && (!best||len>best.len)) best={i0:i,i1:Math.min(j,n-1),len}; i=j; }
+    if(!best) break;
+    const centre=(cum[best.i0]+cum[best.i1])/2; let pick=null;
+    for(let a=best.i0+3;a<best.i1-3;a++){ let b=a; while(b<best.i1-3 && cum[b]-cum[a]<WIN) b++; if(cum[b]-cum[a]<WIN) break;
+      let ms=0, bend=0; for(let t=a;t<=b;t++){ ms=Math.max(ms,slope[P[t]]); }
+      { const h1=Math.atan2(xy[Math.min(n-1,a+3)][1]-xy[a][1],xy[Math.min(n-1,a+3)][0]-xy[a][0]), h2=Math.atan2(xy[b][1]-xy[Math.max(0,b-3)][1],xy[b][0]-xy[Math.max(0,b-3)][0]); bend=Math.abs(h2-h1); if(bend>Math.PI) bend=2*Math.PI-bend; }
+      if(ms>=0.3 || bend>1.2) continue;
+      const sc=ms+0.0002*Math.abs((cum[a]+cum[b])/2-centre);
+      if(!pick||sc<pick.sc) pick={a,b,sc}; }
+    if(!pick){ tried.add(best.i0); continue; }
+    for(let t=pick.a;t<=pick.b;t++) m[t]=1;
+  }
   let tl=0, all=0; for(let i=1;i<n;i++){ const d=seg(i); all+=d; if(m[i]&&m[i-1]) tl+=d; }
   return {mask:m,frac:all?tl/all:0};
 }

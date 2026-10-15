@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html · v2.1 · 2026-10-14
+  race.html · v2.2 · 2026-10-14
   a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
@@ -45,6 +45,9 @@
 ==========================================================================
 
   CHANGED
+    v2.2  rider cards: a plain description of each rider and bars for the new
+          engine (aerobic power, reserve, sprint, recovery, race craft); the
+          board and the physics strip show the reserve
     v2.1  descending skill and heat matter (race_sim v2.1); the chase camera keeps
           its distance round switchbacks (race_chase3d v1.1); time doubles past 40
           race-minutes; the climb bar scaled to the new 3.4-4.4 W/kg field
@@ -54,8 +57,6 @@
           energy and the time down, riders wear random three-digit plates
     v1.2  declares WALL_SECONDS_PER_RUN (690 s), so a count of three or more
           races is not cut by the stall watchdog
-    v1.1  CONFIG restored - the 2026-09-13 rotateTo rewrite had deleted the
-          whole block, so every tick threw and the page froze on its name
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -250,7 +251,7 @@ function startRoster(){
   const r=courseRect(); sizeUI(); const b=leftColumn(ui.width,ui.height,true).map;
   const sc=Math.min(b.W/r.w, b.H/r.h); painter=StrataView.mapPainter(view,r,Math.round(r.w*sc),Math.round(r.h*sc));
   heliOn=false; heliAt=performance.now();
-  Wall.lane('Race day: '+day.label+'. Eight riders, each drawn at random: climb, sprint, sight, skill, nerve, stamina and heat.',{hold:12000});
+  Wall.lane('Race day: '+day.label+'. Eight riders drawn at random: an engine shaped by fibre type, the judgement to spend it, and the skill and nerve to descend.',{hold:12000});
 }
 /* THE LEFT COLUMN: the map, and in the race the place chart under it (Joe,
    2026-10-13). One function, so the painter, the helicopter and the frame agree. */
@@ -498,32 +499,72 @@ function drawRiders(M){
   }
 }
 /* act 3: the cards; act 5: the same cards ranked by finish, with the tallies */
+/* WHO EACH RIDER IS, in a sentence or two (Joe, 2026-10-14: "make sure they
+   have an interpretable description"). The engine first - fibre type and what
+   stands out against THIS field - then the racer: craft, descending, heat,
+   nerve. Candidates run from fullest to barest; the card takes the fullest that
+   fits on two lines. */
+function blurbs(r,field){
+  const better=(f)=>field.filter(o=>f(o)>f(r)).length, worse=(f)=>field.filter(o=>f(o)<f(r)).length;
+  const eng=[];
+  if(better(o=>o.wkg)<=1) eng.push('strong on long climbs'); else if(worse(o=>o.wkg)<=1) eng.push('weak on long climbs');
+  if(better(o=>o.E0)<=1) eng.push('a big reserve for steep pitches'); else if(worse(o=>o.E0)===0) eng.push('little in reserve');
+  if(better(o=>o.pmax)===0) eng.push('the hardest sprint here');
+  if(worse(o=>o.recMul)<=1) eng.push('recovers fast'); else if(better(o=>o.recMul)<=1) eng.push('slow to recover');
+  const type=(r.fast<0.4?'A diesel':r.fast>0.6?'Explosive':'An all-rounder')+' ('+Math.round(100*r.fast)+'% fast-twitch)';
+  const rac=[];
+  if(r.craft>0.75) rac.push('races smart'); else if(r.craft<0.25) rac.push('races on instinct');
+  if(r.execution>0.8) rac.push('a gifted descender'); else if(r.execution<0.35) rac.push('timid downhill');
+  if(r.heat>0.85) rac.push('thrives in heat'); else if(r.heat<0.3) rac.push('wilts in heat');
+  if(r.nerve>0.88) rac.push('takes risks');
+  const cap=(t)=>t?t[0].toUpperCase()+t.slice(1):'';
+  const s1=(n)=>type+(n&&eng.length?': '+eng.slice(0,n).join(', ')+'.':'.');
+  const s2=(n)=>n&&rac.length?' '+cap(rac.slice(0,n).join(', '))+'.':'';
+  return [s1(2)+s2(2), s1(2)+s2(1), s1(1)+s2(1), s1(1), s1(0)];
+}
+/* the fullest candidate that wraps into maxLines at the current font */
+function fitLines(cands,maxW,maxLines){
+  for(let ci=0;ci<cands.length;ci++){ const words=cands[ci].split(' '), lines=[]; let cur='';
+    for(const wd of words){ const t=cur?cur+' '+wd:wd; if(uctx.measureText(t).width<=maxW) cur=t; else { lines.push(cur); cur=wd; } }
+    if(cur) lines.push(cur);
+    if(lines.length<=maxLines || ci===cands.length-1) return lines.slice(0,maxLines); }
+  return [];
+}
+/* half the reserve back, easing to 100 W under aerobic power (Skiba's fit x the
+   rider's own recovery factor), in minutes */
+const halfBack=(r)=>0.693*(546*Math.exp(-1)+316)*r.recMul/60;
+/* act 3: the cards; act 5: the same cards ranked by finish, with the tallies */
 function drawRoster(W,H,results){
   const SX=134*WU, SY=76*WU, floor=(200*TS+260)*WU, top=SY+T('t1')*1.5, gap=28*WU;   // the lane needs the bottom band
   const cols=4, rows=2, cw=(W-2*SX-(cols-1)*gap)/cols, ch=(H-floor-top-(rows-1)*gap)/rows;
-  const bars=[['climb',r=>(r.wkg-3.3)/1.2,r=>r.wkg.toFixed(1)+' W/kg'],['sprint',r=>(r.sprint-650)/600,r=>Math.round(r.sprint)+' W'],
-              ['reads the ground',r=>r.perception,null],['rides the limit',r=>r.execution,null],['dares',r=>r.nerve,null],['lasts',r=>(r.stamina-45)/65,null],['takes the heat',r=>r.heat,null]];
+  /* the engine first (aerobic power, reserve, sprint, recovery), then the racer */
+  const bars=[['aerobic power',r=>(r.wkg-3.0)/1.9,r=>r.wkg.toFixed(1)+' W/kg'],['reserve',r=>(r.E0-8000)/26000,r=>(r.E0/1000).toFixed(0)+' kJ'],
+              ['sprint',r=>(r.pmax-600)/1300,r=>Math.round(r.pmax)+' W'],['recovery',r=>(1.75-r.recMul)/1.2,r=>'half in '+halfBack(r).toFixed(0)+' min'],
+              ['race craft',r=>r.craft,null],['descends',r=>r.execution,null],['reads the ground',r=>r.perception,null],['dares',r=>r.nerve,null],['takes the heat',r=>r.heat,null]];
   const list=results?race.riders.slice().sort((a,b)=>{ if(a.finish&&b.finish) return a.finish-b.finish; if(a.finish) return -1; if(b.finish) return 1; return a.pos-b.pos; }):riders;
   list.forEach((rd,i)=>{
     const x=SX+(i%cols)*(cw+gap), y=top+Math.floor(i/cols)*(ch+gap);
     uctx.fillStyle=PLATE; roundRect(uctx,x,y,cw,ch,16*WU); uctx.fill(); uctx.strokeStyle=EDGE; uctx.lineWidth=WU; uctx.stroke();
-    const px=x+34*WU; let py=y+34*WU+T('t3');
+    const px=x+34*WU, bw=cw-68*WU; let py=y+30*WU+T('t3');
     uctx.fillStyle=rd.color; uctx.fillRect(px,py-T('t3')*0.8,T('t3')*0.8,T('t3')*0.8);
     uctx.fillStyle=INK; uctx.font='300 '+T('t3')+'px '+UI; uctx.textAlign='left'; uctx.textBaseline='alphabetic';
     uctx.fillText((results?(i+1)+'  ':'')+'#'+rd.num+'  '+rd.name,px+T('t3')*1.1,py);
     uctx.font='400 '+T('t4')+'px '+MONO; uctx.fillStyle=INK2; uctx.textAlign='right';
     uctx.fillText(results?(rd.finish?clockStr(rd.finish):rd.status==='out'?'OUT':'DNF'):Math.round(rd.kg)+' KG',x+cw-34*WU,py);
-    if(results){ const t=RaceSim.tally(rd); py+=T('t4')*1.5; uctx.textAlign='left'; uctx.fillStyle=WARM;
+    uctx.textAlign='left';
+    if(results){ const t=RaceSim.tally(rd); py+=T('t4')*1.5; uctx.fillStyle=WARM;
       uctx.fillText(Math.round(t.kcal)+' KCAL · '+t.litres.toFixed(1)+' L SWEAT · '+Math.round(t.climbedFt)+' FT CLIMBED',px,py); py+=T('t4')*1.4;
       uctx.fillText('PEAK CORE '+t.peakCore.toFixed(1)+' °C · '+rd.crashes+(rd.crashes===1?' CRASH':' CRASHES')+(rd.heatStops?' · '+rd.heatStops+' HEAT STOP'+(rd.heatStops>1?'S':''):''),px,py); }
-    py+=T('t4')*1.6;
-    const rowH=(ch-(py-y)-24*WU)/bars.length, bw=cw-68*WU;
+    else { uctx.font='300 '+T('t4')+'px '+UI; uctx.fillStyle=INK; py+=T('t4')*0.25;
+      for(const l of fitLines(blurbs(rd,riders),bw,2)){ py+=T('t4')*1.28; uctx.fillText(l,px,py); } }
+    py+=T('t4')*0.7;
+    const rowH=(ch-(py-y)-18*WU)/bars.length;
     for(const [k,fn,txt] of bars){
       uctx.fillStyle=INK2; uctx.font='400 '+T('t4')+'px '+MONO; uctx.textAlign='left'; uctx.fillText(k.toUpperCase(),px,py+T('t4'));
-      if(txt){ uctx.textAlign='right'; uctx.fillText(txt(rd),px+bw,py+T('t4')); }
+      if(txt){ uctx.textAlign='right'; uctx.fillText(txt(rd).toUpperCase(),px+bw,py+T('t4')); }
       const v=Math.max(0.03,Math.min(1,fn(rd)));
-      uctx.fillStyle='rgba(255,255,255,.10)'; uctx.fillRect(px,py+T('t4')*1.35,bw,10*WU);
-      uctx.fillStyle=WARM; uctx.fillRect(px,py+T('t4')*1.35,bw*v,10*WU);
+      uctx.fillStyle='rgba(255,255,255,.10)'; uctx.fillRect(px,py+T('t4')*1.3,bw,9*WU);
+      uctx.fillStyle=WARM; uctx.fillRect(px,py+T('t4')*1.3,bw*v,9*WU);
       py+=rowH;
     }
   });
@@ -554,7 +595,7 @@ function drawBoard(W,H){
     if(r.status==='out') live='over the edge on the '+(r.seg?r.seg.bed:'trail');
     else if(r.finish) live='finished · '+r.crashes+(r.crashes===1?' crash':' crashes');
     else if(r.status==='down') live='down on the '+(r.seg?r.seg.bed:'trail')+' · up in '+Math.ceil(r.down)+' s';
-    else live=(r.v*3.6).toFixed(0)+' km/h · '+Math.round(r.P||0)+' W · '+Math.round(100*r.E/r.E0)+' % · '+r.core.toFixed(1)+'° · '+(r.mode||'')+(r.seg?' · '+r.seg.bed:'');
+    else live=(r.v*3.6).toFixed(0)+' km/h · '+Math.round(r.P||0)+' W · reserve '+Math.round(100*r.E/r.E0)+'% · '+(r.mode||'')+' · '+r.core.toFixed(1)+'°'+(r.seg?' · '+r.seg.bed:'');
     uctx.font='400 '+T('t4')+'px '+MONO; uctx.fillStyle=INK2; uctx.textAlign='left';
     const room=x+bw-30*WU-(px+T('t3')*0.95);
     while(uctx.measureText(live).width>room && live.lastIndexOf(' · ')>0) live=live.slice(0,live.lastIndexOf(' · '));
@@ -619,7 +660,7 @@ function physicsStrip(sub,RW,RH,k4,pad){
   const line1=fit(['#'+sub.num+' '+sub.name.toUpperCase(),(sub.mode||'').toUpperCase(),(sg.grade>0?'+':'')+Math.round(sg.grade*100)+' %',sg.two?'TWO-TRACK':'SINGLETRACK',sg.bed.toUpperCase()+(sg.rough>0.4?' LOOSE':' GRIPPY')]);
   const line2=fit(sub.status==='riding'?['LIMIT '+pct(sub.vlim||sg.vlim),'SEES '+pct(sub.perceived||sg.vlim),'AT '+pct(sub.v)+' KM/H','μ'+sg.mu.toFixed(2),sg.exposed?'EDGE':'']:
                sub.status==='down'?['DOWN','UP IN '+Math.ceil(sub.down)+' S','ENERGY '+Math.round(100*sub.E/sub.E0)+' %']:[sub.status.toUpperCase()]);
-  const line3=fit([Math.round(sub.P||0)+'/'+Math.round(sub.wkg*sub.kg)+' W',Math.round(100*sub.E/sub.E0)+' % LEFT','CORE '+sub.core.toFixed(1)+'°','SWEAT '+sub.sweat.toFixed(1)+' L/H','LOST '+sub.water.toFixed(1)+' L','CLIMB '+Math.round(sub.climbed*3.281)+' FT']);
+  const line3=fit([Math.round(sub.P||0)+' W OF '+Math.round(RaceSim.cpW(sub))+' AEROBIC','RESERVE '+(sub.E/1000).toFixed(0)+'/'+(sub.E0/1000).toFixed(0)+' KJ','CORE '+sub.core.toFixed(1)+'°','SWEAT '+sub.sweat.toFixed(1)+' L/H','LOST '+sub.water.toFixed(1)+' L','CLIMB '+Math.round(sub.climbed*3.281)+' FT']);
   cctx.fillStyle='rgba(240,246,253,.95)'; cctx.fillText(line1,pad,RH-sh*0.78);
   cctx.fillStyle='rgba(210,224,242,.80)'; cctx.fillText(line2,pad,RH-sh*0.50); cctx.fillText(line3,pad,RH-sh*0.22);
 }

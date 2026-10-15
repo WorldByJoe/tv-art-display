@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.6 · 2026-10-13
+   about.js · v2.7 · 2026-10-14
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,11 +35,12 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v2.7  The Race: once the riders are on, the card explains the engine, the
+           trade-offs of fibre type and every trait (the land card before that)
      v2.6  The Race: one lap laid round the map, two-track share, distance in place of laps
      v2.5  Snowflakes: three settings (kind, light, cloud strip), altitude, rime, the mitten
      v2.4  Snowflakes: the crystal's own cloud (height, updraft, trip) and the shape grown so far
      v2.3  Snowflakes: the cloud's temperature and humidity, the shape they grow, the fall
-     v2.2  Kite Flying: choose the kite with left/right; mph, feet and pounds
 */
 (function (global) {
   'use strict';
