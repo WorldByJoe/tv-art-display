@@ -17,7 +17,7 @@ a pointer. A standalone copy starts itself again when a run ends; add
 - Nothing is stored. The whole book is fetched at the moment the piece begins - a few hundred kilobytes - a passage is chosen from it, and the rest is thrown away. Two visits to the same book are two different pages.
 - Standard Ebooks is the corpus because it is the only large public-domain library that sends the CORS header a page opened from a file needs. Project Gutenberg does not, which is why it is not the source here.
 - Fifty-two works, from Homer to the nineteenth century, and the verse ones are laid out as verse - a line of Hamlet is a line, not reflowed prose.
-- The attribution lands halfway through, by design. A name at the top tells you how to feel about the words before you have read them; a name afterwards tells you what you have just read.
+- The attribution lands fifteen seconds after the last line, by design. A name at the top tells you how to feel about the words before you have read them; a name afterwards tells you what you have just read.
 - How long a line waits before the next one appears is set by the length of the passage, not by a fixed tick, so a short lyric and a long speech both finish arriving at the same point in the turn.
 
 ## Credits

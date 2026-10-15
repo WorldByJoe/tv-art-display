@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.8 · 2026-10-14
+   about.js · v2.9 · 2026-10-15
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,12 +35,14 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v2.9  Reading: the attribution's time comes from the page (15 s after the last line).
+           The Race: during the race the card explains the board and the words for
+           what each rider is doing (the trait card stands with the cards)
      v2.8  The Race: one steady speed of 4-8x, and passing on the singletrack at a risk
      v2.7  The Race: once the riders are on, the card explains the engine, the
            trade-offs of fibre type and every trait (the land card before that)
      v2.6  The Race: one lap laid round the map, two-track share, distance in place of laps
      v2.5  Snowflakes: three settings (kind, light, cloud strip), altitude, rime, the mitten
-     v2.4  Snowflakes: the crystal's own cloud (height, updraft, trip) and the shape grown so far
 */
 (function (global) {
   'use strict';
@@ -79,11 +81,11 @@
         + 'a list of fifty-two works. Dozens of random stretches of the book are scored and '
         + 'the most self-contained one is revealed a line at a time; verse keeps the '
         + 'poet’s own line breaks. The title, author and date are held back until '
-        + 'halfway, so you read it cold first.',
+        + 'the passage has been read, so you read it cold first.',
     params: () => [
       A('Work', () => attribEl.classList.contains('show')
           ? RUN.work.title
-          : 'held back until ' + Math.round(CONFIG.slideSec * CONFIG.attributionAt) + ' s in'),
+          : 'held back until ' + Math.round((RUN.attribMs || 0) / 1000) + ' s in'),
       A('Author', () => attribEl.classList.contains('show')
           ? RUN.work.author + ', ' + RUN.work.dateLabel : null),
       A('Form', () => RUN.p.verse ? 'Verse, the poet’s own line breaks'

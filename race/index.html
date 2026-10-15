@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html · v2.7 · 2026-10-14
+  race.html · v2.8 · 2026-10-15
   a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
@@ -49,6 +49,11 @@
 ==========================================================================
 
   CHANGED
+    v2.8  the course's description waits until the course is drawn, and stands
+          12 s before the cards; pass and crash alerts smaller, two lines each,
+          and no longer repeated under the chase window; a heat stop says so on
+          the board; the results cards drop the climb (every finisher climbed the
+          same) and their lines fit the card
     v2.7  one race speed for the whole race, set from a rehearsal run during the
           cards, and stepped against real time (it ran slow on a busy frame and
           x4 once the winner was home); the finishers gather at the line with
@@ -60,7 +65,6 @@
           lists them after everyone still in it)
     v2.4  singletrack passes (race_sim v3.1) get their own alert with the risk the
           rider took; a fall while passing, and a rider taken down, say so
-    v2.3  loads race_flora.js: the chase window's plants are placed by ecology
 -->
 <style>
   html, body { margin:0; padding:0; height:100%; background:#04060c; overflow:hidden; }
@@ -80,8 +84,11 @@
     font:400 var(--t4)/1.3 var(--font-num); letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); white-space:nowrap;
     text-shadow:0 1px 5px rgba(0,0,0,.85); display:none; max-width:calc(1280*var(--wu)); text-align:right; }
   body .instr.bl { bottom: calc(var(--band) + 120*var(--wu)); }
-  /* a crash alert is two short lines: who and where, then how hard and how long */
-  body .moment { white-space:pre-line; max-width:calc(2100*var(--wu)); }   /* never across into the chase window */
+  /* a pass or crash alert is two short lines: who and what, then how hard or how
+     risky. The wall's Moment is sized for four words; at that size these broke
+     wherever the box ran out (Joe, 2026-10-15: "too big and there are weird line
+     breaks"), so here it is the board's size and breaks only where the page does */
+  body .moment { white-space:pre-line; max-width:calc(2100*var(--wu)); font-size:var(--t3); letter-spacing:.07em; line-height:1.4; }   /* never across into the chase window */
   #pname { position:fixed; left:var(--safe-x); top:var(--safe-y); z-index:6;
     font:italic 400 var(--t1)/1.1 Georgia, "Times New Roman", serif; color:var(--ink);
     text-shadow:0 1px 5px rgba(0,0,0,.85), 0 0 18px rgba(0,0,0,.6); }
@@ -144,6 +151,7 @@ const CONFIG = {
   timeScaleMax: 8,        // and at the most
   raceSec: 480,           // the speed between them is the one that runs the race in eight minutes
   gatherSec: 15,          // the finishers at the line, the place chart complete
+  courseSec: 12,          // the drawn course and its description, before the cards
   rosterSec: 30,          // how long the cards stand
   resultsSec: 45,         // the ranked cards at the end
   mapSec: 40, heliSec: 30,  // the overview alternates: flat map, then the helicopter orbit
@@ -215,7 +223,7 @@ function startNatMap(){
   natMap=StrataView.naturalPainter(view,{x0:0,y0:0,w:f.nxf,h:f.nyf},Math.round(f.nxf*sc),Math.round(f.nyf*sc),veg); natAt=0;
 }
 /* flash text goes over the upper part of the map, where nothing else lives */
-function flash(text,force){ const at=mapFrame?{x:(mapFrame.x+mapFrame.W/2)/DPR, y:(mapFrame.y+mapFrame.H*0.2)/DPR}:null; Wall.moment(text, Object.assign(at?{at,exact:true}:{},force?{force:true}:{})); }
+function flash(text,force){ const at=mapFrame?{x:(mapFrame.x+mapFrame.W/2)/DPR, y:(mapFrame.y+mapFrame.H*0.2)/DPR}:null; return Wall.moment(text, Object.assign(at?{at,exact:true}:{},force?{force:true}:{})); }   // false if the wall held it back
 /* HOW HARD A CRASH WAS (Joe, 2026-10-13: "tell us how severe the crash is
    (joules?) and how long the rider will be down"). The sim grades a crash by
    the energy the rider sheds per kilogram (race_sim.js crash()); the alert
@@ -226,7 +234,7 @@ function crashWords(e){
   const kJ=(e.e*e.rider.kg/1000).toFixed(1)+' kJ';
   return e.kind==='out'?band+' · '+kJ:band+' · '+kJ+' · down '+Math.round(e.down)+' s';
 }
-let w=null, act=0, t0=performance.now(), actAt=performance.now(), frozen=false, plan=null;
+let w=null, act=0, t0=performance.now(), actAt=performance.now(), frozen=false, plan=null, courseAt=0;
 let mapAlpha=0, revealed=0, worker=null, busy=false, planner=null;
 let trail=null, riders=null, race=null, fav=null, cam=null, director={subject:null,until:0,text:'',kind:''}, lastEvent=0;
 
@@ -259,20 +267,23 @@ function planOpts(){
 function onPlan(L){
   plan=L; revealed=0;
   if(!L){ Wall.lane('No rideable loop on this land. A new one folds.'); Wall.after(8000,()=>nextWorld()); return; }
-  /* Name the course by what it IS, measured off its own line, not by the cap
-     the router was given. An easy course zigzags because it may not climb hard;
-     a hard one goes at the pitch head on and pays for it in the legs. */
+}
+/* Name the course by what it IS, measured off its own line, not by the cap the
+   router was given. An easy course zigzags because it may not climb hard; a hard
+   one goes at the pitch head on and pays for it in the legs. Said once the course
+   is DRAWN (Joe, 2026-10-15: the description came up before the course did). */
+function courseWords(L){
   const g=L.grade||{mean:0,max:0};
   const say={easy:'An easy course',medium:'A middling course',hard:'A hard course'}[L.tier]||'A course';
   const two=L.twoTrack?L.twoTrack.frac:0;
-  Wall.lane(say+': one lap of '+(L.length/1000).toFixed(1)+' km, '+Math.round(L.climb)+' m of climbing, '+
-            Math.round(100*two)+' % of it two-track. Grades average '+(100*g.mean).toFixed(1)+' % and reach '+
-            (100*g.max).toFixed(0)+' %; the singletrack is benched into the hillsides, and only cliffs are off limits.');
+  return say+': one lap of '+(L.length/1000).toFixed(1)+' km, '+Math.round(L.climb)+' m of climbing, '+
+         Math.round(100*two)+' % of it two-track. Grades average '+(100*g.mean).toFixed(1)+' % and reach '+
+         (100*g.max).toFixed(0)+' %; the singletrack is benched into the hillsides, and only cliffs are off limits.';
 }
 function nextWorld(){ const next=(seed*1664525+1013904223)>>>0; if(PINNED) location.replace(SELF+'?pin&seed='+next); else newWorld(next); }
 
 function newWorld(s){
-  seed=s; w=Strata.makeWorld(seed); view.setWorld(w); frozen=false; plan=null; trail=null; riders=null; race=null; mapAlpha=0; revealed=0; veg=null; natMap=null; natAt=0;
+  seed=s; w=Strata.makeWorld(seed); view.setWorld(w); frozen=false; plan=null; courseAt=0; trail=null; riders=null; race=null; mapAlpha=0; revealed=0; veg=null; natMap=null; natAt=0;
   act=1; t0=actAt=performance.now(); cv.style.opacity='1'; chaseCv.style.display='none'; chaseCap.style.display='none'; chase3dCv.style.display='none';
   Wall.clearEpisode(); Wall.clearTimers();
   if(SYNC_ACT){
@@ -346,7 +357,10 @@ function tick(){
   }
   else if(act===2){ mapAlpha=Math.min(1,(now-actAt)/1600); cv.style.opacity=String(1-mapAlpha);
     /* the search, then the course, drawn over about eighteen seconds whatever their size */
-    if(plan){ const total=plan.segs.reduce((a,s)=>a+s.explored.length,0)+plan.path.length*2+320; revealed+=Math.max(0.4,total/40/180); if(revealed*40>total) startRoster(); } }
+    if(plan && !courseAt){ const total=plan.segs.reduce((a,s)=>a+s.explored.length,0)+plan.path.length*2+320; revealed+=Math.max(0.4,total/40/180);
+      if(revealed*40>total){ courseAt=now; Wall.lane(courseWords(plan),{hold:CONFIG.courseSec*1000}); } }
+    /* then the drawn course stands with its description before the cards */
+    else if(plan && now-courseAt>CONFIG.courseSec*1000) startRoster(); }
   else if(act===3){ rehearse(12); if(now-actAt>CONFIG.rosterSec*1000) startRace(); }
   else if(act===4){
     /* step the race to where the clock says it is. A gap of more than half a
@@ -374,8 +388,8 @@ function passes(){
   if(prevD && race.t>30) for(const a of R){ if(a.status!=='riding') continue;
     for(const b of R){ if(b===a || b.status!=='riding') continue;
       if(prevD[a.i]<prevD[b.i] && D(a)>=D(b) && D(a)-D(b)<15 && !(a.stpassAt!=null && race.t-a.stpassAt<4)){   // a singletrack pass has its own alert (direct)
-        flash('#'+a.num+' '+a.name+' passes #'+b.num);
-        director={subject:a,until:now+6000,kind:'pass',text:'#'+a.num+' '+a.name+' passes #'+b.num+' '+b.name}; } } }
+        const shown=flash('#'+a.num+' '+a.name+' passes #'+b.num);     // the caption repeats it only if the alert was held back
+        director={subject:a,until:now+6000,kind:'pass',text:shown?'following #'+a.num+' '+a.name:'#'+a.num+' '+a.name+' passes #'+b.num+' '+b.name}; } } }
   prevD=R.map(D);
 }
 /* the place chart's record: each rider's place against their own distance */
@@ -416,12 +430,15 @@ function direct(sync){
   /* new events since last look */
   for(let i=lastEvent;i<race.events.length;i++){ const e=race.events[i];
     /* a pass off the tread on singletrack, with the chance of a fall the rider took on */
-    if(e.kind==='stpass'){ director={subject:e.rider,until:now+6000,kind:'pass',text:'#'+e.rider.num+' '+e.rider.name+' round #'+e.passed.num+' · '+Math.round(100*e.risk)+'% risk'};
-      if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' squeezes past #'+e.passed.num+'\non the singletrack · a '+Math.round(100*e.risk)+'% risk'); }
-    else if(e.kind==='crash' && e.tangled){ director={subject:e.rider,until:now+7000,kind:'crash',text:'#'+e.rider.num+' '+e.rider.name+' taken down · '+Math.round(e.down)+' s'}; if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' taken down by #'+e.tangled.num+'\n'+crashWords(e),true); }
-    else if(e.kind==='crash' && e.passing){ director={subject:e.rider,until:now+7000,kind:'crash',text:'#'+e.rider.num+' '+e.rider.name+' down passing · '+(e.e*e.rider.kg/1000).toFixed(1)+' kJ'}; if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' falls passing #'+e.passing.num+'\n'+crashWords(e),true); }
-    else if(e.kind==='crash'){ director={subject:e.rider,until:now+7000,kind:'crash',text:'#'+e.rider.num+' '+e.rider.name+' down · '+(e.e*e.rider.kg/1000).toFixed(1)+' kJ · '+Math.round(e.down)+' s'}; if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' down on the '+e.seg.bed+'\n'+crashWords(e),true); }
-    else if(e.kind==='out'){ director={subject:e.rider,until:now+8000,kind:'out',text:'#'+e.rider.num+' '+e.rider.name+' out · '+(e.e*e.rider.kg/1000).toFixed(1)+' kJ'}; if(!sync) Wall.lane('#'+e.rider.num+' '+e.rider.name+' crashes on the '+e.seg.bed+(e.seg.exposed?' and goes over the edge':'')+': '+(e.e*e.rider.kg/1000).toFixed(1)+' kJ, too hurt to go on. Out of the race.'); }
+    /* the caption under the window says only whom it follows when an alert or the
+       lane is telling the story (Joe, 2026-10-15: the same words in two places) */
+    const follow=(r)=>'following #'+r.num+' '+r.name;
+    if(e.kind==='stpass'){ const shown=!sync && flash('#'+e.rider.num+' '+e.rider.name+' squeezes past #'+e.passed.num+'\non the singletrack · a '+Math.round(100*e.risk)+'% risk');
+      director={subject:e.rider,until:now+6000,kind:'pass',text:shown?follow(e.rider):'#'+e.rider.num+' '+e.rider.name+' round #'+e.passed.num+' · '+Math.round(100*e.risk)+'% risk'}; }
+    else if(e.kind==='crash' && e.tangled){ director={subject:e.rider,until:now+7000,kind:'crash',text:follow(e.rider)}; if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' taken down by #'+e.tangled.num+'\n'+crashWords(e),true); }
+    else if(e.kind==='crash' && e.passing){ director={subject:e.rider,until:now+7000,kind:'crash',text:follow(e.rider)}; if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' falls passing #'+e.passing.num+'\n'+crashWords(e),true); }
+    else if(e.kind==='crash'){ director={subject:e.rider,until:now+7000,kind:'crash',text:follow(e.rider)}; if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' down on the '+e.seg.bed+'\n'+crashWords(e),true); }
+    else if(e.kind==='out'){ director={subject:e.rider,until:now+8000,kind:'out',text:follow(e.rider)}; if(!sync) Wall.lane('#'+e.rider.num+' '+e.rider.name+' crashes on the '+e.seg.bed+(e.seg.exposed?' and goes over the edge':'')+': '+(e.e*e.rider.kg/1000).toFixed(1)+' kJ, too hurt to go on. Out of the race.'); }
     else if(e.kind==='finish'&&e.place===1){ director={subject:e.rider,until:now+8000,kind:'finish',text:'#'+e.rider.num+' '+e.rider.name+' takes the win'}; }
     else if(e.kind==='lap'&&e.rider.pos===1&&e.lap<race.laps){ if(!sync) flash('#'+e.rider.num+' '+e.rider.name+' leads into lap '+(e.lap+1)); }
   }
@@ -633,9 +650,13 @@ function drawRoster(W,H,results){
     uctx.fillText(corner,x+cw-34*WU,py);
     if(results && i===0 && rd.finish) drawCup(uctx,x+cw-34*WU-uctx.measureText(corner).width-T('t3')*0.75,py,T('t3')*1.05);   // the winner's trophy
     uctx.textAlign='left';
+    /* the tallies, two lines that must stay inside the card (the climb ran into the
+       next one; Joe, 2026-10-15: every finisher climbed the same, so it is gone) */
     if(results){ const t=RaceSim.tally(rd); py+=T('t4')*1.5; uctx.fillStyle=WARM;
-      uctx.fillText(Math.round(t.kcal)+' KCAL · '+t.litres.toFixed(1)+' L SWEAT · '+Math.round(t.climbedFt)+' FT CLIMBED',px,py); py+=T('t4')*1.4;
-      uctx.fillText('PEAK CORE '+t.peakCore.toFixed(1)+' °C · '+rd.crashes+(rd.crashes===1?' CRASH':' CRASHES')+(rd.heatStops?' · '+rd.heatStops+' HEAT STOP'+(rd.heatStops>1?'S':''):''),px,py); }
+      const fit=(txt)=>{ const tw=uctx.measureText(txt).width; if(tw<=bw) uctx.fillText(txt,px,py);
+        else { uctx.save(); uctx.font='400 '+(T('t4')*bw/tw)+'px '+MONO; uctx.fillText(txt,px,py); uctx.restore(); } };
+      fit(Math.round(t.kcal)+' KCAL · '+t.litres.toFixed(1)+' L SWEAT · '+rd.crashes+(rd.crashes===1?' CRASH':' CRASHES')); py+=T('t4')*1.4;
+      fit('PEAK CORE '+t.peakCore.toFixed(1)+' °C'+(rd.heatStops?' · '+rd.heatStops+' HEAT STOP'+(rd.heatStops>1?'S':''):'')); }
     else { uctx.font='300 '+T('t4')+'px '+UI; uctx.fillStyle=INK; py+=T('t4')*0.25;
       for(const l of fitLines(blurbs(rd,riders),bw,2)){ py+=T('t4')*1.28; uctx.fillText(l,px,py); } }
     py+=T('t4')*0.7;
@@ -685,6 +706,7 @@ function drawBoard(W,H){
     let live;
     if(r.status==='out') live='over the edge on the '+(r.seg?r.seg.bed:'trail');
     else if(r.finish) live='finished · '+r.crashes+(r.crashes===1?' crash':' crashes');
+    else if(r.status==='down' && r.cooling) live='stopped to cool off · core '+r.core.toFixed(1)+'° · rides on in '+Math.ceil(r.down)+' s';
     else if(r.status==='down') live='down on the '+(r.seg?r.seg.bed:'trail')+' · up in '+Math.ceil(r.down)+' s';
     else live=(r.v*3.6).toFixed(0)+' km/h · '+Math.round(r.P||0)+' W · reserve '+Math.round(100*r.E/r.E0)+'% · '+(r.mode||'')+' · '+r.core.toFixed(1)+'°'+(r.seg?' · '+r.seg.bed:'');
     uctx.font='400 '+T('t4')+'px '+MONO; uctx.fillStyle=INK2; uctx.textAlign='left';
@@ -761,7 +783,7 @@ function physicsStrip(sub,RW,RH,k4,pad){
   const room=RW-2*pad, fit=(parts)=>{ let t=parts.filter(Boolean).join(' · '); while(cctx.measureText(t).width>room && t.lastIndexOf(' · ')>0) t=t.slice(0,t.lastIndexOf(' · ')); return t; };
   const line1=fit(['#'+sub.num+' '+sub.name.toUpperCase(),(sub.mode||'').toUpperCase(),(sg.grade>0?'+':'')+Math.round(sg.grade*100)+' %',sg.two?'TWO-TRACK':'SINGLETRACK',sg.bed.toUpperCase()+(sg.rough>0.4?' LOOSE':' GRIPPY')]);
   const line2=fit(sub.status==='riding'?['LIMIT '+pct(sub.vlim||sg.vlim),'SEES '+pct(sub.perceived||sg.vlim),'AT '+pct(sub.v)+' KM/H','μ'+sg.mu.toFixed(2),sg.exposed?'EDGE':'']:
-               sub.status==='down'?['DOWN','UP IN '+Math.ceil(sub.down)+' S','ENERGY '+Math.round(100*sub.E/sub.E0)+' %']:[sub.status.toUpperCase()]);
+               sub.status==='down'?(sub.cooling?['STOPPED TO COOL OFF','RIDES ON IN '+Math.ceil(sub.down)+' S','CORE '+sub.core.toFixed(1)+'°']:['DOWN','UP IN '+Math.ceil(sub.down)+' S','ENERGY '+Math.round(100*sub.E/sub.E0)+' %']):[sub.status.toUpperCase()]);
   const line3=fit([Math.round(sub.P||0)+' W OF '+Math.round(RaceSim.cpW(sub))+' AEROBIC','RESERVE '+(sub.E/1000).toFixed(0)+'/'+(sub.E0/1000).toFixed(0)+' KJ','CORE '+sub.core.toFixed(1)+'°','SWEAT '+sub.sweat.toFixed(1)+' L/H','LOST '+sub.water.toFixed(1)+' L','CLIMB '+Math.round(sub.climbed*3.281)+' FT']);
   cctx.fillStyle='rgba(240,246,253,.95)'; cctx.fillText(line1,pad,RH-sh*0.78);
   cctx.fillStyle='rgba(210,224,242,.80)'; cctx.fillText(line2,pad,RH-sh*0.50); cctx.fillText(line3,pad,RH-sh*0.22);
@@ -813,7 +835,7 @@ function drawInstrument(){
   const clock=(t)=>Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');
   let spec;
   if(act===1) spec={place:'bl',cols:1,rows:[{k:'elapsed',v:Math.round(w.step*w.P.dt/1000)+' thousand years'},{k:'rock removed',v:Math.round(100*w.removed)+' %'},{k:'land',v:frozen?'frozen':'eroding'}]};
-  else if(act===2) spec=plan?{place:'bl',cols:1,rows:[{k:'course',v:(plan.length/1000).toFixed(1)+' km · one lap'},{k:'climbing',v:Math.round(plan.climb)+' m · '+plan.switchbacks+' switchbacks'},{k:'two-track',v:Math.round(100*(plan.twoTrack?plan.twoTrack.frac:0))+' % of it'}]}
+  else if(act===2) spec=plan&&courseAt?{place:'bl',cols:1,rows:[{k:'course',v:(plan.length/1000).toFixed(1)+' km · one lap'},{k:'climbing',v:Math.round(plan.climb)+' m · '+plan.switchbacks+' switchbacks'},{k:'two-track',v:Math.round(100*(plan.twoTrack?plan.twoTrack.frac:0))+' % of it'}]}
                              :{place:'bl',cols:1,rows:[{k:'course',v:'searching…'},{k:'rules',v:'a grade cap · no cliffs'}]};
   else if(act===3 || act===5) spec=null;                             // the cards are the instrument
   else spec=null;                                                    // act 4: the board on the right does this job

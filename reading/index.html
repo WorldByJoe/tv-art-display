@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reading</title>
 <!-- ==========================================================================
-  reading.html · v1.1 · 2026-10-03
+  reading.html · v1.2 · 2026-10-15
   Reading: a passage of real literature, revealed line by line.
 
   Ring stop 12 of 20, one passage per visit, loop:'reload'. 165 s a turn: the
-  lines land on a stagger finishing a third of the way in, and the author,
-  work and date are held back until half way, so the piece is read before it
-  is attributed.
+  lines land on a stagger finishing under a third of the way in, and the
+  author, work and date are held back 15 s past the last line, so the piece
+  is read before it is attributed.
 
   THE CORPUS IS STANDARD EBOOKS and that is not a preference. It is the only
   large public-domain corpus that sends CORS headers, so it is the only one a
@@ -27,6 +27,9 @@
 ==========================================================================
 
   CHANGED
+    v1.2  lines come 10% faster, and the attribution 15 s after the last line
+          rather than at half way - half the old wait of about 30 s (Joe,
+          2026-10-15)
     v1.1  declares WALL_SECONDS_PER_RUN (200 s), so a long passage count is
           not cut by the stall watchdog
     v1.0  versioning starts here; this file predates the scheme
@@ -83,7 +86,7 @@
      hundred years. Whitman needs it; Shakespeare almost never does. */
   #passage .line.verse { padding-left:1.8em; text-indent:-1.8em; }
 
-  /* Author, work and date. Held back until half way through - see CONFIG.
+  /* Author, work and date. Held back until 15 s after the last line - see CONFIG.
 
      THIS IS THE PAYOFF OF THE WHOLE PAGE and it used to arrive, at 82 seconds,
      at 27 and 19 wall px: the two lines you have waited the entire slide for,
@@ -173,8 +176,8 @@
    measure and revealed a wrapped line at a time instead.
 
    THE ATTRIBUTION IS HELD BACK. Joe's ask: the author, the work and the date
-   appear only once the passage has been up for half the slide. So you read it
-   cold first, and then find out what it was - which is a different and better
+   appear only once the passage has been read - first at half the slide, since
+   2026-10-15 fifteen seconds after the last line lands. So you read it cold first, and then find out what it was - which is a different and better
    experience of a famous passage than seeing the label first.
 
    IF THE NETWORK IS DOWN this page hands straight on to the next one, the way
@@ -213,14 +216,15 @@ window.WALL_SECONDS_PER_RUN = 200;
 
 const CONFIG = {
   slideSec:      165,   // the whole turn, start to hand-off
-  /* WHEN THE LABEL ARRIVES, as a fraction of the slide. Joe asked for the
-     attribution to appear once the text has been up for half the slide, so
-     the reveal has to be comfortably finished before this. */
-  attributionAt: 0.50,
-  /* The passage must therefore be fully on screen well before that. Lines are
-     revealed on a stagger; this is where the LAST one lands. */
-  revealDoneAt:  0.34,
-  lineMinMs:     900,   // never faster than this between lines, however short
+  /* WHEN THE LABEL ARRIVES: this long after the last line lands. It used to be
+     at half the slide, about 30 s after the last line; Joe (2026-10-15) asked
+     for that wait cut in half. */
+  attributionLagMs: 15000,
+  /* Lines are revealed on a stagger; this is where the LAST one lands, as a
+     fraction of the slide. 0.34 until 2026-10-15, then 10% sooner (Joe: "Add
+     lines about 10% faster"), and the floor between lines with it. */
+  revealDoneAt:  0.306,
+  lineMinMs:     810,   // never faster than this between lines, however short
   minLines:        8,
   /* FOURTEEN IS A HEIGHT BUDGET, not a taste, and it is now a CEILING rather
      than an estimate. At the wall's 70 px the leading is 116 px, so fourteen
@@ -502,7 +506,7 @@ function paint(p, work){
 
   /* THE HELD-BACK LABEL GOES IN NOW, BEFORE ANYTHING IS MEASURED. You read it
      cold and find out afterwards what it was, so only the opacity is animated
-     later - see CONFIG.attributionAt.
+     later - see CONFIG.attributionLagMs.
 
      Two reasons the words must be in the DOM from the start, and the second
      was being got wrong. Writing the text at reveal time would grow an empty
@@ -532,7 +536,8 @@ function paint(p, work){
   els.forEach((d, i) => later(() => d.classList.add('show'), 900 + i*step));
 
   /* The words went in above, before the fit. Only the fade is scheduled. */
-  later(() => attribEl.classList.add('show'), slideMs*CONFIG.attributionAt);
+  RUN.attribMs = 900 + (els.length - 1)*step + CONFIG.attributionLagMs;
+  later(() => attribEl.classList.add('show'), RUN.attribMs);
 
   later(handOff, slideMs);
 }
@@ -684,7 +689,7 @@ function updateInfo(){
     'corpus    ' + WORKS.length + ' works\n' +
     'source    standardebooks.org · public domain\n' +
     'slide     ' + CONFIG.slideSec + ' s   attribution at ' +
-                   Math.round(CONFIG.slideSec*CONFIG.attributionAt) + ' s\n' +
+                   Math.round((RUN.attribMs || 0)/1000) + ' s\n' +
     'keys      n new passage · i info';
 }
 

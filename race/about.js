@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.8 · 2026-10-14
+   about.js · v2.9 · 2026-10-15
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,12 +35,14 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v2.9  Reading: the attribution's time comes from the page (15 s after the last line).
+           The Race: during the race the card explains the board and the words for
+           what each rider is doing (the trait card stands with the cards)
      v2.8  The Race: one steady speed of 4-8x, and passing on the singletrack at a risk
      v2.7  The Race: once the riders are on, the card explains the engine, the
            trade-offs of fibre type and every trait (the land card before that)
      v2.6  The Race: one lap laid round the map, two-track share, distance in place of laps
      v2.5  Snowflakes: three settings (kind, light, cloud strip), altitude, rime, the mitten
-     v2.4  Snowflakes: the crystal's own cloud (height, updraft, trip) and the shape grown so far
 */
 (function (global) {
   'use strict';
@@ -79,13 +81,32 @@
        explanation of the traits and tradeoffs"). While the land forms and the
        course is cut, the card is about the land and the course; once the riders
        are on screen it is about the riders - what each trait is, and how fibre
-       type trades them off. `what` is a getter so the card can switch. */
+       type trades them off. `what` is a getter so the card can switch.
+       DURING THE RACE (act 4) it explains the board instead, and the one word on
+       each rider's live line (Joe, 2026-10-15: "Some of those terms are unfamiliar
+       to me, like pushing"); the trait card returns with the results. */
     get what() {
+      if (typeof act !== 'undefined' && act === 4)
+        return 'The board lists the riders in place order. Under each name is a live line: speed, watts, the reserve left, what the rider is doing, core temperature and the rock underfoot. The words for what they are doing:';
       return (typeof act !== 'undefined' && act >= 3)
         ? "Each rider's engine has three parts: aerobic power they can hold for an hour, a reserve of 10-35 kJ to spend above it, and a sprint. The reserve refills only when they ease off. Fibre type trades them off: fast-twitch muscle gives a bigger reserve and sprint but refills slowly and makes more heat; slow-twitch gives aerobic power and quick recovery. Race craft decides when the reserve is spent."
         : 'A mountain-bike race on a landscape the wall makes first: folded rock beds rained on and eroded for 300,000 model years, then frozen. A route-finder lays one 4-7 mile lap round the map under a grade limit, benching singletrack into the hillsides with switchbacks where it must, two-track on the gentle ground, and only cliffs off limits. Eight riders race it at one steady speed, 4-8 times real time; passing is easy on the two-track and a risk on the singletrack. Physics sets every corner limit and crash.';
     },
     params: () => {
+      if (typeof act !== 'undefined' && act === 4) return [
+        A('Sprinting', () => 'all out: off the start, and into the finish'),
+        A('Attacking', () => 'a surge to pass on the two-track'),
+        A('Closing a gap', () => 'chasing the rider ahead before the singletrack'),
+        A('Defending', () => 'answering an attack from just behind'),
+        A('Passing', () => 'going round on the singletrack, at a risk'),
+        A('Held up', () => 'stuck behind a slower or fallen rider'),
+        A('Climbing, descending', () => 'their own pace up or down a grade over 3%'),
+        A('Pedalling', () => 'their own pace on the level'),
+        A('Braking', () => 'slowing for a bend, or a descent at their limit'),
+        A('Walking up, down', () => 'off the bike: too steep to climb, or past their skill to descend'),
+        A('Down', () => 'crashed; up again in the seconds shown'),
+        A('Cooling off', () => 'stopped: core temperature over 40 °C'),
+      ];
       if (typeof act !== 'undefined' && act >= 3) {
         const sub = (typeof director !== 'undefined' && director.subject) || null;
         return [
@@ -106,7 +127,7 @@
       }
       return [
         A('Seed', () => String(seed)),
-        A('Stage', () => act === 1 ? (frozen ? 'Land frozen, setting the scale' : 'Land eroding') : 'Searching for a course'),
+        A('Stage', () => act === 1 ? (frozen ? 'Land frozen, setting the scale' : 'Land eroding') : (typeof courseAt !== 'undefined' && courseAt) ? 'Course laid out' : 'Searching for a course'),
         A('Land', () => (w.nx * CONFIG.raceCell / 1000).toFixed(1) + ' × ' + (w.ny * CONFIG.raceCell / 1000).toFixed(1)
                         + ' km, ' + Math.round(w.step * w.P.dt / 1000) + ' thousand years of erosion'),
         A('Rock worn away', () => pct(w.removed, 0)),

@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_sim.js · v3.2 · 2026-10-14
+   race_sim.js · v3.3 · 2026-10-15
    the riders and the race, on a course cut by race_planner.js
    into a frozen Strata world. Joe, 2026-09-07:
      "n riders ... randomly drawn skill and strength for hill climbing ... a
@@ -86,6 +86,9 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v3.3  plainer words for what a rider is doing (Joe, 2026-10-15: "pushing" was
+           unfamiliar): 'walking up' for pushing the bike up a pitch, 'closing a
+           gap' for bridging
      v3.2  riders out of the race are placed after everyone still in it (they kept
            their old place, and looked tied with the rider now holding it)
      v3.1  singletrack passing: a rider stuck behind weighs the risk (passRisk: the
@@ -300,8 +303,9 @@ function engine(rd,P,dt){
   else { const tau=(546*Math.exp(-0.01*Math.max(0,cp-P))+316)*rd.recMul; rd.E=Math.min(rd.E0,rd.E+(rd.E0-rd.E)*dt/tau); }
 }
 /* RACE CRAFT: what the rider asks for this tick, in watts. Sets rd.intent
-   ('sprinting', 'attacking', 'bridging', 'defending' when spending the reserve on
-   purpose; '' otherwise). c = craft, 0 artless .. 1 crafty. */
+   ('sprinting', 'attacking', 'closing a gap', 'defending' when spending the reserve
+   on purpose; '' otherwise). These words go on the board as they are, so they are
+   plain ones (Joe, 2026-10-15). c = craft, 0 artless .. 1 crafty. */
 function pace(race,rd,k,order,seg,idx,cp,cap){
   const L=race.trail.L, c=rd.craft, D=rd.lap*L+rd.s, left=L*race.laps-D, frac=rd.E/rd.E0;
   rd.intent='';
@@ -319,12 +323,12 @@ function pace(race,rd,k,order,seg,idx,cp,cap){
     /* attack the rider just ahead while both are on the two-track (a crafty
        rider only with the reserve to finish the move) */
     if(ah && ah.status==='riding' && gapA>0 && gapA<14 && seg.wideLeft>40 && frac>0.15+0.25*c){ rd.intent='attacking'; return cp+0.5*Math.max(0,cap-cp); }
-    /* bridge before the singletrack: the last 150 m of two-track with a rider
+    /* close the gap before the singletrack: the last 150 m of two-track with a rider
        within 30 m ahead - the place to get by, or wait behind them for a long time */
-    if(c>0.45 && ah && ah.status==='riding' && gapA>0 && gapA<30 && seg.wideLeft<150 && frac>0.25){ rd.intent='bridging'; return cp+0.6*Math.max(0,cap-cp); }
+    if(c>0.45 && ah && ah.status==='riding' && gapA>0 && gapA<30 && seg.wideLeft<150 && frac>0.25){ rd.intent='closing a gap'; return cp+0.6*Math.max(0,cap-cp); }
     /* answer an attack from just behind: the artless always, the crafty only with
        the reserve to spare */
-    if(bh && bh.status==='riding' && gapB>0 && gapB<4 && (bh.intent==='attacking'||bh.intent==='bridging') && frac>(c<0.4?0.08:0.4)){ rd.intent='defending'; return cp+0.5*Math.max(0,cap-cp); }
+    if(bh && bh.status==='riding' && gapB>0 && gapB<4 && (bh.intent==='attacking'||bh.intent==='closing a gap') && frac>(c<0.4?0.08:0.4)){ rd.intent='defending'; return cp+0.5*Math.max(0,cap-cp); }
   }
   /* climbing: a crafty rider spends down to a reserve kept for tactics, spread over
      the rest of the climb; an artless one rides it 30% hard until empty */
@@ -421,7 +425,7 @@ function step(race,dt){
       if(walkDown) vw=Math.min(vw,1.1);
       a=(vw-rd.v)/Math.max(dt,1e-3);
       P=walkDown?0:m*G*sinT*vw*1.15;
-      mode=walkDown?'walking down':'pushing'; rd.pushed=(rd.pushed||0)+vw*dt;
+      mode=walkDown?'walking down':'walking up'; rd.pushed=(rd.pushed||0)+vw*dt;
       rd.mode=mode; rd.P=P; rd.vlim=vlim; rd.perceived=perceived; rd.vt=vt; rd.seg=seg; rd.fat=fat;
       rd.v=Math.max(0.3,rd.v+a*dt); rd.s+=rd.v*dt;
       rd.work+=P*dt; if(seg.grade>0) rd.climbed+=seg.grade*rd.v*dt;
