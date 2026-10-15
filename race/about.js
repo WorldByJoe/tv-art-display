@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.7 · 2026-10-14
+   about.js · v2.8 · 2026-10-14
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,12 +35,12 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v2.8  The Race: one steady speed of 4-8x, and passing on the singletrack at a risk
      v2.7  The Race: once the riders are on, the card explains the engine, the
            trade-offs of fibre type and every trait (the land card before that)
      v2.6  The Race: one lap laid round the map, two-track share, distance in place of laps
      v2.5  Snowflakes: three settings (kind, light, cloud strip), altitude, rime, the mitten
      v2.4  Snowflakes: the crystal's own cloud (height, updraft, trip) and the shape grown so far
-     v2.3  Snowflakes: the cloud's temperature and humidity, the shape they grow, the fall
 */
 (function (global) {
   'use strict';
@@ -83,7 +83,7 @@
     get what() {
       return (typeof act !== 'undefined' && act >= 3)
         ? "Each rider's engine has three parts: aerobic power they can hold for an hour, a reserve of 10-35 kJ to spend above it, and a sprint. The reserve refills only when they ease off. Fibre type trades them off: fast-twitch muscle gives a bigger reserve and sprint but refills slowly and makes more heat; slow-twitch gives aerobic power and quick recovery. Race craft decides when the reserve is spent."
-        : 'A mountain-bike race on a landscape the wall makes first: folded rock beds rained on and eroded for 300,000 model years, then frozen. A route-finder lays one 4-7 mile lap round the map under a grade limit, benching singletrack into the hillsides with switchbacks where it must, two-track on the gentle ground, and only cliffs off limits. Eight riders race it at four times real speed, passing only on the two-track; physics sets every corner limit and crash.';
+        : 'A mountain-bike race on a landscape the wall makes first: folded rock beds rained on and eroded for 300,000 model years, then frozen. A route-finder lays one 4-7 mile lap round the map under a grade limit, benching singletrack into the hillsides with switchbacks where it must, two-track on the gentle ground, and only cliffs off limits. Eight riders race it at one steady speed, 4-8 times real time; passing is easy on the two-track and a risk on the singletrack. Physics sets every corner limit and crash.';
     },
     params: () => {
       if (typeof act !== 'undefined' && act >= 3) {

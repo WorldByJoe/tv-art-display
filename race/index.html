@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html · v2.6 · 2026-10-14
+  race.html · v2.7 · 2026-10-14
   a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
@@ -20,8 +20,11 @@
        they read the ground, how near the limit they can ride, how near it
        they choose to, and how long they last (race_sim.js) - so you know
        who to root for. (No favourite is named - Joe, 2026-09-08.)
-    4. THE RACE. One lap at four times real time (Joe, 2026-10-13: one longer
-       lap, not two), sped up once the winner is home so the field finishes.
+    4. THE RACE. One lap (Joe, 2026-10-13: one longer lap, not two) at ONE
+       speed from gun to finish, 4 to 8 times real time, chosen so the race
+       runs about eight minutes (Joe, 2026-10-14: it sped up as riders
+       finished, and jumped). Then the finishers gather at the line, the
+       winner with a trophy, while the place chart stands complete.
        Under the map, a chart of every rider's place against distance (his
        ask, the same day). One view of the whole
        course with every rider on it (the cached geologic map, LEFT), one
@@ -39,12 +42,17 @@
        seconds on open ground, OUT over an edge. Tired riders make mistakes.
        Then the results, and a new land.
   Preview with ?pin (pinned, it reloads itself with a new seed after each
-  race, which keeps the wall's watchdog quiet). ?act=2|3|4&seed=N (and
-  &race=SECONDS for act 4) runs synchronously to that point for a photograph.
+  race, which keeps the wall's watchdog quiet). ?act=2|3|4|5|6&seed=N (and
+  &race=SECONDS for act 4) runs synchronously to that point for a photograph:
+  5 is the finishers gathered at the line, 6 the results cards.
   Not in the ring.
 ==========================================================================
 
   CHANGED
+    v2.7  one race speed for the whole race, set from a rehearsal run during the
+          cards, and stepped against real time (it ran slow on a busy frame and
+          x4 once the winner was home); the finishers gather at the line with
+          a trophy for the winner before the results
     v2.6  the race in natural colours: from the course search on, the maps, the
           helicopter and the chase window show relief shading, natural rock and
           soil, washes, scrub and trees; act 1 keeps the strata colours
@@ -53,9 +61,6 @@
     v2.4  singletrack passes (race_sim v3.1) get their own alert with the risk the
           rider took; a fall while passing, and a rider taken down, say so
     v2.3  loads race_flora.js: the chase window's plants are placed by ecology
-    v2.2  rider cards: a plain description of each rider and bars for the new
-          engine (aerobic power, reserve, sprint, recovery, race craft); the
-          board and the physics strip show the reserve
 -->
 <style>
   html, body { margin:0; padding:0; height:100%; background:#04060c; overflow:hidden; }
@@ -135,8 +140,10 @@ const CONFIG = {
      ?grade=easy|medium|hard to demand one, or ?cap=0.24 to override outright. */
   slopeMax:0.95,          // steeper than this is cliff; below it a trail can be benched in
   riders: 8, laps: 1,
-  timeScale: 4,           // race seconds per real second
-  finishScale: 4,         // and four times that once the winner is home, so the rest finish
+  timeScale: 4,           // race seconds per real second, at the least
+  timeScaleMax: 8,        // and at the most
+  raceSec: 480,           // the speed between them is the one that runs the race in eight minutes
+  gatherSec: 15,          // the finishers at the line, the place chart complete
   rosterSec: 30,          // how long the cards stand
   resultsSec: 45,         // the ranked cards at the end
   mapSec: 40, heliSec: 30,  // the overview alternates: flat map, then the helicopter orbit
@@ -167,7 +174,25 @@ const view=StrataView.create(cv), chaseView=StrataView.create(chaseCv); let heli
    then the old ray-marcher draws it as before */
 const chase3dCv=document.getElementById('chase3d');
 let chase3d=null; try{ chase3d=(window.RaceChase3D&&RaceChase3D.create(chase3dCv))||null; }catch(e){ chase3d=null; }
-let tickAt=0;
+/* THE RACE CLOCK (Joe, 2026-10-14: "the speed of the race rendering really speeds up
+   as riders finish"). It did, two ways: by design (x2 past 40 race-minutes, x4 once
+   the winner was home) and by accident (the race stepped a fixed amount per 100 ms
+   timer, and a busy frame made the timer late). Now ONE speed for the whole race, set
+   before the gun from a rehearsal of it - the sim is seeded, so the rehearsal IS the
+   race - and the race is stepped to wherever real time says it should be. The 3D
+   window draws the moment one tick behind the clock, between the last two ticks, so
+   it moves at that one speed too. */
+const clock={rate:4, base:0, at:0, last:0, period:100, prevT:0};
+const clockT=(now)=>clock.base+(now-clock.at)*clock.rate/1000;
+let rehearsal=null;
+/* the race is over when everyone is home or out, or 25 race-minutes after the winner */
+function raceOver(rc){ if(rc.done) return true; let f=1e9; for(const r of rc.riders) if(r.finish && r.finish<f) f=r.finish; return f<1e9 ? rc.t-f>1500 : rc.t>4*3600; }
+/* the rehearsal runs a few milliseconds a tick while the cards stand (the whole race
+   is 0.3-0.8 s of computing on the Mac) */
+function rehearse(ms){
+  if(!rehearsal || rehearsal.end!=null) return; const t0=performance.now(), rc=rehearsal.race;
+  while(performance.now()-t0<ms){ for(let i=0;i<50;i++){ RaceSim.step(rc,0.1); if(raceOver(rc)){ rehearsal.end=rc.t; return; } } }
+}
 let day=null, painter=null, heliOn=false, heliAt=0, lastHeli=0, mapFrame=null;
 /* THE RACE IN NATURAL COLOURS (Joe, 2026-10-14: the strata colours are fun while the
    land erodes, "but then the colors are distracting for the racers to ride upon").
@@ -254,8 +279,10 @@ function newWorld(s){
     for(let i=0;i<CONFIG.freezeStep;i++) Strata.step(w); frozen=true;
     if(SYNC_ACT>=2){ act=2; mapAlpha=1; cv.style.opacity='0'; startNatMap(); if(natMap){ while(!natMap.done) natMap.paintRows(400); natAt=performance.now()-5000; } onPlan(RacePlanner.loop(raceZ(),w.nx,w.ny,CONFIG.raceCell,planOpts())); revealed=1e9; }
     if(SYNC_ACT>=3 && plan){ startRoster(); }
-    if(SYNC_ACT>=4 && plan){ startRace(); for(let t=0,k=0;t<SYNC_RACE;t+=0.1,k++){ RaceSim.step(race,0.1); if(k%10===0) record(); } direct(true); while(painter&&!painter.done) painter.paintRows(200); }
-    if(SYNC_ACT>=5 && plan){ while(!race.done && race.t<7200) RaceSim.step(race,0.1); race.resultsAt=performance.now(); showResults(); }
+    if(SYNC_ACT>=4 && plan){ startRace(); for(let t=0,k=0;t<SYNC_RACE && !raceOver(race);t+=0.1,k++){ RaceSim.step(race,0.1); if(k%10===0) record(); } direct(true); while(painter&&!painter.done) painter.paintRows(200);
+      clock.base=clock.prevT=race.t; clock.at=clock.last=performance.now(); }
+    if(SYNC_ACT>=5 && plan){ for(let k=0;!raceOver(race);k++){ RaceSim.step(race,0.1); if(k%10===0) record(); } record(); startGather(performance.now()); }
+    if(SYNC_ACT>=6 && plan){ showResults(); }
   } else {
     if(!worker) worker=makeWorker(); busy=true; worker.postMessage({cmd:'new',seed});
     Wall.episode('First the land: folded beds, rained on for three hundred thousand years, then frozen. The race will be cut into this.');
@@ -265,6 +292,7 @@ function newWorld(s){
 function startRoster(){
   act=3; actAt=performance.now(); riders=RaceSim.makeRiders(seed^0x5bd1e995,CONFIG.riders); fav=RaceSim.favourite(riders);
   trail=RaceSim.buildTrail(plan,w,CONFIG.raceCell,2); day=RaceSim.makeDay(seed);
+  rehearsal={race:RaceSim.makeRace(trail,RaceSim.makeRiders(seed^0x5bd1e995,CONFIG.riders),CONFIG.laps,seed,day),end:null};
   /* the crisp zoomed map is painted now, in chunks, while the cards stand */
   const r=courseRect(); sizeUI(); const b=leftColumn(ui.width,ui.height,true).map;
   const sc=Math.min(b.W/r.w, b.H/r.h);
@@ -284,7 +312,12 @@ function leftColumn(W,H,race4){
   return {map:{x,y:top,W:w,H:h-ch-gap},chart:{x,y:top+h-ch,W:w,H:ch}};
 }
 function startRace(){
-  act=4; actAt=performance.now(); race=RaceSim.makeRace(trail,riders,CONFIG.laps,seed,day);
+  act=4; actAt=performance.now();
+  /* the one speed: whatever runs this race in raceSec, kept within 4-8x */
+  rehearse(1e9); const end=rehearsal?rehearsal.end:null; rehearsal=null;
+  clock.rate=end?Math.max(CONFIG.timeScale,Math.min(CONFIG.timeScaleMax,end/CONFIG.raceSec)):CONFIG.timeScale;
+  race=RaceSim.makeRace(trail,riders,CONFIG.laps,seed,day); race.expectEnd=end;
+  clock.base=clock.prevT=0; clock.at=clock.last=performance.now(); clock.period=100;
   hist=race.riders.map(()=>[]); prevD=null;
   chaseView.setWorld(w); chaseCv.style.display='block'; chaseCap.style.display='block'; heliCv.style.display='block'; cam=null; lastEvent=0;
   if(chase3d){ sizeUI(); const pw=Math.round(1280*WU), ph=Math.round(720*WU);
@@ -314,21 +347,22 @@ function tick(){
   else if(act===2){ mapAlpha=Math.min(1,(now-actAt)/1600); cv.style.opacity=String(1-mapAlpha);
     /* the search, then the course, drawn over about eighteen seconds whatever their size */
     if(plan){ const total=plan.segs.reduce((a,s)=>a+s.explored.length,0)+plan.path.length*2+320; revealed+=Math.max(0.4,total/40/180); if(revealed*40>total) startRoster(); } }
-  else if(act===3){ if(now-actAt>CONFIG.rosterSec*1000) startRace(); }
+  else if(act===3){ rehearse(12); if(now-actAt>CONFIG.rosterSec*1000) startRace(); }
   else if(act===4){
-    /* four times real speed; twice that past 40 race-minutes (the slowest courses
-       run 70) and four times more once the winner is home, so a show stays near 15 min */
-    if(!race.done && !race.resultsAt){ const n=CONFIG.timeScale*(race.t>2400?2:1)*(race.finished>0?CONFIG.finishScale:1);
-      for(const r of race.riders) r._prevD=r.lap*trail.L+r.s; tickAt=now;      // the 3D window interpolates from here
-      for(let i=0;i<n;i++){ RaceSim.step(race,0.1); if(race.done) break; }
+    /* step the race to where the clock says it is. A gap of more than half a
+       second (a hidden page, a long collection) is not made up: the race waits */
+    if(!race.gatherAt){ const gap=now-clock.last; clock.last=now;
+      if(gap>500){ clock.base=race.t; clock.at=now; } else clock.period+=0.2*(gap-clock.period);
+      for(const r of race.riders) r._prevD=r.lap*trail.L+r.s; clock.prevT=race.t;      // the 3D window interpolates from here
+      const target=clockT(now);
+      while(race.t+0.1<=target+1e-6 && !raceOver(race)) RaceSim.step(race,0.1);
       passes(); record();
-      /* the show ends when everyone is home, or 25 race-minutes after the winner */
-      if(race.done || (race.finished>0 && race.t-race.riders.filter(r=>r.finish).reduce((a,r)=>Math.min(a,r.finish),1e9)>1500)) race.resultsAt=now; }
-    else if(race.resultsAt && !race.resultsSaid){ showResults(); }
+      if(raceOver(race)){ record(); startGather(now); } }
+    else if(!race.resultsSaid && now-race.gatherAt>CONFIG.gatherSec*1000) showResults();
     /* the overview alternates between the flat map and the helicopter */
     if(!FORCE_HELI && now-heliAt>(heliOn?CONFIG.heliSec:CONFIG.mapSec)*1000){ heliOn=!heliOn; heliAt=now; }
     heliCv.style.opacity=heliOn?'1':'0';
-    direct(false);
+    if(!race.gatherAt) direct(false);
   }
   if(!PINNED && now-t0>CONFIG.holdMin*60000) handOff();     // the stalled-show deadline; the normal exit is showResults()
 }
@@ -350,6 +384,18 @@ function record(){
   for(const r of race.riders){ const h=hist[r.i], d=r.finish?L:Math.max(0,Math.min(L,r.lap*trail.L+r.s)), last=h[h.length-1];
     if(!last || (d-last[0]>=L/500) || (last[1]!==r.pos && r.status!=='out')) h.push([d,r.pos]);
     if(r.status==='out' && !h.out) h.out=true; }
+}
+/* THE FINISH (Joe, 2026-10-14: "have the riders briefly meet up at the finish line so
+   we have a few seconds to see how the places changed over the course of the race?
+   Maybe give a trophy to the winner?"). The race stops; in the chase window the
+   finishers stand together past the line, the winner with the trophy, and the place
+   chart stands complete under the map for gatherSec. Nobody home: straight on. */
+function startGather(now){
+  race.gatherAt=now;
+  const p=race.riders.filter(r=>r.finish).sort((a,b)=>a.finish-b.finish);
+  if(!p.length){ showResults(); return; }
+  chaseCap.textContent='the finish · #'+p[0].num+' '+p[0].name+' wins';
+  Wall.lane('#'+p[0].num+' '+p[0].name+' wins in '+clockStr(p[0].finish)+(p[1]?', #'+p[1].num+' '+p[1].name+' at +'+clockStr(p[1].finish-p[0].finish):'')+'. Under the map, the place chart: where every rider stood, kilometre by kilometre.',{hold:CONFIG.gatherSec*1000});
 }
 /* the results: the cards again, ranked, with the tallies; then a new land */
 function showResults(){
@@ -397,8 +443,12 @@ function direct(sync){
    the WebGL chase window at up to 30, its riders interpolated between ticks */
 let lastFrame=0, last3d=0;
 function frame(now){
-  if(act===4 && chase3d && race && !race.resultsSaid && director.subject && now-last3d>=1000/30){ const dt=Math.min(0.1,(now-last3d)/1000); last3d=now;
-    try{ chase3d.render(director.subject,race,Math.max(0,Math.min(1,(now-tickAt)/100)),dt); }catch(e){ console.error(e); } }
+  if(act===4 && chase3d && race && !race.resultsSaid && race.gatherAt && now-last3d>=1000/30){ const dt=Math.min(0.1,(now-last3d)/1000); last3d=now;
+    try{ chase3d.finale(race,(now-race.gatherAt)/1000,dt); }catch(e){ console.error(e); } }
+  else if(act===4 && chase3d && race && !race.resultsSaid && director.subject && now-last3d>=1000/30){ const dt=Math.min(0.1,(now-last3d)/1000); last3d=now;
+    /* the moment one tick behind the clock, placed between the last two ticks */
+    const show=clockT(now)-(clock.period*clock.rate/1000+0.1), span=race.t-clock.prevT, alpha=span>1e-6?Math.max(0,Math.min(1,(show-clock.prevT)/span)):1;
+    try{ chase3d.render(director.subject,race,alpha,dt); }catch(e){ console.error(e); } }
   if(now-lastFrame>=1000/CONFIG.fpsCap){ lastFrame=now; draw(now); }
   requestAnimationFrame(frame); }
 function draw(now){
@@ -579,7 +629,9 @@ function drawRoster(W,H,results){
     uctx.fillStyle=INK; uctx.font='300 '+T('t3')+'px '+UI; uctx.textAlign='left'; uctx.textBaseline='alphabetic';
     uctx.fillText((results?(i+1)+'  ':'')+'#'+rd.num+'  '+rd.name,px+T('t3')*1.1,py);
     uctx.font='400 '+T('t4')+'px '+MONO; uctx.fillStyle=INK2; uctx.textAlign='right';
-    uctx.fillText(results?(rd.finish?clockStr(rd.finish):rd.status==='out'?'OUT':'DNF'):Math.round(rd.kg)+' KG',x+cw-34*WU,py);
+    const corner=results?(rd.finish?clockStr(rd.finish):rd.status==='out'?'OUT':'DNF'):Math.round(rd.kg)+' KG';
+    uctx.fillText(corner,x+cw-34*WU,py);
+    if(results && i===0 && rd.finish) drawCup(uctx,x+cw-34*WU-uctx.measureText(corner).width-T('t3')*0.75,py,T('t3')*1.05);   // the winner's trophy
     uctx.textAlign='left';
     if(results){ const t=RaceSim.tally(rd); py+=T('t4')*1.5; uctx.fillStyle=WARM;
       uctx.fillText(Math.round(t.kcal)+' KCAL · '+t.litres.toFixed(1)+' L SWEAT · '+Math.round(t.climbedFt)+' FT CLIMBED',px,py); py+=T('t4')*1.4;
@@ -597,6 +649,16 @@ function drawRoster(W,H,results){
       py+=rowH;
     }
   });
+}
+/* a gold cup h tall, the middle of its foot at (x, y) */
+function drawCup(c,x,y,h){
+  const u=h/10; c.save(); c.fillStyle='#d8b04a'; c.strokeStyle='#d8b04a'; c.lineWidth=u*0.9;
+  c.beginPath(); c.moveTo(x-3.4*u,y-10*u); c.lineTo(x+3.4*u,y-10*u); c.quadraticCurveTo(x+3.2*u,y-4.6*u,x+0.7*u,y-3.9*u);
+  c.lineTo(x-0.7*u,y-3.9*u); c.quadraticCurveTo(x-3.2*u,y-4.6*u,x-3.4*u,y-10*u); c.fill();     // the bowl
+  c.fillRect(x-0.6*u,y-4*u,1.2*u,2.6*u); c.fillRect(x-2.6*u,y-1.5*u,5.2*u,1.5*u);            // stem and foot
+  c.beginPath(); c.arc(x-3.4*u,y-7.9*u,1.6*u,Math.PI*0.5,Math.PI*1.5); c.stroke();             // the handles
+  c.beginPath(); c.arc(x+3.4*u,y-7.9*u,1.6*u,-Math.PI*0.5,Math.PI*0.5); c.stroke();
+  c.restore();
 }
 function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
 
@@ -675,8 +737,19 @@ function drawChase(){
 }
 /* the strip on the WebGL window: the clear canvas over it, at full resolution */
 function drawChaseHUD(){
-  const sub=director.subject, RW=chaseCv.width, RH=chaseCv.height; cctx.clearRect(0,0,RW,RH); if(!sub) return;
+  const sub=director.subject, RW=chaseCv.width, RH=chaseCv.height; cctx.clearRect(0,0,RW,RH);
+  if(race && race.gatherAt){ finishStrip(RW,RH,Math.round(T('t5')),Math.round(22*WU)); return; }
+  if(!sub) return;
   physicsStrip(sub,RW,RH,Math.round(T('t5')),Math.round(22*WU));
+}
+/* at the finish the strip under the window is the podium: place, rider, time or gap */
+function finishStrip(RW,RH,k4,pad){
+  const p=race.riders.filter(r=>r.finish).sort((a,b)=>a.finish-b.finish), sh=k4*4.6;
+  cctx.fillStyle='rgba(8,11,18,.72)'; cctx.fillRect(0,RH-sh,RW,sh);
+  cctx.font='400 '+k4+'px '+MONO; cctx.textBaseline='middle'; cctx.textAlign='left';
+  const ln=(i)=>{ const r=p[i]; return r?(i+1)+'  #'+r.num+' '+r.name.toUpperCase()+'  '+(i?'+'+clockStr(r.finish-p[0].finish):clockStr(r.finish)):''; };
+  cctx.fillStyle=WARM; cctx.fillText('THE FINISH · '+ln(0),pad,RH-sh*0.78);
+  cctx.fillStyle=INK2; cctx.fillText(ln(1),pad,RH-sh*0.50); cctx.fillText(ln(2),pad,RH-sh*0.22);
 }
 function physicsStrip(sub,RW,RH,k4,pad){
   const i0=((Math.floor(sub.s/trail.ds)%trail.n)+trail.n)%trail.n;
@@ -749,7 +822,7 @@ function drawInstrument(){
 }
 const infoEl=document.getElementById('info');
 function updateInfo(){
-  infoEl.textContent=`seed ${seed}  act ${act}  step ${w.step}  frozen ${frozen}  scale ${CONFIG.raceCell} m/cell  x${CONFIG.timeScale} time\n`+
+  infoEl.textContent=`seed ${seed}  act ${act}  step ${w.step}  frozen ${frozen}  scale ${CONFIG.raceCell} m/cell  x${clock.rate.toFixed(2)} time\n`+
     (plan?`loop ${plan.length.toFixed(0)} m, ${plan.path.length} cells, ${plan.switchbacks} hairpins, climb ${plan.climb.toFixed(0)} m, reachable ${plan.reachable}\n`:'no plan\n')+
     (race?`race t ${race.t.toFixed(0)} s  finished ${race.finished}  out ${race.out}  events ${race.events.length}  director ${director.kind}\n`+race.riders.map(r=>`#${r.num} ${r.name.padEnd(10)} ${r.status.padEnd(8)} pos ${r.pos} lap ${r.lap} s ${r.s.toFixed(0)} v ${(r.v*3.6).toFixed(0)} km/h E ${(100*r.E/r.E0).toFixed(0)}% crashes ${r.crashes}`).join('\n')+'\n':'')+
     `keys: n new land · i info · arrows change page`;

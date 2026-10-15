@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_chase3d.js · v1.4 · 2026-10-14
+   race_chase3d.js · v1.5 · 2026-10-14
    the chase window of race.html, in WebGL (three.js r128).
    Joe, 2026-10-13: "The quality of the landscape rendering is really poor in
    the upper right rider focus graph." The old window was the strata ray-
@@ -40,10 +40,15 @@
 
    One call per frame: render(subject, race, alpha) - alpha interpolates rider
    positions between simulation ticks, so the picture moves smoothly at the
-   display's rate while the race steps ten times a second.
+   display's rate while the race steps ten times a second. Once the race is
+   over, finale(race, seconds) instead: the finishers gathered past the line,
+   the winner with the trophy.
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.5  the finish: a chequered line across the tread, and finale() - the
+           finishers lined up past it facing the camera, the winner in the
+           middle under a gold cup, the camera drifting round in front of them
      v1.4  the ground in natural rock colours (StrataView.naturalColors), not the
            strata's own
      v1.3  one draw per plant species, not per 350 m tile (220 draw calls cost the
@@ -52,7 +57,6 @@
      v1.1  a cut, not a glide, when the followed rider changes (the camera eased
            back through the new rider); the camera keeps 10 m from the rider in a
            straight line round switchbacks; a tag within 6 m of the lens is hidden
-     v1.0  new: replaces the CPU ray-marcher in the chase window
 */
 function RaceChase3DFactory(global){
 'use strict';
@@ -237,6 +241,12 @@ function create(canvas){
     const Gc=new Float32Array(nS); for(let i=0;i<nS;i++) Gc[i]=gAt(Sx[i],Sz[i]);
     for(let i=0;i<nS;i++){ let a=0; for(let k=-5;k<=5;k++) a+=Gc[(i+k+nS)%nS]; Ty[i]=a/11; }
     tread={Sx,Sz,Ty,Hw};
+    /* the start and finish line: a chequered strip across the tread */
+    { const hw=Hw[0]+0.15, nA=Math.max(3,Math.round(2*hw/0.3)), cv=document.createElement('canvas'); cv.width=64; cv.height=32*nA; const c=cv.getContext('2d');
+      for(let a=0;a<2;a++) for(let b=0;b<nA;b++){ c.fillStyle=(a+b)%2?'#151515':'#ececec'; c.fillRect(a*32,b*32,32,32); }
+      const tx=new THREE.CanvasTexture(cv); tx.magFilter=THREE.NearestFilter;
+      const m=new THREE.Mesh(new THREE.PlaneGeometry(0.6,2*hw),new THREE.MeshBasicMaterial({map:tx,polygonOffset:true,polygonOffsetFactor:-6,polygonOffsetUnits:-12}));
+      m.rotation.x=-Math.PI/2; const g=new THREE.Group(), p=at(0); g.add(m); g.position.set(p.x,p.y+0.05,p.z); g.rotation.y=Math.atan2(-p.hz,p.hx); scene.add(g); }
     /* how wide the corridor may be at each sample: never into the next limb of
        a switchback (half the gap to the nearest part of the trail that is more
        than 40 m away along it), at most 8 m */
@@ -550,6 +560,53 @@ function create(canvas){
       if(lod!==u.lod){ u.lod=lod; m.geometry.setIndex(u.idx[lod]); } }
     renderer.render(scene,camera);
   }
+  /* ---- THE FINISH (race.html v2.7; Joe, 2026-10-14: "have the riders briefly
+     meet up at the finish line ... Maybe give a trophy to the winner?"). The
+     finishers line up on the run-in just past the line, one rider wide, turned to
+     face the camera at the trail's side: the winner in the middle with a gold cup
+     turning overhead, second and third either side, and so on outwards. (In rows
+     three deep, seen from above, the cup sat over the row behind the winner and
+     the tags piled up.) The camera stands on the lower side of the trail, a little
+     above head height, and drifts round about 30 degrees while the chart is read. ---- */
+  let trophy=null;
+  function makeTrophy(){
+    const gold=new THREE.MeshLambertMaterial({color:0xe0b84a,emissive:0x4a3510,side:THREE.DoubleSide}), g=new THREE.Group();
+    const prof=[[0.001,0],[0.16,0],[0.16,0.045],[0.07,0.075],[0.035,0.13],[0.03,0.25],[0.07,0.29],[0.17,0.36],[0.2,0.5],[0.19,0.56],[0.17,0.5],[0.001,0.38]];
+    g.add(new THREE.Mesh(new THREE.LatheGeometry(prof.map(p=>new THREE.Vector2(p[0],p[1])),24),gold));
+    for(const sd of [-1,1]){ const h=new THREE.Mesh(new THREE.TorusGeometry(0.075,0.02,6,14,Math.PI),gold); h.position.set(sd*0.185,0.43,0); h.rotation.z=-sd*Math.PI/2; g.add(h); }
+    g.scale.setScalar(1.3); return g;
+  }
+  function finale(race, tSec, dtReal){
+    if(!world) return;
+    const fin=race.riders.filter(r=>r.finish).sort((a,b)=>a.finish-b.finish), placeOf=new Map(fin.map((r,i)=>[r,i]));
+    const dC=trailRef.L*race.laps+6, pC=at(dC), hl=Math.hypot(pC.hx,pC.hz)||1;
+    /* the camera's side: the lower one, so it is not inside the hill */
+    let sx=-pC.hz/hl, sz=pC.hx/hl; if(groundAt(pC.x+sx*8,pC.z+sz*8)>groundAt(pC.x-sx*8,pC.z-sz*8)){ sx=-sx; sz=-sz; }
+    let cx=0, cy=0, cz=0, n=0, win=null;
+    for(const R of riders){ const k=placeOf.get(R.r); if(k==null){ R.root.visible=false; continue; } R.root.visible=true;
+      const off=k===0?0:(k%2?-(k+1)/2:k/2), p=at(dC+off*1.05);      // 0, then -1 +1 -2 +2 ... along the trail
+      const h=Math.hypot(p.hx,p.hz)||1, nx=-p.hz/h*Math.sign(sx*(-pC.hz)+sz*pC.hx||1), nz=p.hx/h*Math.sign(sx*(-pC.hz)+sz*pC.hx||1);
+      R.root.position.set(p.x,p.y,p.z); R.root.rotation.set(0,Math.atan2(-nz,nx),0);
+      R.body.rotation.set(0,0,0); R.body.position.y=0; R.body.visible=true; setLegs(R,1.2+0.9*k);   // still, a foot wherever the pedal stopped
+      R.tag.position.set(0,k===0?2.95:2.0,0); R.blob.position.set(0.05,0.04,0);      // the winner's over the cup
+      cx+=p.x; cy+=p.y; cz+=p.z; n++; if(k===0) win=R; }
+    if(!n) return; cx/=n; cy/=n; cz/=n;
+    if(!trophy) trophy=makeTrophy();
+    if(trophy.parent!==scene) scene.add(trophy);
+    trophy.position.set(win.root.position.x,win.root.position.y+1.78,win.root.position.z); trophy.rotation.y=tSec*0.9;
+    /* the camera: square to the line at first, swinging from 17 degrees one side to 17 the other */
+    const D=Math.max(6.5,0.9*n+1.5)-0.05*Math.min(15,tSec), a=-0.3+0.04*Math.min(15,tSec), ca=Math.cos(a), sa=Math.sin(a), dx=sx*ca-sz*sa, dz=sx*sa+sz*ca;
+    const camX=cx+dx*D, camZ=cz+dz*D, camY=Math.max(cy+2.3,groundAt(camX,camZ)+1.8);
+    camera.position.set(camX,camY,camZ); camera.lookAt(cx,cy+1.1,cz);
+    sky.position.copy(camera.position);
+    const tp=new THREE.Vector3();
+    for(const R of riders){ if(!R.root.visible) continue; R.root.updateMatrixWorld(true); R.tag.getWorldPosition(tp);
+      const sz2=Math.max(3,tp.distanceTo(camera.position))*0.05; R.tag.scale.set(sz2,sz2,1); R.tag.visible=true; }
+    mats.terrMat.uniforms.camPos.value.copy(camera.position); mats.corrMat.uniforms.camPos.value.copy(camera.position);
+    for(const m of chunks){ const u=m.userData, d=Math.hypot(u.cx-camX,u.cz-camZ), lod=api.forceLod!=null?api.forceLod:d<420?0:d<900?1:d<1600?2:3;
+      if(lod!==u.lod){ u.lod=lod; m.geometry.setIndex(u.idx[lod]); } }
+    renderer.render(scene,camera);
+  }
   function clear(){
     for(const m of chunks){ m.geometry.dispose(); scene.remove(m); } chunks=[];
     if(corridor){ corridor.geometry.dispose(); scene.remove(corridor); corridor=null; }
@@ -558,7 +615,7 @@ function create(canvas){
     while(scene.children.length) scene.remove(scene.children[0]);
     if(mats){ mats.terrMat.dispose(); mats.corrMat.dispose(); } mats=null; world=null;
   }
-  const api={setRace, render, setSize, forceLod:null, get flora(){ return floraCounts; }, get renderer(){ return renderer; }, get camera(){ return camera; }, get scene(){ return scene; }};
+  const api={setRace, render, finale, setSize, forceLod:null, get flora(){ return floraCounts; }, get renderer(){ return renderer; }, get camera(){ return camera; }, get scene(){ return scene; }};
   return api;
 }
 global.RaceChase3D={create};

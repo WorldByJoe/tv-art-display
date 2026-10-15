@@ -1,6 +1,6 @@
 # The Race
 
-A mountain-bike race on a landscape that did not exist a minute ago. First the land: folded sedimentary beds rained on for three hundred thousand years, then frozen. Then the course: one lap of 4-7 miles laid round the map through alternately high and low ground, the singletrack benched into the hillsides with switchbacks where the grade cap demands them, two-track on the gentle ground, and only cliffs off limits. Then eight riders with their traits, and the race at four times real time: an overview of the whole course with a chart of every rider's place against distance, a 3D chase window on the moment that matters, and a board of what each rider is doing on which rock.
+A mountain-bike race on a landscape that did not exist a minute ago. First the land: folded sedimentary beds rained on for three hundred thousand years, then frozen. Then the course: one lap of 4-7 miles laid round the map through alternately high and low ground, the singletrack benched into the hillsides with switchbacks where the grade cap demands them, two-track on the gentle ground, and only cliffs off limits. Then eight riders with their traits, and the race at one steady speed, 4-8 times real time: an overview of the whole course with a chart of every rider's place against distance, a 3D chase window on the moment that matters, and a board of what each rider is doing on which rock. At the end the finishers gather at the line, the winner under a gold cup, while the place chart stands complete.
 
 ## Running it
 
