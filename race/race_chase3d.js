@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_chase3d.js · v1.1 · 2026-10-14
+   race_chase3d.js · v1.2 · 2026-10-14
    the chase window of race.html, in WebGL (three.js r128).
    Joe, 2026-10-13: "The quality of the landscape rendering is really poor in
    the upper right rider focus graph." The old window was the strata ray-
@@ -44,6 +44,7 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.2  plants placed by ecology (race_flora.js) in place of random scrub
      v1.1  a cut, not a glide, when the followed rider changes (the camera eased
            back through the new rider); the camera keeps 10 m from the rider in a
            straight line round switchbacks; a tag within 6 m of the lens is hidden
@@ -189,7 +190,7 @@ function create(canvas){
   renderer.setPixelRatio(1);
   const scene=new THREE.Scene();
   const camera=new THREE.PerspectiveCamera(52,canvas.width/canvas.height,0.3,5000);
-  let world=null, chunks=[], corridor=null, riders=[], sky=null, mats=null, tread=null, cam=null, scrub=[];
+  let world=null, chunks=[], corridor=null, riders=[], sky=null, mats=null, tread=null, cam=null, scrub=[], floraCounts=null;
   let trailRef=null, nS=0, ds=2, cell=10, scale=0.2, groundAt=null, lastSubject=null;
 
   function setSize(w,h){ renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
@@ -336,26 +337,31 @@ function create(canvas){
       corrMat.side=THREE.DoubleSide;
       corridor=new THREE.Mesh(geo,corrMat); corridor.matrixAutoUpdate=false; corridor.frustumCulled=false; scene.add(corridor); }
 
-    /* ---- scrub: juniper and sage on gentle ground near the course ---- */
-    { let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9; for(let i=0;i<nS;i++){ x0=Math.min(x0,Sx[i]); x1=Math.max(x1,Sx[i]); z0=Math.min(z0,Sz[i]); z1=Math.max(z1,Sz[i]); }
-      const M=350; x0=Math.max(0,x0-M); z0=Math.max(0,z0-M); x1=Math.min((nxf-1)*cf,x1+M); z1=Math.min((nyf-1)*cf,z1+M);
-      let seed=(w.seed*2654435761)>>>0; const rnd=()=>{ seed=(seed*1664525+1013904223)>>>0; return seed/4294967296; };
-      const kinds=[{n:0,max:3000,geo:new THREE.IcosahedronGeometry(1,0),col:[0.30,0.38,0.24],h:[1.4,3.6],r:[0.9,1.9]},     // juniper
-                   {n:0,max:5000,geo:new THREE.IcosahedronGeometry(1,0),col:[0.58,0.60,0.48],h:[0.45,0.9],r:[0.4,0.8]}];   // sagebrush
-      for(const K of kinds){ K.mesh=new THREE.InstancedMesh(K.geo,new THREE.MeshLambertMaterial({color:0xffffff}),K.max); K.mesh.frustumCulled=false; }
-      const mtx=new THREE.Matrix4(), q=new THREE.Quaternion(), sc=new THREE.Vector3(), ps=new THREE.Vector3(), cc=new THREE.Color();
-      const area=(x1-x0)*(z1-z0), tries=Math.min(60000,area/40);
-      for(let t=0;t<tries;t++){
-        const X=x0+rnd()*(x1-x0), Z=z0+rnd()*(z1-z0), xf=X/cf, zf=Z/cf, k=(zf|0)*nxf+(xf|0);
-        if(tdist[k]<2.5) continue;                                         // never on the tread
-        const ny=nrm[3*k+1]; if(ny<0.86) continue;                         // nothing grows on a face
-        const patch=0.5+0.5*Math.sin(X*0.021+Math.sin(Z*0.017)*2.0)*Math.sin(Z*0.019+1.3);   // scrub grows in patches
-        const K=rnd()<0.4?kinds[0]:kinds[1]; if(rnd()>0.15+patch*(K===kinds[0]?0.6:0.85)) continue; if(K.n>=K.max) continue;
-        const hh=K.h[0]+rnd()*(K.h[1]-K.h[0]), rr=K.r[0]+rnd()*(K.r[1]-K.r[0]);
-        ps.set(X,gAt(X,Z)+hh*0.42,Z); q.setFromAxisAngle(new THREE.Vector3(0,1,0),rnd()*6.28); sc.set(rr,hh*0.5,rr*(0.85+0.3*rnd()));
-        mtx.compose(ps,q,sc); K.mesh.setMatrixAt(K.n,mtx);
-        const sh=0.55+0.45*shadow[k], v=0.85+0.3*rnd(); cc.setRGB(K.col[0]*v*sh,K.col[1]*v*sh,K.col[2]*v*sh); K.mesh.setColorAt(K.n,cc); K.n++; }
-      for(const K of kinds){ K.mesh.count=K.n; K.mesh.instanceMatrix.needsUpdate=true; if(K.mesh.instanceColor) K.mesh.instanceColor.needsUpdate=true; scene.add(K.mesh); scrub.push(K.mesh); } }
+    /* ---- the plants, by ecology (race_flora.js): pinyon and juniper on the rocky
+       ground, blackbrush on thin sand over slickrock, sagebrush in the deep soils,
+       shadscale on the shale, Mormon tea on the slopes, cottonwood and willow in
+       the washes. Instanced per species in 350 m tiles, so a tile out of view or
+       too far to matter is not drawn at all. ---- */
+    if(global.RaceFlora){
+      let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9; for(let i=0;i<nS;i++){ x0=Math.min(x0,Sx[i]); x1=Math.max(x1,Sx[i]); z0=Math.min(z0,Sz[i]); z1=Math.max(z1,Sz[i]); }
+      const M=500; x0=Math.max(0,x0-M); z0=Math.max(0,z0-M); x1=Math.min((nxf-1)*cf,x1+M); z1=Math.min((nyf-1)*cf,z1+M);
+      const pts=[]; for(let i=0;i<nS;i+=2) pts.push([Sx[i],Sz[i]]);
+      const F=RaceFlora.place({nx:w.nx,ny:w.ny,zE:w.z,U,nxf,nyf,zr,Fr,nrm,layers:w.layers,scale,cell,trail:pts,bbox:{x0,z0,x1,z1},seed:w.seed});
+      floraCounts=F.counts;
+      const TILE=350, tiles=new Map(), geo=plantGeometry(), mats2={};
+      /* unlit, coloured per plant by its own light (sun or the terrain's shadow): a
+         double-sided Lambert panel lights its back face as if it faced the ground,
+         and half of every plant went black */
+      for(const k of RaceFlora.ORDER) mats2[k]=new THREE.MeshBasicMaterial({map:plantTexture(k,RaceFlora.SPECIES[k]),alphaTest:0.45,side:THREE.DoubleSide});
+      for(const p of F.list){ const key=Math.floor(p.x/TILE)+','+Math.floor(p.z/TILE); let t=tiles.get(key); if(!t){ t={cx:(Math.floor(p.x/TILE)+0.5)*TILE, cz:(Math.floor(p.z/TILE)+0.5)*TILE, by:{}}; tiles.set(key,t); } (t.by[p.sp]||(t.by[p.sp]=[])).push(p); }
+      const mtx=new THREE.Matrix4(), q=new THREE.Quaternion(), sc=new THREE.Vector3(), ps=new THREE.Vector3(), cc=new THREE.Color(), up=new THREE.Vector3(0,1,0);
+      for(const t of tiles.values()) for(const k in t.by){ const L=t.by[k], sp=RaceFlora.SPECIES[k], mesh=new THREE.InstancedMesh(geo,mats2[k],L.length);
+        L.forEach((p,i)=>{ ps.set(p.x,gAt(p.x,p.z)-0.05*p.h,p.z); q.setFromAxisAngle(up,p.rot); sc.set(p.r,p.h,p.r); mtx.compose(ps,q,sc); mesh.setMatrixAt(i,mtx);
+          const shd=0.62+0.42*fAt(p.x,p.z,shadow)*Math.max(0.3,sun.y+0.35), v=p.tint*shd; cc.setRGB(v,v,v*0.97); mesh.setColorAt(i,cc); });
+        mesh.instanceMatrix.needsUpdate=true; if(mesh.instanceColor) mesh.instanceColor.needsUpdate=true;
+        mesh.frustumCulled=false; mesh.matrixAutoUpdate=false; mesh.userData={cx:t.cx,cz:t.cz,far:sp.tree?1500:380};
+        scene.add(mesh); scrub.push(mesh); }
+    }
 
     /* ---- the sky ---- */
     sky=new THREE.Mesh(new THREE.SphereGeometry(4000,32,16),new THREE.ShaderMaterial({vertexShader:SKY_VS,fragmentShader:SKY_FS,side:THREE.BackSide,depthWrite:false,
@@ -414,6 +420,59 @@ function create(canvas){
       lg.sn.position.set(K[0],K[1],lg.sn.position.z); lg.sn.rotation.z=Math.atan2(P[1]-K[1],P[0]-K[0]); lg.sn.scale.x=L2/0.5; });
   }
 
+  /* ONE PLANT: three crossed vertical panels (unit: radius 1, height 1) carrying a
+     drawn silhouette of the species - the way real-time scenes draw vegetation, and
+     at 6 triangles a plant cheap enough for the Pi. Normals point up, so a panel
+     seen edge-on is lit like the rest of the plant rather than going black. */
+  function plantGeometry(){
+    const pos=[], uv=[], nor=[];
+    for(let k=0;k<3;k++){ const a=k*Math.PI/3, cx=Math.cos(a), sz=Math.sin(a);
+      const P=[[-cx,0,-sz],[cx,0,sz],[cx,1,sz],[-cx,1,-sz]], T=[[0,0],[1,0],[1,1],[0,1]];
+      for(const i of [0,1,2,0,2,3]){ pos.push(...P[i]); uv.push(...T[i]); nor.push(0.0,1.0,0.0); } }
+    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2)); g.setAttribute('normal',new THREE.Float32BufferAttribute(nor,3));
+    return g;
+  }
+  /* THE SILHOUETTE of each species, drawn once on a canvas with a seeded hand:
+     many small leaf-dabs inside the plant's shape, darker underneath, with gaps
+     the alpha test turns into air. */
+  function plantTexture(kind,sp){
+    const W=128, H=kind==='cottonwood'||kind==='pinyon'||kind==='juniper'?160:96, cv=document.createElement('canvas'); cv.width=W; cv.height=H; const c=cv.getContext('2d');
+    let seed=0; for(const ch of kind) seed=(seed*31+ch.charCodeAt(0))>>>0; const R=()=>{ seed=(seed*1664525+1013904223)>>>0; return seed/4294967296; };
+    const rgb=(col,f)=>'rgb('+Math.round(255*Math.min(1,col[0]*f))+','+Math.round(255*Math.min(1,col[1]*f))+','+Math.round(255*Math.min(1,col[2]*f))+')';
+    const cr=sp.crown, tr=sp.trunk||[0.4,0.33,0.26];
+    const dabs=(n,inside,rr,col)=>{ for(let i=0;i<n;i++){ const x=R()*W, y=R()*H; if(!inside(x/W,1-y/H)) continue; const v=1-y/H, f=0.62+0.55*v+0.18*(R()-0.5);
+        c.fillStyle=rgb(col,f); c.beginPath(); c.arc(x,y,rr[0]+R()*(rr[1]-rr[0]),0,6.283); c.fill(); } };
+    const trunk=(x0,top,wd,lean)=>{ c.strokeStyle=rgb(tr,0.8); c.lineCap='round'; c.lineWidth=wd; c.beginPath(); c.moveTo(W*x0,H); c.quadraticCurveTo(W*(x0+lean),H*(1-top*0.6),W*(x0+lean*1.4),H*(1-top)); c.stroke(); };
+    const ell=(u,v,cx,cy,rx,ry)=>((u-cx)/rx)**2+((v-cy)/ry)**2<1;
+    if(kind==='pinyon'){ trunk(0.5,0.45,6,0.02); dabs(2600,(u,v)=>ell(u,v,0.5,0.6,0.46,0.38)||ell(u,v,0.5,0.84,0.3,0.15),[2,4],cr); }
+    else if(kind==='juniper'){ trunk(0.48,0.5,7,-0.06); trunk(0.5,0.42,4,0.1);
+      dabs(1900,(u,v)=>ell(u,v,0.35,0.6,0.3,0.24)||ell(u,v,0.66,0.55,0.3,0.22)||ell(u,v,0.52,0.8,0.24,0.17),[2,4.5],cr); }
+    else if(kind==='cottonwood'){ trunk(0.5,0.55,10,0.0); trunk(0.5,0.45,6,-0.15); trunk(0.5,0.45,6,0.15);
+      dabs(2600,(u,v)=>ell(u,v,0.5,0.66,0.48,0.3)||ell(u,v,0.3,0.6,0.25,0.22)||ell(u,v,0.72,0.62,0.25,0.22),[2,4.5],cr); }
+    else if(kind==='willow'){ for(let i=0;i<22;i++){ const x=0.3+0.4*R(); c.strokeStyle=rgb([0.45,0.35,0.28],0.9); c.lineWidth=1.5; c.beginPath(); c.moveTo(W*x,H); c.lineTo(W*(x+(R()-0.5)*0.4),H*(0.08+0.2*R())); c.stroke(); }
+      dabs(1500,(u,v)=>ell(u,v,0.5,0.55,0.42,0.48),[1.5,3.5],cr); }
+    else if(kind==='ephedra'){ for(let i=0;i<70;i++){ const x=0.5+(R()-0.5)*0.2, a=(R()-0.5)*1.4, L=0.6+0.4*R(); c.strokeStyle=rgb(cr,0.75+0.4*R()); c.lineWidth=1.6; c.beginPath(); c.moveTo(W*x,H); c.lineTo(W*(x+Math.sin(a)*L*0.5),H*(1-Math.cos(a)*L)); c.stroke(); } }
+    else if(kind==='sage'){ dabs(1600,(u,v)=>ell(u,v,0.5,0.0,0.48,0.95)&&v<0.92,[2,4],cr);
+      for(let i=0;i<10;i++){ const x=0.3+0.4*R(); c.strokeStyle=rgb([0.45,0.4,0.33],0.8); c.lineWidth=2; c.beginPath(); c.moveTo(W*x,H); c.lineTo(W*(x+(R()-0.5)*0.2),H*0.6); c.stroke(); } }
+    else if(kind==='blackbrush'){ for(let i=0;i<60;i++){ const x=0.5+(R()-0.5)*0.6, y=0.15+0.8*R(); c.strokeStyle=rgb([0.30,0.27,0.24],0.8+0.4*R()); c.lineWidth=1.3; c.beginPath(); c.moveTo(W*x,H); c.lineTo(W*(x+(R()-0.5)*0.5),H*(1-y*0.9)); c.stroke(); }
+      dabs(900,(u,v)=>ell(u,v,0.5,0.0,0.46,0.9),[1.5,3],cr); }
+    else { dabs(900,(u,v)=>ell(u,v,0.5,0.0,0.47,0.85),[1.5,3],cr);       // shadscale: a pale, open, spiny mound
+      for(let i=0;i<40;i++){ const x=0.5+(R()-0.5)*0.6; c.strokeStyle=rgb(cr,0.7); c.lineWidth=1; c.beginPath(); c.moveTo(W*x,H); c.lineTo(W*(x+(R()-0.5)*0.4),H*(1-0.85*R())); c.stroke(); } }
+    /* bleed the colours into the clear margin (alpha left at 0): filtering and the
+       smaller mipmaps otherwise mix in the canvas's transparent BLACK and every
+       plant gets a dark fringe - a distant shrub went almost black */
+    { const im=c.getImageData(0,0,W,H), d=im.data, filled=new Uint8Array(W*H); let ar=0,ag=0,ab=0,an=0;
+      for(let i=0;i<W*H;i++) if(d[4*i+3]>8){ filled[i]=1; ar+=d[4*i]; ag+=d[4*i+1]; ab+=d[4*i+2]; an++; }
+      for(let pass=0;pass<8;pass++){ const nf=filled.slice();
+        for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const i=y*W+x; if(filled[i]) continue; let r=0,g=0,b=0,n=0;
+          for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){ const xx=x+dx, yy=y+dy; if(xx<0||yy<0||xx>=W||yy>=H) continue; const j=yy*W+xx; if(filled[j]){ r+=d[4*j]; g+=d[4*j+1]; b+=d[4*j+2]; n++; } }
+          if(n){ d[4*i]=r/n; d[4*i+1]=g/n; d[4*i+2]=b/n; nf[i]=1; } }
+        filled.set(nf); }
+      for(let i=0;i<W*H;i++) if(!filled[i]&&an){ d[4*i]=ar/an; d[4*i+1]=ag/an; d[4*i+2]=ab/an; }
+      c.putImageData(im,0,0); }
+    const t=new THREE.CanvasTexture(cv); t.minFilter=THREE.LinearMipmapLinearFilter; t.generateMipmaps=true; t.anisotropy=2;
+    return t;
+  }
   /* where a distance along the course is, in race metres, with its heading */
   function at(d){
     const f=d/ds, i=((Math.floor(f)%nS)+nS)%nS, j=(i+1)%nS, t=f-Math.floor(f), T=tread;
@@ -463,6 +522,10 @@ function create(canvas){
       const dTag=tp.distanceTo(camera.position), sz=Math.max(3,dTag)*(R.r===subject?0.085:0.07);
       R.tag.scale.set(sz,sz,1); R.tag.visible=dTag>6; R.body.visible=camera.position.distanceTo(R.root.position)>1.5; }
     mats.terrMat.uniforms.camPos.value.copy(camera.position); mats.corrMat.uniforms.camPos.value.copy(camera.position);
+    /* plants: a tile is drawn only when near enough to matter and not behind the camera */
+    const fwd=new THREE.Vector3(); camera.getWorldDirection(fwd);
+    for(const m of scrub){ const u=m.userData, dx=u.cx-cam.x, dz=u.cz-cam.z, d=Math.hypot(dx,dz);
+      m.visible = d<u.far+180 && (d<260 || (dx*fwd.x+dz*fwd.z)/d > -0.2); }
     /* detail by distance */
     for(const m of chunks){ const u=m.userData, d=Math.hypot(u.cx-cam.x,u.cz-cam.z), lod=api.forceLod!=null?api.forceLod:d<420?0:d<900?1:d<1600?2:3;   // full detail well out: a coarse chunk sits a little off the exact trail strip, and the bed colours follow height
       if(lod!==u.lod){ u.lod=lod; m.geometry.setIndex(u.idx[lod]); } }
@@ -471,12 +534,12 @@ function create(canvas){
   function clear(){
     for(const m of chunks){ m.geometry.dispose(); scene.remove(m); } chunks=[];
     if(corridor){ corridor.geometry.dispose(); scene.remove(corridor); corridor=null; }
-    for(const s of scrub){ s.geometry.dispose(); scene.remove(s); } scrub=[];
+    for(const s of scrub){ scene.remove(s); } if(scrub.length){ scrub[0].geometry.dispose(); } scrub=[];
     for(const R of riders) scene.remove(R.root); riders=[];
     while(scene.children.length) scene.remove(scene.children[0]);
     if(mats){ mats.terrMat.dispose(); mats.corrMat.dispose(); } mats=null; world=null;
   }
-  const api={setRace, render, setSize, forceLod:null, get renderer(){ return renderer; }, get camera(){ return camera; }, get scene(){ return scene; }};
+  const api={setRace, render, setSize, forceLod:null, get flora(){ return floraCounts; }, get renderer(){ return renderer; }, get camera(){ return camera; }, get scene(){ return scene; }};
   return api;
 }
 global.RaceChase3D={create};

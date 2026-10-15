@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html · v2.2 · 2026-10-14
+  race.html · v2.3 · 2026-10-14
   a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
@@ -45,6 +45,7 @@
 ==========================================================================
 
   CHANGED
+    v2.3  loads race_flora.js: the chase window's plants are placed by ecology
     v2.2  rider cards: a plain description of each rider and bars for the new
           engine (aerobic power, reserve, sprint, recovery, race craft); the
           board and the physics strip show the reserve
@@ -55,8 +56,6 @@
           new planner, two-track drawn as a double line and the only place to
           pass, a place-by-distance chart under the map, crash alerts give the
           energy and the time down, riders wear random three-digit plates
-    v1.2  declares WALL_SECONDS_PER_RUN (690 s), so a count of three or more
-          races is not cut by the stall watchdog
     v1.0  versioning starts here; this file predates the scheme
 -->
 <style>
@@ -87,7 +86,7 @@
 <script src="wall.js"></script>
 <script src="nav.js"></script>
 <script src="three.min.js"></script>
-<script>document.write(['strata_engine.js','strata_view.js','race_planner.js','race_sim.js','race_chase3d.js'].map(f=>'<script src="'+f+'?v='+Date.now()+'"><\/script>').join(''));</script>
+<script>document.write(['strata_engine.js','strata_view.js','race_planner.js','race_sim.js','race_flora.js','race_chase3d.js'].map(f=>'<script src="'+f+'?v='+Date.now()+'"><\/script>').join(''));</script>
 </head>
 <body>
 <canvas id="cv" width="1280" height="720"></canvas>
