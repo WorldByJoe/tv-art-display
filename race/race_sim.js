@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_sim.js · v3.0 · 2026-10-14
+   race_sim.js · v3.1 · 2026-10-14
    the riders and the race, on a course cut by race_planner.js
    into a frozen Strata world. Joe, 2026-09-07:
      "n riders ... randomly drawn skill and strength for hill climbing ... a
@@ -86,6 +86,9 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v3.1  singletrack passing: a rider stuck behind weighs the risk (passRisk: the
+           hillside, plant cover, grip, loose rock, grade, bend, cliff, speed, and
+           their own skill and state) and goes round if it is within their nerve
      v3.0  the engine: critical power, an anaerobic reserve with recovery, peak
            power, oxygen-uptake lag and efficiency, tied by fibre type; race craft
            paces the reserve (Joe, 2026-10-14). 'Lasts' and the fixed sprint go
@@ -162,13 +165,17 @@ function buildTrail(plan, w, cell, ds){
        at least 5 m lower than the tread - a fall worth the name */
     let exposed=false; for(let dy=-2;dy<=2&&!exposed;dy++) for(let dx=-2;dx<=2;dx++){ const xx=cx+dx, yy=cy+dy; if(xx<0||yy<0||xx>=nx||yy>=w.ny) continue; const cc=yy*nx+xx; if(slope[cc]>0.95 && slope[cc]<5 && (s.zE-w.z[cc])*scale>5){ exposed=true; break; } }
     s.exposed=exposed;
-    s.wide=s.two;                                        // passing only on the two-track
+    s.wide=s.two;                                        // side by side on the two-track; on singletrack a pass is a risk (passRisk)
+    s.side=slope[c]>5?0.3:slope[c];                      // the hillside the tread is benched into: where a passer must ride
   }
   /* how far each sample is from the top of the climb it is on, and from the end
      of the two-track it is on (for pace(): a climb plan, a bridge before the
      singletrack); two passes round the loop so the wrap is right */
   for(let pass=0;pass<2;pass++) for(let i=n-1;i>=0;i--){ const s=S[i], nx2=S[(i+1)%n];
     s.toTop=s.grade>0.02?ds+(nx2.toTop||0):0; s.wideLeft=s.two?ds+(nx2.wideLeft||0):0; }
+  /* the plant cover beside the trail (race_flora.js), where a passer leaves the tread */
+  const cov=(global.RaceFlora&&RaceFlora.coverAlong)?RaceFlora.coverAlong(w,slope,S,cell):null;
+  for(let i=0;i<n;i++) S[i].cover=cov?cov[i]:0.3;
   /* the true speed limit of each stretch: cornering on the grip, less on rough ground */
   for(let i=0;i<n;i++){ const s=S[i]; const vc=Math.sqrt(s.mu*G/Math.max(s.curv,0.004)); s.vlim=Math.min(21,vc*(1-0.45*s.rough)*(s.grade<-0.08?0.85:1)); }
   return {S,n,ds,L,cell};
@@ -249,6 +256,30 @@ function makeRace(trail,riders,laps,seed,day){
   /* the two-track start: staggered on the line, sprint clocks armed */
   riders.forEach((rd,i)=>{ rd.s=-(i*2.2); rd.v=0; rd.lap=0; rd.status='riding'; rd.E=rd.E0; rd.Pa=0.5*rd.wkg*rd.kg; rd.intent=''; rd.powerMul=1; rd.errMul=1; rd.core=37; rd.peakCore=37; rd.water=0; rd.drank=0; rd.work=0; rd.climbed=0; rd.heatStops=0; });
   return {trail,riders,laps,t:0,R,day,events:[],finished:0,out:0,done:false};
+}
+/* THE RISK OF A SINGLETRACK PASS: the chance of a fall over the whole pass, for
+   this rider, here, at speed v. Off the tread, over the next 16 m:
+     the hillside   x1 on the flat, up to x7 where the side slope reaches 0.7 - the
+                    passer is on the cut bank or the fill edge
+     plants         x1 bare, x4 through closed cover (race_flora.js)
+     grip           (0.9/mu)^2: x1 on slickrock, x2.7 on shale
+     loose rock     x1 to x3 by roughness
+     a descent      +8 per unit of grade past 3%; a climb (slow) down to x0.7
+     a bend         x(1 + 30 rad/m of curvature)
+     a cliff        x3 within reach of the lip
+     speed          (v / 8 m/s)^2, floor 0.15
+   and the rider: skill x(0.4 expert .. 1.3 novice), reading the ground x(0.8 .. 1.2),
+   heat, thirst and injury (errMul), and a drained reserve x(1 .. 2.5).
+   0.4% for a skilled, fresh rider on open, gentle slickrock; 5% or so for an
+   average rider on a shale hillside in light scrub; past 30% on a steep, loose,
+   descending bench, which only the reckless try. */
+function passRisk(rd,trail,idx,v,fat){
+  const S=trail.S, n=trail.n; let side=0, cover=0, mu=1, rough=0, down=0, curv=0, exposed=0, g=0;
+  for(let j=0;j<8;j++){ const s=S[(idx+j)%n]; side=Math.max(side,s.side||0); cover=Math.max(cover,s.cover||0); mu=Math.min(mu,s.mu); rough=Math.max(rough,s.rough); down=Math.max(down,-s.grade); curv=Math.max(curv,s.curv); if(s.exposed) exposed=1; g+=s.grade/8; }
+  const sm=(a,b,x)=>{ const t=Math.max(0,Math.min(1,(x-a)/(b-a))); return t*t*(3-2*t); };
+  const ground=(1+6*sm(0.15,0.7,side))*(1+3*cover)*Math.pow(0.9/mu,2)*(1+2*rough)*(1+8*Math.max(0,down-0.03))*(1-0.3*sm(0.03,0.15,g))*(1+30*curv)*(exposed?3:1)*Math.max(0.15,(v/8)*(v/8));
+  const rider=(1.6-1.2*rd.execution)*(1.3-0.5*rd.perception)*(rd.errMul||1)*(1+1.5*(fat||0));
+  return Math.min(0.9,0.004*ground*rider);
 }
 /* ---- the engine ------------------------------------------------------------ */
 /* critical power now (heat and injury take their share), W */
@@ -404,6 +435,32 @@ function step(race,dt){
         if(rd.lap>=race.laps){ rd.status='finished'; rd.finish=race.t; race.finished++; race.events.push({t:race.t,kind:'finish',rider:rd,place:race.finished}); } }
       continue;
     }
+    /* SINGLETRACK PASSING (Joe, 2026-10-14: "let singletrack passing happen when
+       someone's stuck behind, but the risk of crashing during the pass should be
+       elevated based on the surface conditions ... and the rider skill and
+       physiological state"). A rider held up behind a slower one grows impatient -
+       after 5 s if daring, 25 s if not - and then weighs the risk of going round
+       right here (passRisk): if it is no more than they will accept (2-12% by nerve,
+       less for a crafty rider, who waits for a better spot) they leave the tread
+       and surge past. The fall can come at any metre of the pass; a pass that has
+       not got by in 12 s is given up. */
+    const ahP=k>0?order[k-1]:null;
+    if(rd.passing && (!ahP || rd.passing.who!==ahP || ahP.status!=='riding' || race.t-rd.passing.t0>12)){
+      /* the pass is over: if the rider is now ahead of the one they went for (the
+         order re-sorts as soon as they draw level), it worked */
+      const who=rd.passing.who, D=rd.lap*L+rd.s, Dw=who.lap*L+who.s;
+      if(D>Dw && who.status==='riding'){ rd.stpassAt=race.t; race.events.push({t:race.t,kind:'stpass',rider:rd,passed:who,risk:rd.passing.risk,seg}); }
+      rd.passing=null; }
+    if(ahP && !rd.passing){
+      const gapP=(ahP.lap*L+ahP.s)-(rd.lap*L+rd.s), narrow=!(seg.wide && segAt(trail,ahP).wide);
+      if(narrow && ahP.status==='riding' && gapP>=0 && gapP<5 && vt>ahP.v+0.6) rd.stuck=(rd.stuck||0)+dt; else rd.stuck=Math.max(0,(rd.stuck||0)-2*dt);
+      if(narrow && rd.stuck>5+20*(1-rd.nerve) && rd.E>0.1*rd.E0 && gapP>=0 && gapP<5){
+        const risk=passRisk(rd,trail,idx,Math.min(vt,ahP.v+1.5),fat);
+        rd.passRiskNow=risk;
+        if(risk<=(0.02+0.10*rd.nerve)*(1-0.4*rd.craft)){ rd.passing={who:ahP,t0:race.t,risk,need:gapP+3}; rd.stuck=0; } }
+    }
+    const pass=rd.passing;
+    if(pass){ vt=Math.min(vt,pass.who.v+1.5); if(rd.v<vt) P=Math.max(P,Math.min(cap,cp+0.6*Math.max(0,cap-cp))); rd.intent='passing'; }
     if(rd.v>vt){ a=-Math.min(seg.mu*G*0.75,(rd.v-vt)/dt)-Fres/m; P=0; mode='braking'; }
     else { const Fdrive=Math.min(P/Math.max(rd.v,VBAL), seg.mu*m*G*cosT*0.8); a=(Fdrive-Fres)/m;
       mode=rd.intent?rd.intent:seg.grade>0.03?'climbing':seg.grade<-0.03?'descending':'pedalling'; }
@@ -411,12 +468,23 @@ function step(race,dt){
     /* a pass needs BOTH riders on the two-track: the one behind cannot come
        past while the one ahead is already into the singletrack */
     if(k>0){ const ah=order[k-1]; const gap=(ah.lap*L+ah.s)-(rd.lap*L+rd.s); rd.gapAhead=gap; const wide=seg.wide && segAt(trail,ah).wide;
-      if(ah.status==='riding' && gap<4 && gap>=0 && !wide && rd.v>ah.v){ a=Math.min(a,(ah.v-rd.v)/dt); rd.note='held up'; mode='held up'; P=Math.min(P,Math.max(0,Fres*rd.v)); } else if(ah.status==='down' && gap<3 && gap>=0 && !wide){ a=Math.min(a,(0.8-rd.v)/dt); mode='held up'; } else rd.note=''; }
+      if(ah.status==='riding' && gap<4 && gap>=0 && !wide && rd.v>ah.v && !(pass && pass.who===ah)){ a=Math.min(a,(ah.v-rd.v)/dt); rd.note='held up'; mode='held up'; P=Math.min(P,Math.max(0,Fres*rd.v)); } else if(ah.status==='down' && gap<3 && gap>=0 && !wide){ a=Math.min(a,(0.8-rd.v)/dt); mode='held up'; } else rd.note=''; }
     /* what the board and the physics strip show */
     rd.mode=mode; rd.P=P; rd.vlim=vlim; rd.perceived=perceived; rd.vt=vt; rd.seg=seg; rd.fat=fat;
     rd.v=Math.max(0.4,rd.v+a*dt); rd.s+=rd.v*dt;
     /* and never through the rider ahead on singletrack, whatever the step did */
-    if(k>0){ const ah=order[k-1]; if(ah.status!=='down' && !(seg.wide && segAt(trail,ah).wide)){ const lim=(ah.lap*L+ah.s)-1.5-rd.lap*L; if(rd.s>lim && (ah.lap*L+ah.s)>=(rd.lap*L+rd.s-rd.v*dt)){ rd.s=Math.max(lim,rd.s-rd.v*dt); rd.v=Math.min(rd.v,Math.max(0.4,ah.v)); mode='held up'; rd.mode=mode; } } }
+    if(k>0){ const ah=order[k-1]; if(ah.status!=='down' && !(seg.wide && segAt(trail,ah).wide) && !(pass && pass.who===ah)){ const lim=(ah.lap*L+ah.s)-1.5-rd.lap*L; if(rd.s>lim && (ah.lap*L+ah.s)>=(rd.lap*L+rd.s-rd.v*dt)){ rd.s=Math.max(lim,rd.s-rd.v*dt); rd.v=Math.min(rd.v,Math.max(0.4,ah.v)); mode='held up'; rd.mode=mode; } } }
+    /* the pass itself: the risk is spent metre by metre of ground gained on the
+       rider being passed, on the ground actually under the wheels; a fall on a steep
+       hillside rolls on down it; a clumsy rider alongside can be taken down too */
+    if(pass){ const who=pass.who, g=(who.lap*L+who.s)-(rd.lap*L+rd.s), prog=Math.max(0,(pass.lastGap!=null?pass.lastGap:pass.need-1.5)-g); pass.lastGap=g;
+      const riskNow=passRisk(rd,trail,idx,rd.v,fat), frac=prog/pass.need;
+      if(frac>0 && race.R()<1-Math.pow(1-riskNow,frac)){
+        rd.passing=null; const sgp=S[idx], fall=sgp.side>0.3?Math.min(6,5*(sgp.side-0.2)):0;
+        crash(race,rd,sgp,0.1,rd.v,fall); const ev=race.events[race.events.length-1]; ev.passing=who; ev.risk=pass.risk;
+        if(who.status==='riding' && race.R()<0.05+0.2*(1-who.execution)){ crash(race,who,segAt(trail,who),0.1,who.v,0); race.events[race.events.length-1].tangled=rd; }
+        continue; }
+      if(g<-1.5){ rd.passing=null; rd.stpassAt=race.t; who.v*=0.92; race.events.push({t:race.t,kind:'stpass',rider:rd,passed:who,risk:pass.risk,seg:S[idx]}); } }
     rd.work+=P*dt; if(seg.grade>0) rd.climbed+=seg.grade*rd.v*dt;
     physiology(rd,P,dt,race.day); engine(rd,P,dt);
     if(rd.core>40){ rd.status='down'; rd.cooling=true; rd.down=30; rd.v=0; rd.core-=0.5; rd.heatStops++; race.events.push({t:race.t,kind:'heat',rider:rd,seg}); continue; }
@@ -475,7 +543,7 @@ function step(race,dt){
       over 110   too injured to continue.
    A crash also always scrubs the speed it happened at; nobody carries pace
    through one. */
-function crash(race,rd,seg,over,vAt){
+function crash(race,rd,seg,over,vAt,fall){
   rd.crashes++;
   const v=Math.max(0,vAt||rd.v||0);
   const absorb=0.30+0.55*(seg.rough||0.4);              // the share that arrives at once
@@ -485,7 +553,7 @@ function crash(race,rd,seg,over,vAt){
      the field out of a hard race, which is several times what really happens.
      About a third go over, and those are the ones that end a race. */
   const drop=(seg.exposed && race.R()<0.35) ? 10+20*race.R() : 0;   // the lip, in metres
-  const e=0.5*v*v*absorb + G*drop;                      // joules per kilogram
+  const e=0.5*v*v*absorb + G*(drop+(fall||0));          // joules per kilogram (fall: a tumble down the hillside off a pass)
   rd.v=0; rd.lastCrashE=e;
   if(e>110){ rd.status='out'; race.out++;
     race.events.push({t:race.t,kind:'out',rider:rd,seg,over,e,v}); return; }
@@ -506,6 +574,6 @@ function place(trail,rd){ const n=trail.n; const f=rd.s/trail.ds, i=((Math.floor
 
 /* the tallies for the cards */
 function tally(rd){ return {kcal:rd.work/(rd.eff||0.22)/4184, litres:rd.water, climbedFt:rd.climbed*3.281, peakCore:rd.peakCore}; }
-global.RaceSim={buildTrail, makeRiders, favourite, makeRace, makeDay, step, place, tally, cpW, pCap, BED, INKS};
+global.RaceSim={buildTrail, makeRiders, favourite, makeRace, makeDay, step, place, tally, cpW, pCap, passRisk, BED, INKS};
 }
 RaceSimFactory(typeof window!=='undefined'?window:globalThis);

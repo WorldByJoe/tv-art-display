@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_flora.js · v1.0 · 2026-10-14
+   race_flora.js · v1.1 · 2026-10-14
    the plants of a frozen Strata world, placed by ecology.
    Joe, 2026-10-14: "add trees and shrubs to the scenes ... an ecological
    approach for a Utah ecosystem (eg Canyonlands) and put the right types of
@@ -41,6 +41,7 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.1  coverAlong(): plant cover beside the trail, for the risk of a singletrack pass
      v1.0  new: habitat from slope, bed, soil depth, aspect, height and drainage;
            seven Canyonlands plants placed by it
 */
@@ -155,6 +156,30 @@ function place(o){
   }
   return {list,counts,habitat,accRip};
 }
-global.RaceFlora={SPECIES, ORDER, place, densities, flowAccumulation};
+/* HOW MUCH PLANT COVER lines the trail, sample by sample (0 bare .. 1 closed):
+   the same habitat and densities as place(), read on the erosion grid, turned into
+   canopy cover (1 - exp(-sum of density x crown area)). The race sim uses it for
+   the risk of passing off the tread on singletrack. */
+const MEAN_R={pinyon:1.9,juniper:1.6,cottonwood:5,willow:1.1,sage:0.65,blackbrush:0.6,shadscale:0.45,ephedra:0.45};
+function coverAlong(w,slope,S,cell){
+  const nx=w.nx, ny=w.ny, scale=cell/w.dx, z=w.z, acc=flowAccumulation(z,nx,ny);
+  const sorted=Float32Array.from(acc).sort(), accRip=sorted[Math.floor(sorted.length*0.985)];
+  let zmin=1e9, zmax=-1e9; for(let i=0;i<z.length;i++){ if(z[i]<zmin) zmin=z[i]; if(z[i]>zmax) zmax=z[i]; }
+  const out=new Float32Array(S.length);
+  for(let i=0;i<S.length;i++){
+    const x=clamp(Math.round(S[i].x),2,nx-3), y=clamp(Math.round(S[i].y),2,ny-3), c=y*nx+x;
+    const sl=slope[c]>5?0.3:slope[c];
+    const gx=(z[c+1]-z[c-1])*scale/(2*cell), gz=(z[c+nx]-z[c-nx])*scale/(2*cell), gl=Math.hypot(gx,gz)||1;
+    const north=(gz/gl)*Math.min(1,sl/0.1), e=z[c], k=Strata.layerAt(w,c,e), bed=k<0?'basement':w.layers[k].type;
+    const lap=((z[c-2]+z[c+2]+z[c-2*nx]+z[c+2*nx])/4-z[c])*scale, ac=acc[c];
+    const rip=ac>accRip&&sl<0.15?smooth(accRip,accRip*4,ac):0, soft=CLAY[bed]?1:bed==='siltstone'?0.6:0;
+    const soil=clamp(0.45-1.4*sl+0.5*lap+0.3*soft+(ac>accRip*0.3?0.25:0),0,1);
+    const d=densities({s:sl,north,bed,rel:(e-zmin)/(zmax-zmin),soil,rip});
+    let a=0; for(const sp of ORDER) a+=d[sp]/100*Math.PI*MEAN_R[sp]*MEAN_R[sp];
+    out[i]=1-Math.exp(-a);
+  }
+  return out;
+}
+global.RaceFlora={SPECIES, ORDER, place, densities, flowAccumulation, coverAlong};
 }
 RaceFloraFactory(typeof window!=='undefined'?window:globalThis);

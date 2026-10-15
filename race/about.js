@@ -97,7 +97,7 @@
           A('Race craft', () => 'spends the reserve where it pays'),
           A('Descends', () => 'grip they can use braking downhill'),
           A('Reads the ground', () => 'how truly they judge the limit'),
-          A('Dares', () => 'how near that limit they ride'),
+          A('Dares', () => 'how near the limit they ride; the risk they take to pass'),
           A('Takes the heat', () => 'core heat they race at: hot days'),
           A('Body mass', () => 'more watts, fewer per kilo'),
           A('Followed rider', () => sub ? '#' + sub.num + ' ' + sub.name + ' · ' + Math.round(100 * sub.fast) + '% fast · reserve '
