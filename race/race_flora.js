@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_flora.js · v1.1 · 2026-10-14
+   race_flora.js · v1.2 · 2026-10-14
    the plants of a frozen Strata world, placed by ecology.
    Joe, 2026-10-14: "add trees and shrubs to the scenes ... an ecological
    approach for a Utah ecosystem (eg Canyonlands) and put the right types of
@@ -41,6 +41,8 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.2  vegetationGrid(): the unthinned plant field for the overhead map;
+           the habitat model shared by place() and it
      v1.1  coverAlong(): plant cover beside the trail, for the risk of a singletrack pass
      v1.0  new: habitat from slope, bed, soil depth, aspect, height and drainage;
            seven Canyonlands plants placed by it
@@ -109,17 +111,34 @@ function densities(h){
    layers, scale (race m per erosion m), cell (race m per erosion cell),
    trail: [[x,z],...] race m, bbox {x0,z0,x1,z1} race m, seed}
    Returns {list:[{sp, x, z, h, r, rot, tint}], counts, habitat(x,z)}. */
-function place(o){
-  const {nx,ny,zE,U,nxf,nyf,zr,Fr,nrm,layers,scale,cell}=o, cf=cell/U, R=rng32(o.seed||1);
+/* normals of the fine display grid, race frame (x east, y up, z south); z in
+   erosion metres, scale = race m per erosion m, cf = race m per fine cell */
+function fineNormals(zr,nxf,nyf,cf,scale){
+  const nrm=new Float32Array(nxf*nyf*3), Y=(i)=>zr[i]*scale;
+  for(let j=0;j<nyf;j++) for(let i=0;i<nxf;i++){ const k=j*nxf+i;
+    const gx=(Y(j*nxf+Math.min(nxf-1,i+1))-Y(j*nxf+Math.max(0,i-1)))/(2*cf), gz=(Y(Math.min(nyf-1,j+1)*nxf+i)-Y(Math.max(0,j-1)*nxf+i))/(2*cf);
+    const inv=1/Math.sqrt(gx*gx+gz*gz+1); nrm[3*k]=-gx*inv; nrm[3*k+1]=inv; nrm[3*k+2]=-gz*inv; }
+  return nrm;
+}
+/* THE VEGETATION FIELD, for the overhead map: on a grid of `step` fine cells, the
+   real (unthinned) density of pinyon and juniper and of cottonwood (trees per m2),
+   the shrub cover (0..1) and the wash floor (0..1) - the same habitat and the same
+   densities as the plants in the 3D view */
+function vegetationGrid(o){
+  const step=o.step||2, cf=o.cell/o.U, nrm=o.nrm||fineNormals(o.zr,o.nxf,o.nyf,cf,o.scale);
+  const H=habitatModel(Object.assign({},o,{nrm})), gw=Math.ceil(o.nxf/step), gh=Math.ceil(o.nyf/step), N=gw*gh;
+  const tree=new Float32Array(N), cw=new Float32Array(N), shrub=new Float32Array(N), wash=new Float32Array(N);
+  for(let j=0;j<gh;j++) for(let i=0;i<gw;i++){ const X=(i+0.5)*step*cf, Z=(j+0.5)*step*cf, h=H.habitat(X,Z), d=densities(h), k=j*gw+i;
+    tree[k]=(d.pinyon+d.juniper)/100; cw[k]=d.cottonwood/100; wash[k]=h.rip;
+    let a=0; for(const sp of ['sage','blackbrush','shadscale','ephedra','willow']) a+=d[sp]/100*Math.PI*MEAN_R[sp]*MEAN_R[sp];
+    shrub[k]=1-Math.exp(-a); }
+  return {step,gw,gh,tree,cw,shrub,wash,cf};
+}
+function habitatModel(o){
+  const {nx,ny,zE,U,nxf,nyf,zr,Fr,nrm,layers,scale,cell}=o, cf=cell/U;
   const acc=flowAccumulation(zE,nx,ny);
   const sorted=Array.from(acc).sort((a,b)=>a-b), accRip=sorted[Math.floor(sorted.length*0.985)];   // the largest 1.5% of drainage
   let zmin=1e9, zmax=-1e9; for(let i=0;i<zr.length;i++){ if(zr[i]<zmin) zmin=zr[i]; if(zr[i]>zmax) zmax=zr[i]; }
-  /* distance to the trail, race m, on the erosion grid (chamfer from the trail cells) */
-  const dist=new Float32Array(nx*ny).fill(1e9), q=[];
-  for(const [x,z] of o.trail){ const c=Math.min(ny-1,Math.max(0,Math.round(z/cell)))*nx+Math.min(nx-1,Math.max(0,Math.round(x/cell))); if(dist[c]>0){ dist[c]=0; q.push(c); } }
-  for(let h=0;h<q.length;h++){ const c=q[h], x=c%nx, y=(c-x)/nx; if(dist[c]>800) continue;
-    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue; const xx=x+dx, yy=y+dy; if(xx<0||yy<0||xx>=nx||yy>=ny) continue;
-      const cc=yy*nx+xx, nd=dist[c]+cell*((dx&&dy)?1.414:1); if(nd<dist[cc]){ dist[cc]=nd; q.push(cc); } } }
   const fAt=(arr,X,Z)=>{ const xf=clamp(X/cf,0,nxf-1.001), yf=clamp(Z/cf,0,nyf-1.001), xi=xf|0, yi=yf|0, fx=xf-xi, fy=yf-yi, c=yi*nxf+xi;
     return (arr[c]*(1-fx)+arr[c+1]*fx)*(1-fy)+(arr[c+nxf]*(1-fx)+arr[c+nxf+1]*fx)*fy; };
   const gAt=(arr,X,Z)=>{ const x=clamp(X/cell,0,nx-1.001), y=clamp(Z/cell,0,ny-1.001), xi=x|0, yi=y|0, fx=x-xi, fy=y-yi, c=yi*nx+xi;
@@ -138,6 +157,22 @@ function place(o){
     const soil=clamp(0.45-1.4*s+0.5*lap+0.3*soft+(ac>accRip*0.3?0.25:0),0,1);
     return {s,north,bed,rel:(e-zmin)/(zmax-zmin),soil,rip,lap,acc:ac};
   }
+  return {habitat,accRip,gAt,fAt};
+}
+/* place(o): o = {nx, ny, zE (erosion-grid z, erosion m), U, nxf, nyf, zr (fine z,
+   erosion m), Fr (fine fold field), nrm (fine normals, 3 per cell, race frame),
+   layers, scale (race m per erosion m), cell (race m per erosion cell),
+   trail: [[x,z],...] race m, bbox {x0,z0,x1,z1} race m, seed}
+   Returns {list:[{sp, x, z, h, r, rot, tint}], counts, habitat(x,z)}. */
+function place(o){
+  const {nx,ny,nxf,nyf,cell,U}=o, cf=cell/U, R=rng32(o.seed||1);
+  const H=habitatModel(o), habitat=H.habitat, gAt=H.gAt, accRip=H.accRip;
+  /* distance to the trail, race m, on the erosion grid (chamfer from the trail cells) */
+  const dist=new Float32Array(nx*ny).fill(1e9), q=[];
+  for(const [x,z] of o.trail){ const c=Math.min(ny-1,Math.max(0,Math.round(z/cell)))*nx+Math.min(nx-1,Math.max(0,Math.round(x/cell))); if(dist[c]>0){ dist[c]=0; q.push(c); } }
+  for(let h=0;h<q.length;h++){ const c=q[h], x=c%nx, y=(c-x)/nx; if(dist[c]>800) continue;
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue; const xx=x+dx, yy=y+dy; if(xx<0||yy<0||xx>=nx||yy>=ny) continue;
+      const cc=yy*nx+xx, nd=dist[c]+cell*((dx&&dy)?1.414:1); if(nd<dist[cc]){ dist[cc]=nd; q.push(cc); } } }
   /* sample the region: each sample stands for `area` m2; a plant appears with
      probability (density per 100 m2 x area/100 x thinning) */
   const {x0,z0,x1,z1}=o.bbox, A=(x1-x0)*(z1-z0), NS=Math.min(220000,Math.max(40000,A/18)), area=A/NS;
@@ -180,6 +215,6 @@ function coverAlong(w,slope,S,cell){
   }
   return out;
 }
-global.RaceFlora={SPECIES, ORDER, place, densities, flowAccumulation, coverAlong};
+global.RaceFlora={SPECIES, ORDER, place, densities, flowAccumulation, coverAlong, vegetationGrid, fineNormals};
 }
 RaceFloraFactory(typeof window!=='undefined'?window:globalThis);

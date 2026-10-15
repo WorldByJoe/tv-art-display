@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_chase3d.js · v1.3 · 2026-10-14
+   race_chase3d.js · v1.4 · 2026-10-14
    the chase window of race.html, in WebGL (three.js r128).
    Joe, 2026-10-13: "The quality of the landscape rendering is really poor in
    the upper right rider focus graph." The old window was the strata ray-
@@ -44,6 +44,8 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.4  the ground in natural rock colours (StrataView.naturalColors), not the
+           strata's own
      v1.3  one draw per plant species, not per 350 m tile (220 draw calls cost the
            Pi a quarter of its frame rate)
      v1.2  plants placed by ecology (race_flora.js) in place of random scrub
@@ -260,7 +262,8 @@ function create(canvas){
 
     /* ---- materials ---- */
     const L=w.layers, nb=Math.min(16,L.length), base=new Array(16).fill(1e9), cols=[], rough=new Array(16).fill(0.4);
-    for(let k=0;k<16;k++){ if(k<nb){ base[k]=L[k].base; const c=L[k].color; cols.push(new THREE.Vector3(c[0]/255,c[1]/255,c[2]/255)); rough[k]=(global.RaceSim&&RaceSim.BED[L[k].type])?RaceSim.BED[L[k].type].rough:0.4; } else cols.push(new THREE.Vector3()); }
+    const ncol=global.StrataView&&StrataView.naturalColors?StrataView.naturalColors(L):null;   // natural colours for the race (strata_view.js)
+    for(let k=0;k<16;k++){ if(k<nb){ base[k]=L[k].base; const c=ncol?ncol[k]:L[k].color; cols.push(new THREE.Vector3(c[0]/255,c[1]/255,c[2]/255)); rough[k]=(global.RaceSim&&RaceSim.BED[L[k].type])?RaceSim.BED[L[k].type].rough:0.4; } else cols.push(new THREE.Vector3()); }
     const hor=new THREE.Color(0.80,0.79,0.76), zen=new THREE.Color(0.36,0.52,0.78);
     const uni=()=>({sunDir:{value:sun}, sunCol:{value:new THREE.Vector3(0.86,0.80,0.71)}, skyCol:{value:new THREE.Vector3(0.27,0.31,0.39)},
       bounceCol:{value:new THREE.Vector3(0.16,0.12,0.09)}, fogCol:{value:new THREE.Vector3(hor.r,hor.g,hor.b)}, camPos:{value:new THREE.Vector3()},

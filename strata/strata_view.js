@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   strata_view.js · v1.0 · 2026-09-13
+   strata_view.js · v1.1 · 2026-10-14
    the shared PICTURE of a Strata world, used by strata.html
    (the eroding landscape) and race.html (the course cut into a frozen one).
 
@@ -25,6 +25,9 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.1  natural colours for the race (Joe, 2026-10-14): naturalColors(),
+           naturalPainter() (relief shading, rock and soil, washes, scrub, tree
+           crowns) and a `natural` option for the ray-marcher; Strata unchanged
      v1.0  versioning starts here; this file predates the scheme
 */
 function StrataViewFactory(global){
@@ -33,6 +36,19 @@ const U=3;
 const FOV=62*Math.PI/180;
 const SKY_TOP=[124,156,200], SKY_HOR=[214,216,214], HAZE=[220,206,184], PLAIN=[192,164,124];
 const BASEMENT=[92,86,88];
+/* NATURAL COLOURS (Joe, 2026-10-14: in the race, "a more conventional overhead view
+   that shows the terrain shadowing, vegetation, and more natural rock coloration").
+   Strata keeps each bed's own colour - the beds and their hardness are the point
+   there. For racing, a bed takes the colour of its ROCK TYPE as the Colorado Plateau
+   shows it from the air (buff-orange sandstone, grey-tan limestone, red-brown
+   siltstone, muted mauve-brown mudstone, grey shale), with only a quarter of its
+   own colour left in, so the stripes of the strata fade to the variation of a real
+   landscape; gentle ground takes a soil tone over its rock. */
+const NATURAL={sandstone:[196,146,100], limestone:[178,171,157], siltstone:[172,130,100], mudstone:[152,114,100], shale:[142,138,126]};
+const SOIL=[198,174,140], SAND=[216,198,164], SCRUB=[104,108,82], NAT_BASE=[120,110,104];
+function naturalColors(layers){
+  return layers.map(l=>{ const t=NATURAL[l.type]||[170,150,130], c=l.color; return [0,1,2].map(i=>Math.round(0.74*t[i]+0.26*c[i])); }); }
+const mixc=(a,b,t)=>[a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
 
 function wts(t){ const t2=t*t, t3=t2*t; return [(1-3*t+3*t2-t3)/6,(4-6*t2+3*t3)/6,(1+3*t+3*t2-3*t3)/6,t3/6]; }
 /* separable cubic B-spline resample of an nx x ny field onto nxf x nyf (= U times) */
@@ -96,6 +112,9 @@ function create(canvas){
     /* ground detail (the chase window): a speckle per fine cell, stronger on
        rough rock - opts.tex[k] is the roughness of bed k, 0..1 */
     const tex=opts.tex||null;
+    /* natural colours: the rock type's colour by elevation (cliffs still show their
+       bands, subdued), and gentle ground blended toward soil */
+    const nat=opts.natural?(w.__nat||(w.__nat=naturalColors(layers))):null;
     for(let r=0;r<RH;r++){ const u=Math.max(0,Math.min(1,r/Math.max(1,horizon))), v=u*u;
       const cr=SKY_TOP[0]+(SKY_HOR[0]-SKY_TOP[0])*v, cg=SKY_TOP[1]+(SKY_HOR[1]-SKY_TOP[1])*v, cb=SKY_TOP[2]+(SKY_HOR[2]-SKY_TOP[2])*v;
       skyRow[r]=0xff000000|(cb<<16)|(cg<<8)|cr; }
@@ -135,10 +154,11 @@ function create(canvas){
             let cr,cg,cb;
             if(!inside){ cr=PLAIN[0]; cg=PLAIN[1]; cb=PLAIN[2]; }
             else { let k=nb-1; while(k>=0 && e<layers[k].base+fs) k--;
-                   if(k<0){ cr=BASEMENT[0]; cg=BASEMENT[1]; cb=BASEMENT[2]; }
-                   else { const col=layers[k].color; cr=col[0]; cg=col[1]; cb=col[2];
+                   if(k<0){ const b0=nat?NAT_BASE:BASEMENT; cr=b0[0]; cg=b0[1]; cb=b0[2]; }
+                   else { const col=nat?nat[k]:layers[k].color; cr=col[0]; cg=col[1]; cb=col[2];
                           const d1=e-(layers[k].base+fs);
-                          if(d1<1.5 && k>0){ const m=0.5*(1-d1/1.5), c2=layers[k-1].color; cr+=(c2[0]-cr)*m; cg+=(c2[1]-cg)*m; cb+=(c2[2]-cb)*m; } } }
+                          if(d1<1.5 && k>0){ const m=0.5*(1-d1/1.5), c2=nat?nat[k-1]:layers[k-1].color; cr+=(c2[0]-cr)*m; cg+=(c2[1]-cg)*m; cb+=(c2[2]-cb)*m; } }
+                   if(nat){ const sf=0.55*(1-steep); cr+=(SOIL[0]-cr)*sf; cg+=(SOIL[1]-cg)*sf; cb+=(SOIL[2]-cb)*sf; } }
             let shx=sh;
             if(tex && inside){ let k2=nb-1; while(k2>=0 && e<layers[k2].base+fs) k2--; const tx=k2<0?0.4:tex[k2]; shx=sh*(1+spk*(0.18+0.55*tx)*Math.max(0.15,1-t/(0.3*nx))); }
             cr*=shx; cg*=shx; cb*=shx;
@@ -228,6 +248,86 @@ function mapPainter(view, src, outW, outH){
   }
   return {canvas:cv, paintRows, get done(){ return row>=outH; }, src, outW, outH};
 }
-global.StrataView={create, orbitCamera, drawMap, mapPainter, makeFine, refreshFine, U, FOV};
+/* THE NATURAL MAP: a conventional overhead view of a region - relief shading lit from
+   the north-west, rock in its natural colour where the ground is steep, soil where
+   it is gentle, pale sand on the wash floors, scrub as a grey-green tint by its
+   cover, and pinyon, juniper and cottonwood as individual crowns with their shadows
+   (veg from race_flora.js vegetationGrid: the same plants as the 3D view, unthinned).
+   Painted in row chunks like mapPainter, then the trees in batches. */
+function natFields(fine){
+  if(fine.nat && fine.nat.step===fine.step) return fine.nat;
+  const {nxf,nyf,zr}=fine, dxf=fine.w.dx/fine.U, N=nxf*nyf, shade=new Float32Array(N), slope=new Float32Array(N);
+  const lx=-0.5, ly=-0.5, lz=0.7071, VE=1.6;                     // light from the north-west (the map's top left), relief exaggerated for shading
+  for(let y=0;y<nyf;y++) for(let x=0;x<nxf;x++){ const i=y*nxf+x;
+    const gx=((x<nxf-1?zr[i+1]:zr[i])-(x>0?zr[i-1]:zr[i]))/(2*dxf), gy=((y<nyf-1?zr[i+nxf]:zr[i])-(y>0?zr[i-nxf]:zr[i]))/(2*dxf);
+    slope[i]=Math.hypot(gx,gy); const ex=gx*VE, ey=gy*VE, inv=1/Math.sqrt(ex*ex+ey*ey+1);
+    shade[i]=Math.max(0,(-ex*lx-ey*ly+lz)*inv); }
+  fine.nat={step:fine.step,shade,slope}; return fine.nat;
+}
+function naturalPainter(view, src, outW, outH, veg, opts){
+  opts=opts||{};
+  const fine=view.fine, w=view.world; if(fine.step!==w.step) refreshFine(fine);
+  const nf=natFields(fine), cols=naturalColors(w.layers);
+  const cv=document.createElement('canvas'); cv.width=outW; cv.height=outH;
+  const ctx=cv.getContext('2d'), img=ctx.createImageData(outW,outH), px=new Uint32Array(img.data.buffer);
+  const {nxf,nyf,zr,Fr}=fine, layers=w.layers, nb=layers.length;
+  const vAt=(arr,xf,yf)=>{ if(!veg) return 0; const st=veg.step, X=Math.min(veg.gw-1.001,Math.max(0,xf/st-0.5)), Y=Math.min(veg.gh-1.001,Math.max(0,yf/st-0.5)), xi=X|0, yi=Y|0, fx=X-xi, fy=Y-yi, c=yi*veg.gw+xi;
+    return (arr[c]*(1-fx)+arr[c+1]*fx)*(1-fy)+(arr[c+veg.gw]*(1-fx)+arr[c+veg.gw+1]*fx)*fy; };
+  let row=0, trees=null, ti=0, done=false;
+  function paintRows(n){
+    if(done) return true;
+    if(row<outH){
+      const end=Math.min(outH,row+n);
+      for(;row<end;row++){
+        const yf=Math.min(nyf-1.001,Math.max(0,src.y0+(row+0.5)/outH*src.h)), yi=yf|0, fy=yf-yi;
+        for(let x=0;x<outW;x++){
+          const xf=Math.min(nxf-1.001,Math.max(0,src.x0+(x+0.5)/outW*src.w)), xi=xf|0, fx=xf-xi, c=yi*nxf+xi;
+          const w00=(1-fx)*(1-fy), w10=fx*(1-fy), w01=(1-fx)*fy, w11=fx*fy;
+          const e=zr[c]*w00+zr[c+1]*w10+zr[c+nxf]*w01+zr[c+nxf+1]*w11;
+          const fs=Fr[c]*w00+Fr[c+1]*w10+Fr[c+nxf]*w01+Fr[c+nxf+1]*w11;
+          const sh=nf.shade[c]*w00+nf.shade[c+1]*w10+nf.shade[c+nxf]*w01+nf.shade[c+nxf+1]*w11;
+          const sl=nf.slope[c]*w00+nf.slope[c+1]*w10+nf.slope[c+nxf]*w01+nf.slope[c+nxf+1]*w11;
+          let k=nb-1; while(k>=0 && e<layers[k].base+fs) k--;
+          const rock=k<0?NAT_BASE:cols[k], t=Math.max(0,Math.min(1,(sl-0.22)/0.4));
+          let col=mixc(mixc(rock,SOIL,0.6),[rock[0]*0.92,rock[1]*0.92,rock[2]*0.92],t*t*(3-2*t));
+          const wa=vAt(veg&&veg.wash,xf,yf), sc=vAt(veg&&veg.shrub,xf,yf);
+          if(wa>0) col=mixc(col,SAND,0.6*Math.min(1,wa));
+          if(sc>0) col=mixc(col,SCRUB,0.55*sc);
+          /* a little grain so flat ground is not flat colour */
+          let hsh=(xi*374761393+yi*668265263)|0; hsh=(hsh^(hsh>>>13))*1274126177|0; const grain=1+0.05*(((hsh^(hsh>>>16))>>>0)/4294967296-0.5);
+          const L=Math.min(1.15,0.40+0.80*sh)*grain;
+          px[row*outW+x]=0xff000000|((Math.min(255,col[2]*L)|0)<<16)|((Math.min(255,col[1]*L)|0)<<8)|(Math.min(255,col[0]*L)|0);
+        }
+      }
+      if(row>=outH){ ctx.putImageData(img,0,0); trees=veg?treeList():[]; ti=0; }
+      return false;
+    }
+    /* the trees, in batches */
+    if(!veg||!trees.length){ done=true; return true; }
+    const pxPerFine=outW/src.w, pxPerM=pxPerFine/veg.cf;
+    const end=Math.min(trees.length,ti+n*60);
+    for(;ti<end;ti++){ const t=trees[ti], r=Math.max(0.7,t.r*pxPerM);
+      ctx.fillStyle='rgba(30,22,14,0.32)'; ctx.beginPath(); ctx.arc(t.x+0.7*r,t.y+0.7*r,r*1.05,0,6.283); ctx.fill();          // its shadow, down-sun (south-east)
+      ctx.fillStyle=t.col; ctx.beginPath(); ctx.arc(t.x,t.y,r,0,6.283); ctx.fill();
+      if(r>1.6){ ctx.fillStyle='rgba(255,255,230,0.10)'; ctx.beginPath(); ctx.arc(t.x-0.3*r,t.y-0.3*r,0.55*r,0,6.283); ctx.fill(); } }
+    if(ti>=trees.length) done=true;
+    return done;
+  }
+  /* pinyon-juniper and cottonwood crowns at the vegetation field's density */
+  function treeList(){
+    const out=[], st=veg.step, cellM2=(st*veg.cf)*(st*veg.cf); let seed=(w.seed*2654435761)>>>0;
+    const R=()=>{ seed=(seed*1664525+1013904223)>>>0; return seed/4294967296; };
+    const gx0=Math.max(0,Math.floor(src.x0/st)), gx1=Math.min(veg.gw-1,Math.ceil((src.x0+src.w)/st)), gy0=Math.max(0,Math.floor(src.y0/st)), gy1=Math.min(veg.gh-1,Math.ceil((src.y0+src.h)/st));
+    for(let gy=gy0;gy<=gy1;gy++) for(let gx=gx0;gx<=gx1;gx++){ const k=gy*veg.gw+gx;
+      for(const [lam,kind] of [[veg.tree[k]*cellM2,'pj'],[veg.cw[k]*cellM2,'cw']]){ let n=Math.floor(lam); if(R()<lam-n) n++;
+        for(let q=0;q<n;q++){ const xf=(gx+R())*st, yf=(gy+R())*st;
+          const x=(xf-src.x0)/src.w*outW, y=(yf-src.y0)/src.h*outH; if(x<-4||y<-4||x>outW+4||y>outH+4) continue;
+          const v=0.85+0.3*R(), c=kind==='cw'?[78,104,48]:R()<0.45?[46,62,40]:[62,74,52];
+          out.push({x,y,r:kind==='cw'?3.5+2.5*R():1.1+1.4*R(),col:'rgb('+(c[0]*v|0)+','+(c[1]*v|0)+','+(c[2]*v|0)+')'}); } } }
+    return out;
+  }
+  return {canvas:cv, paintRows, get done(){ return done; }, src, outW, outH};
+}
+global.StrataView={create, orbitCamera, drawMap, mapPainter, naturalPainter, naturalColors, makeFine, refreshFine, U, FOV};
 }
 StrataViewFactory(typeof window!=='undefined'?window:globalThis);

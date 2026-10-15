@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html · v2.5 · 2026-10-14
+  race.html · v2.6 · 2026-10-14
   a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
@@ -45,6 +45,9 @@
 ==========================================================================
 
   CHANGED
+    v2.6  the race in natural colours: from the course search on, the maps, the
+          helicopter and the chase window show relief shading, natural rock and
+          soil, washes, scrub and trees; act 1 keeps the strata colours
     v2.5  the board gives a rider out of the race no place number (race_sim v3.2
           lists them after everyone still in it)
     v2.4  singletrack passes (race_sim v3.1) get their own alert with the risk the
@@ -53,9 +56,6 @@
     v2.2  rider cards: a plain description of each rider and bars for the new
           engine (aerobic power, reserve, sprint, recovery, race craft); the
           board and the physics strip show the reserve
-    v2.1  descending skill and heat matter (race_sim v2.1); the chase camera keeps
-          its distance round switchbacks (race_chase3d v1.1); time doubles past 40
-          race-minutes; the climb bar scaled to the new 3.4-4.4 W/kg field
 -->
 <style>
   html, body { margin:0; padding:0; height:100%; background:#04060c; overflow:hidden; }
@@ -169,6 +169,26 @@ const chase3dCv=document.getElementById('chase3d');
 let chase3d=null; try{ chase3d=(window.RaceChase3D&&RaceChase3D.create(chase3dCv))||null; }catch(e){ chase3d=null; }
 let tickAt=0;
 let day=null, painter=null, heliOn=false, heliAt=0, lastHeli=0, mapFrame=null;
+/* THE RACE IN NATURAL COLOURS (Joe, 2026-10-14: the strata colours are fun while the
+   land erodes, "but then the colors are distracting for the racers to ride upon").
+   From the course search on, the maps, the helicopter and the chase window show a
+   conventional overhead view: relief shading, natural rock and soil colours, washes,
+   scrub and trees (strata_view.js naturalPainter, race_flora.js vegetationGrid).
+   The erosion in act 1 keeps each bed's own colour. */
+let veg=null, natMap=null, natAt=0;
+function makeVeg(){
+  if(veg || !window.RaceFlora || !RaceFlora.vegetationGrid) return veg;
+  const f=view.fine; if(f.step!==w.step) StrataView.refreshFine(f);
+  veg=RaceFlora.vegetationGrid({nx:w.nx,ny:w.ny,zE:w.z,U:f.U,nxf:f.nxf,nyf:f.nyf,zr:f.zr,Fr:f.Fr,layers:w.layers,scale:CONFIG.raceCell/w.dx,cell:CONFIG.raceCell,step:2});
+  return veg;
+}
+/* the whole block in natural colours for the course search, at about half the
+   screen's resolution so it paints in a couple of seconds on the Pi */
+function startNatMap(){
+  if(!StrataView.naturalPainter) return; makeVeg(); sizeUI();
+  const f=view.fine, b=leftColumn(ui.width,ui.height,false).map, sc=Math.min(b.W/f.nxf,b.H/f.nyf)*0.6;
+  natMap=StrataView.naturalPainter(view,{x0:0,y0:0,w:f.nxf,h:f.nyf},Math.round(f.nxf*sc),Math.round(f.nyf*sc),veg); natAt=0;
+}
 /* flash text goes over the upper part of the map, where nothing else lives */
 function flash(text,force){ const at=mapFrame?{x:(mapFrame.x+mapFrame.W/2)/DPR, y:(mapFrame.y+mapFrame.H*0.2)/DPR}:null; Wall.moment(text, Object.assign(at?{at,exact:true}:{},force?{force:true}:{})); }
 /* HOW HARD A CRASH WAS (Joe, 2026-10-13: "tell us how severe the crash is
@@ -227,12 +247,12 @@ function onPlan(L){
 function nextWorld(){ const next=(seed*1664525+1013904223)>>>0; if(PINNED) location.replace(SELF+'?pin&seed='+next); else newWorld(next); }
 
 function newWorld(s){
-  seed=s; w=Strata.makeWorld(seed); view.setWorld(w); frozen=false; plan=null; trail=null; riders=null; race=null; mapAlpha=0; revealed=0;
+  seed=s; w=Strata.makeWorld(seed); view.setWorld(w); frozen=false; plan=null; trail=null; riders=null; race=null; mapAlpha=0; revealed=0; veg=null; natMap=null; natAt=0;
   act=1; t0=actAt=performance.now(); cv.style.opacity='1'; chaseCv.style.display='none'; chaseCap.style.display='none'; chase3dCv.style.display='none';
   Wall.clearEpisode(); Wall.clearTimers();
   if(SYNC_ACT){
     for(let i=0;i<CONFIG.freezeStep;i++) Strata.step(w); frozen=true;
-    if(SYNC_ACT>=2){ act=2; mapAlpha=1; cv.style.opacity='0'; onPlan(RacePlanner.loop(raceZ(),w.nx,w.ny,CONFIG.raceCell,planOpts())); revealed=1e9; }
+    if(SYNC_ACT>=2){ act=2; mapAlpha=1; cv.style.opacity='0'; startNatMap(); if(natMap){ while(!natMap.done) natMap.paintRows(400); natAt=performance.now()-5000; } onPlan(RacePlanner.loop(raceZ(),w.nx,w.ny,CONFIG.raceCell,planOpts())); revealed=1e9; }
     if(SYNC_ACT>=3 && plan){ startRoster(); }
     if(SYNC_ACT>=4 && plan){ startRace(); for(let t=0,k=0;t<SYNC_RACE;t+=0.1,k++){ RaceSim.step(race,0.1); if(k%10===0) record(); } direct(true); while(painter&&!painter.done) painter.paintRows(200); }
     if(SYNC_ACT>=5 && plan){ while(!race.done && race.t<7200) RaceSim.step(race,0.1); race.resultsAt=performance.now(); showResults(); }
@@ -247,7 +267,9 @@ function startRoster(){
   trail=RaceSim.buildTrail(plan,w,CONFIG.raceCell,2); day=RaceSim.makeDay(seed);
   /* the crisp zoomed map is painted now, in chunks, while the cards stand */
   const r=courseRect(); sizeUI(); const b=leftColumn(ui.width,ui.height,true).map;
-  const sc=Math.min(b.W/r.w, b.H/r.h); painter=StrataView.mapPainter(view,r,Math.round(r.w*sc),Math.round(r.h*sc));
+  const sc=Math.min(b.W/r.w, b.H/r.h);
+  painter=StrataView.naturalPainter ? StrataView.naturalPainter(view,r,Math.round(r.w*sc),Math.round(r.h*sc),makeVeg())
+                                    : StrataView.mapPainter(view,r,Math.round(r.w*sc),Math.round(r.h*sc));
   heliOn=false; heliAt=performance.now();
   Wall.lane('Race day: '+day.label+'. Eight riders drawn at random: an engine shaped by fibre type, the judgement to spend it, and the skill and nerve to descend.',{hold:12000});
 }
@@ -287,7 +309,7 @@ function tick(){
   if(act===1){
     if(!frozen){ if(!busy && w.step<CONFIG.freezeStep){ busy=true; worker.postMessage({cmd:'step',n:6}); }
       if(w.step>=CONFIG.freezeStep){ frozen=true; actAt=now; Wall.lane('Frozen. Now the scale: one cell is '+CONFIG.raceCell+' m, the block '+(w.nx*CONFIG.raceCell/1000).toFixed(1)+' by '+(w.ny*CONFIG.raceCell/1000).toFixed(1)+' km - the slopes are the same, so the cliffs are still cliffs.'); } }
-    else if(now-actAt>9000){ act=2; actAt=now; if(!planner) planner=makePlanner(); planner.postMessage({z:raceZ(),nx:w.nx,ny:w.ny,cell:CONFIG.raceCell,opts:planOpts()}); }
+    else if(now-actAt>9000){ act=2; actAt=now; if(!planner) planner=makePlanner(); planner.postMessage({z:raceZ(),nx:w.nx,ny:w.ny,cell:CONFIG.raceCell,opts:planOpts()}); startNatMap(); }
   }
   else if(act===2){ mapAlpha=Math.min(1,(now-actAt)/1600); cv.style.opacity=String(1-mapAlpha);
     /* the search, then the course, drawn over about eighteen seconds whatever their size */
@@ -384,6 +406,7 @@ function draw(now){
   const W=ui.width, H=ui.height; uctx.clearRect(0,0,W,H);
   if(!w) return;
   if(act===1 || (act===2 && mapAlpha<1)) view.render(StrataView.orbitCamera(w,(now-t0)/1000,CONFIG.orbitSec),{vexag:CONFIG.vexag, rain:!frozen});
+  if(natMap && !natMap.done && act===2){ natMap.paintRows(140); if(natMap.done) natAt=now; }   // the block in natural colours
   if(painter && !painter.done) painter.paintRows(act===3?90:40);     // the crisp map, a few rows a frame
   if(act===2 || act===4){
     const col=leftColumn(W,H,act===4), box=col.map;                    // the right column (race): chase window + board
@@ -392,7 +415,10 @@ function draw(now){
     let M;
     if(act===4 && painter && painter.done){ const r=painter.src, sc=Math.min(box.W/r.w, box.H/r.h), px0=box.x+(box.W-r.w*sc)/2, py0=box.y+(box.H-r.h*sc)/2;
       uctx.drawImage(painter.canvas,px0,py0,r.w*sc,r.h*sc); M={x0:px0-r.x0*sc, y0:py0-r.y0*sc, s:sc, frame:{x:px0,y:py0,W:r.w*sc,H:r.h*sc}}; }
-    else M=StrataView.drawMap(uctx,view,box,act===4?courseRect():null);
+    else { M=StrataView.drawMap(uctx,view,box,act===4?courseRect():null);
+      /* the course search: the strata map gives way to the natural one as it is painted */
+      if(act===2 && M && natMap && natMap.done){ const a=Math.min(1,(now-natAt)/1400); uctx.globalAlpha=mapAlpha*a; uctx.imageSmoothingEnabled=true;
+        uctx.drawImage(natMap.canvas,M.frame.x,M.frame.y,M.frame.W,M.frame.H); uctx.globalAlpha=mapAlpha; } }
     if(M && plan) drawCourse(M, act===4);
     if(M && act===4) drawRiders(M);
     if(M && act===4) placeHeli(M);
@@ -694,8 +720,8 @@ function drawHeli(now){
   const a=((now-actAt)/1000)/150*2*Math.PI, rad=0.75*ext+12;
   let zmax=-1e9, zmean=0, n=0; for(let i=0;i<trail.n;i+=8){ const e=trail.S[i].zE; if(e>zmax) zmax=e; zmean+=e; n++; } zmean/=n;
   const hc={x:cx+rad*Math.cos(a), y:cy+rad*Math.sin(a)}; hc.z=zmax+rad*w.dx*0.55; hc.yaw=Math.atan2(cy-hc.y,cx-hc.x); hc.pitch=Math.atan((hc.z-zmean)/(rad*w.dx))*(heliCv.height>heliCv.width?0.98:0.85);   // a tall frame looks down more
-  if(heliWorker){ heliBusy=true; heliWorker.postMessage({cmd:'render',cam:hc,opts:{vexag:1.0,rain:false,tex:drawChase.tex}}); return; }
-  heliView.render(hc,{vexag:1.0,rain:false,tex:drawChase.tex});
+  if(heliWorker){ heliBusy=true; heliWorker.postMessage({cmd:'render',cam:hc,opts:{vexag:1.0,rain:false,tex:drawChase.tex,natural:true}}); return; }
+  heliView.render(hc,{vexag:1.0,rain:false,tex:drawChase.tex,natural:true});
   heliOverlay(hc);
 }
 /* the course and the riders over a helicopter picture made from camera hc */
