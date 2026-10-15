@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_chase3d.js · v1.2 · 2026-10-14
+   race_chase3d.js · v1.3 · 2026-10-14
    the chase window of race.html, in WebGL (three.js r128).
    Joe, 2026-10-13: "The quality of the landscape rendering is really poor in
    the upper right rider focus graph." The old window was the strata ray-
@@ -44,6 +44,8 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v1.3  one draw per plant species, not per 350 m tile (220 draw calls cost the
+           Pi a quarter of its frame rate)
      v1.2  plants placed by ecology (race_flora.js) in place of random scrub
      v1.1  a cut, not a glide, when the followed rider changes (the camera eased
            back through the new rider); the camera keeps 10 m from the rider in a
@@ -340,8 +342,7 @@ function create(canvas){
     /* ---- the plants, by ecology (race_flora.js): pinyon and juniper on the rocky
        ground, blackbrush on thin sand over slickrock, sagebrush in the deep soils,
        shadscale on the shale, Mormon tea on the slopes, cottonwood and willow in
-       the washes. Instanced per species in 350 m tiles, so a tile out of view or
-       too far to matter is not drawn at all. ---- */
+       the washes. One instanced draw per species. ---- */
     if(global.RaceFlora){
       let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9; for(let i=0;i<nS;i++){ x0=Math.min(x0,Sx[i]); x1=Math.max(x1,Sx[i]); z0=Math.min(z0,Sz[i]); z1=Math.max(z1,Sz[i]); }
       const M=500; x0=Math.max(0,x0-M); z0=Math.max(0,z0-M); x1=Math.min((nxf-1)*cf,x1+M); z1=Math.min((nyf-1)*cf,z1+M);
@@ -353,13 +354,18 @@ function create(canvas){
          double-sided Lambert panel lights its back face as if it faced the ground,
          and half of every plant went black */
       for(const k of RaceFlora.ORDER) mats2[k]=new THREE.MeshBasicMaterial({map:plantTexture(k,RaceFlora.SPECIES[k]),alphaTest:0.45,side:THREE.DoubleSide});
-      for(const p of F.list){ const key=Math.floor(p.x/TILE)+','+Math.floor(p.z/TILE); let t=tiles.get(key); if(!t){ t={cx:(Math.floor(p.x/TILE)+0.5)*TILE, cz:(Math.floor(p.z/TILE)+0.5)*TILE, by:{}}; tiles.set(key,t); } (t.by[p.sp]||(t.by[p.sp]=[])).push(p); }
+      /* ONE draw per species. Measured on the TV (2026-10-14): in 350 m tiles the
+         plants cost ~220 draw calls a frame and the chase window fell from 12 to 9
+         frames a second; all of them together are only ~85,000 triangles, which the
+         GPU draws faster than the CPU can issue the tiles */
+      const t={cx:0,cz:0,by:{}}; tiles.set('all',t);
+      for(const p of F.list) (t.by[p.sp]||(t.by[p.sp]=[])).push(p);
       const mtx=new THREE.Matrix4(), q=new THREE.Quaternion(), sc=new THREE.Vector3(), ps=new THREE.Vector3(), cc=new THREE.Color(), up=new THREE.Vector3(0,1,0);
       for(const t of tiles.values()) for(const k in t.by){ const L=t.by[k], sp=RaceFlora.SPECIES[k], mesh=new THREE.InstancedMesh(geo,mats2[k],L.length);
         L.forEach((p,i)=>{ ps.set(p.x,gAt(p.x,p.z)-0.05*p.h,p.z); q.setFromAxisAngle(up,p.rot); sc.set(p.r,p.h,p.r); mtx.compose(ps,q,sc); mesh.setMatrixAt(i,mtx);
           const shd=0.62+0.42*fAt(p.x,p.z,shadow)*Math.max(0.3,sun.y+0.35), v=p.tint*shd; cc.setRGB(v,v,v*0.97); mesh.setColorAt(i,cc); });
         mesh.instanceMatrix.needsUpdate=true; if(mesh.instanceColor) mesh.instanceColor.needsUpdate=true;
-        mesh.frustumCulled=false; mesh.matrixAutoUpdate=false; mesh.userData={cx:t.cx,cz:t.cz,far:sp.tree?1500:380};
+        mesh.frustumCulled=false; mesh.matrixAutoUpdate=false; mesh.userData={all:true};
         scene.add(mesh); scrub.push(mesh); }
     }
 
@@ -376,25 +382,39 @@ function create(canvas){
 
   /* ---- a rider on a bike: forward +x, up +y, the bike's left +z ---- */
   const GEO={}; function geo(name,mk){ return GEO[name]||(GEO[name]=mk()); }
+  /* the fixed parts of a rider (bike, torso, head, arms) merged into ONE mesh with
+     vertex colours: built as ~16 separate meshes, the eight riders cost ~130 draw
+     calls a frame, more than all the ground */
+  function mergeStatic(group){
+    group.updateMatrixWorld(true); const parts=[]; let n=0;
+    group.traverse(o=>{ if(!o.isMesh) return; const g=o.geometry.index?o.geometry.toNonIndexed():o.geometry.clone(); g.applyMatrix4(o.matrixWorld); parts.push({g,col:o.material.color}); n+=g.attributes.position.count; });
+    const pos=new Float32Array(n*3), nor=new Float32Array(n*3), col=new Float32Array(n*3); let k=0;
+    for(const {g,col:c} of parts){ const P=g.attributes.position, N=g.attributes.normal;
+      for(let i=0;i<P.count;i++,k++){ pos[3*k]=P.getX(i); pos[3*k+1]=P.getY(i); pos[3*k+2]=P.getZ(i); nor[3*k]=N.getX(i); nor[3*k+1]=N.getY(i); nor[3*k+2]=N.getZ(i); col[3*k]=c.r; col[3*k+1]=c.g; col[3*k+2]=c.b; }
+      g.dispose(); }
+    const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.BufferAttribute(pos,3)); geo.setAttribute('normal',new THREE.BufferAttribute(nor,3)); geo.setAttribute('color',new THREE.BufferAttribute(col,3));
+    return new THREE.Mesh(geo,new THREE.MeshLambertMaterial({vertexColors:true}));
+  }
   function makeRider(r){
-    const root=new THREE.Group(), body=new THREE.Group(); root.add(body);
+    const root=new THREE.Group(), body=new THREE.Group(), fixed=new THREE.Group(); root.add(body);
     const jersey=new THREE.MeshLambertMaterial({color:r.color}), dark=new THREE.MeshLambertMaterial({color:0x1d1d22}), skin=new THREE.MeshLambertMaterial({color:0xc89a7a}), shorts=new THREE.MeshLambertMaterial({color:0x22242a});
     const wheelG=geo('wheel',()=>new THREE.TorusGeometry(0.34,0.035,6,18));
-    for(const x of [-0.54,0.54]){ const wh=new THREE.Mesh(wheelG,dark); wh.position.set(x,0.36,0); body.add(wh); }
+    for(const x of [-0.54,0.54]){ const wh=new THREE.Mesh(wheelG,dark); wh.position.set(x,0.36,0); fixed.add(wh); }
     const bar=(len,th,mat)=>{ const g=new THREE.BoxGeometry(len,th,th); g.translate(len/2,0,0); return new THREE.Mesh(g,mat); };
     const seg=(m,a,b)=>{ m.position.set(a[0],a[1],a[2]||0); m.rotation.z=Math.atan2(b[1]-a[1],b[0]-a[0]); m.scale.x=Math.hypot(b[0]-a[0],b[1]-a[1])/0.5; return m; };
     const frameMat=new THREE.MeshLambertMaterial({color:new THREE.Color(r.color).multiplyScalar(0.6)});
     const tube=()=>bar(0.5,0.045,frameMat);
-    body.add(seg(tube(),[-0.54,0.36],[0.02,0.40])); body.add(seg(tube(),[0.02,0.40],[-0.06,0.86])); body.add(seg(tube(),[0.02,0.40],[0.48,0.84]));
-    body.add(seg(tube(),[-0.06,0.86],[0.48,0.84])); body.add(seg(tube(),[0.54,0.36],[0.48,0.98])); body.add(seg(tube(),[-0.54,0.36],[-0.06,0.86]));
-    const hb=new THREE.Mesh(geo('hbar',()=>new THREE.BoxGeometry(0.05,0.05,0.72)),dark); hb.position.set(0.48,0.98,0); body.add(hb);
+    fixed.add(seg(tube(),[-0.54,0.36],[0.02,0.40])); fixed.add(seg(tube(),[0.02,0.40],[-0.06,0.86])); fixed.add(seg(tube(),[0.02,0.40],[0.48,0.84]));
+    fixed.add(seg(tube(),[-0.06,0.86],[0.48,0.84])); fixed.add(seg(tube(),[0.54,0.36],[0.48,0.98])); fixed.add(seg(tube(),[-0.54,0.36],[-0.06,0.86]));
+    const hb=new THREE.Mesh(geo('hbar',()=>new THREE.BoxGeometry(0.05,0.05,0.72)),dark); hb.position.set(0.48,0.98,0); fixed.add(hb);
     /* the rider: hips over the saddle, torso leaning to the bars */
     const hip=[-0.06,0.98], sh=[0.30,1.40];
     const torso=new THREE.Mesh(geo('torso',()=>{ const g=new THREE.BoxGeometry(0.5,0.22,0.34); g.translate(0.25,0,0); return g; }),jersey);
-    seg(torso,hip,sh); torso.scale.x=Math.hypot(sh[0]-hip[0],sh[1]-hip[1])/0.5; body.add(torso);
-    const head=new THREE.Mesh(geo('head',()=>new THREE.SphereGeometry(0.11,10,8)),skin); head.position.set(0.42,1.52,0); body.add(head);
-    const helmet=new THREE.Mesh(geo('helmet',()=>new THREE.SphereGeometry(0.135,10,6,0,Math.PI*2,0,Math.PI*0.55)),jersey); helmet.position.set(0.41,1.55,0); helmet.rotation.z=-0.5; body.add(helmet);
-    for(const z of [-0.17,0.17]){ const arm=seg(bar(0.5,0.075,skin),[sh[0],sh[1],z],[0.46,1.0]); arm.position.z=z; body.add(arm); }
+    seg(torso,hip,sh); torso.scale.x=Math.hypot(sh[0]-hip[0],sh[1]-hip[1])/0.5; fixed.add(torso);
+    const head=new THREE.Mesh(geo('head',()=>new THREE.SphereGeometry(0.11,10,8)),skin); head.position.set(0.42,1.52,0); fixed.add(head);
+    const helmet=new THREE.Mesh(geo('helmet',()=>new THREE.SphereGeometry(0.135,10,6,0,Math.PI*2,0,Math.PI*0.55)),jersey); helmet.position.set(0.41,1.55,0); helmet.rotation.z=-0.5; fixed.add(helmet);
+    for(const z of [-0.17,0.17]){ const arm=seg(bar(0.5,0.075,skin),[sh[0],sh[1],z],[0.46,1.0]); arm.position.z=z; fixed.add(arm); }
+    body.add(mergeStatic(fixed));
     const legs=[];
     for(const z of [-0.11,0.11]){ const th=bar(0.5,0.12,shorts), sn=bar(0.5,0.09,skin); th.position.z=z; sn.position.z=z; body.add(th); body.add(sn); legs.push({th,sn}); }
     /* the plate tag: a disc in the rider's ink with the number */
@@ -522,10 +542,6 @@ function create(canvas){
       const dTag=tp.distanceTo(camera.position), sz=Math.max(3,dTag)*(R.r===subject?0.085:0.07);
       R.tag.scale.set(sz,sz,1); R.tag.visible=dTag>6; R.body.visible=camera.position.distanceTo(R.root.position)>1.5; }
     mats.terrMat.uniforms.camPos.value.copy(camera.position); mats.corrMat.uniforms.camPos.value.copy(camera.position);
-    /* plants: a tile is drawn only when near enough to matter and not behind the camera */
-    const fwd=new THREE.Vector3(); camera.getWorldDirection(fwd);
-    for(const m of scrub){ const u=m.userData, dx=u.cx-cam.x, dz=u.cz-cam.z, d=Math.hypot(dx,dz);
-      m.visible = d<u.far+180 && (d<260 || (dx*fwd.x+dz*fwd.z)/d > -0.2); }
     /* detail by distance */
     for(const m of chunks){ const u=m.userData, d=Math.hypot(u.cx-cam.x,u.cz-cam.z), lod=api.forceLod!=null?api.forceLod:d<420?0:d<900?1:d<1600?2:3;   // full detail well out: a coarse chunk sits a little off the exact trail strip, and the bed colours follow height
       if(lod!==u.lod){ u.lod=lod; m.geometry.setIndex(u.idx[lod]); } }
