@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>The Race</title>
 <!-- ==========================================================================
-  race.html · v2.4 · 2026-10-14
+  race.html · v2.5 · 2026-10-14
   a mountain-bike race across a Strata landscape. Joe, 2026-09-07.
   The show, in four acts (his order):
     1. THE LAND. A Strata world folds and erodes for three hundred thousand
@@ -45,6 +45,8 @@
 ==========================================================================
 
   CHANGED
+    v2.5  the board gives a rider out of the race no place number (race_sim v3.2
+          lists them after everyone still in it)
     v2.4  singletrack passes (race_sim v3.1) get their own alert with the risk the
           rider took; a fall while passing, and a rider taken down, say so
     v2.3  loads race_flora.js: the chase window's plants are placed by ecology
@@ -54,10 +56,6 @@
     v2.1  descending skill and heat matter (race_sim v2.1); the chase camera keeps
           its distance round switchbacks (race_chase3d v1.1); time doubles past 40
           race-minutes; the climb bar scaled to the new 3.4-4.4 W/kg field
-    v2.0  Joe, 2026-10-13: one longer lap (6-11 km) laid round the map by the
-          new planner, two-track drawn as a double line and the only place to
-          pass, a place-by-distance chart under the map, crash alerts give the
-          energy and the time down, riders wear random three-digit plates
 -->
 <style>
   html, body { margin:0; padding:0; height:100%; background:#04060c; overflow:hidden; }
@@ -592,7 +590,7 @@ function drawBoard(W,H){
     if(sub){ uctx.fillStyle='rgba(255,226,176,.10)'; uctx.fillRect(x+10*WU,py-4*WU,bw-20*WU,rowH-2*WU); }
     uctx.fillStyle=r.color; uctx.fillRect(px,py+T('t3')*0.12,T('t3')*0.62,T('t3')*0.62);
     uctx.fillStyle=r.status==='out'?INK2:INK; uctx.font='300 '+T('t3')+'px '+UI; uctx.textAlign='left'; uctx.textBaseline='top';
-    uctx.fillText(r.pos+'  #'+r.num+' '+r.name,px+T('t3')*0.95,py);
+    uctx.fillText((r.status==='out'?'':r.pos+'  ')+'#'+r.num+' '+r.name,px+T('t3')*0.95,py);   // out of the race: no place
     let gap; if(r.status==='out') gap='out'; else if(r.finish) gap=clockStr(r.finish); else if(r.pos===1) gap='leads'; else gap='−'+Math.round((ld.lap*L+ld.s)-(r.lap*L+r.s))+' m';
     uctx.font='300 '+T('t3')+'px '+MONO; uctx.textAlign='right'; uctx.fillText(gap,x+bw-30*WU,py);
     /* the live line */

@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   race_sim.js · v3.1 · 2026-10-14
+   race_sim.js · v3.2 · 2026-10-14
    the riders and the race, on a course cut by race_planner.js
    into a frozen Strata world. Joe, 2026-09-07:
      "n riders ... randomly drawn skill and strength for hill climbing ... a
@@ -86,6 +86,8 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v3.2  riders out of the race are placed after everyone still in it (they kept
+           their old place, and looked tied with the rider now holding it)
      v3.1  singletrack passing: a rider stuck behind weighs the risk (passRisk: the
            hillside, plant cover, grip, loose rock, grade, bend, cliff, speed, and
            their own skill and state) and goes round if it is within their nerve
@@ -98,12 +100,6 @@
            higher core, and do not pay the hot-day cardiovascular strain; a bad
            crash's lasting cost now actually lasts; climbing power drawn from
            one category's spread, 3.4-4.4 W/kg (was 2.8-4.8)
-     v2.0  two-track from the planner is the only place to pass; tread
-           smoothed over 20 m (cut and fill); exposure means a real cliff
-           (5 m at race scale, not 2); riders carry a random three-digit
-           plate number; four names added to the pool (Joe, 2026-10-13);
-           riders look 50 m ahead and brake for what they see; a climb the
-           legs cannot ride at balance speed is walked
 */
 function RaceSimFactory(global){
 'use strict';
@@ -518,6 +514,10 @@ function step(race,dt){
   /* positions */
   const ranked=riders.filter(r=>r.status!=='out').sort((a,b)=>{ if(a.finish&&b.finish) return a.finish-b.finish; if(a.finish) return -1; if(b.finish) return 1; return (b.lap*L+b.s)-(a.lap*L+a.s); });
   ranked.forEach((r,i)=>r.pos=i+1);
+  /* riders out of the race come after everyone still in it, the furthest first; they
+     used to keep the place they held when they went out, and on the board the rider
+     still racing in that place looked tied with them (Joe, 2026-10-14) */
+  riders.filter(r=>r.status==='out').sort((a,b)=>(b.lap*L+b.s)-(a.lap*L+a.s)).forEach((r,i)=>r.pos=ranked.length+1+i);
   if(riders.every(r=>r.status==='finished'||r.status==='out')) race.done=true;
   return race;
 }
