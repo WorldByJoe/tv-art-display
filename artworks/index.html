@@ -11,13 +11,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Open Gallery</title>
 <!-- ==========================================================================
-  artworks.html · v1.1 · 2026-10-03
+  artworks.html · v1.2 · 2026-10-15
   Open Gallery: works from the Art Institute of Chicago, fetched live.
 
   Ring stop 13 of 20, five works per visit at 55 s each - about 4.6 minutes,
-  in step with the rest of the rotation - loop:'inside'. Half the draws come
-  from the boosted front pages and half from the whole collection, so the
-  gallery is neither all masterpieces nor all storeroom.
+  in step with the rest of the rotation - loop:'inside'. A quarter of the
+  draws come from the museum's 120 highlights, shuffled, and three quarters
+  from the whole collection, so the gallery is neither all masterpieces nor
+  all storeroom.
 
   TWO MEASURED FACTS ABOUT THE MUSEUM'S IMAGE SERVER, both of which took the
   page black before they were understood:
@@ -39,6 +40,9 @@
 ==========================================================================
 
   CHANGED
+    v1.2  a quarter of the works from the highlights, not half, and the
+          highlights drawn from all 120 shuffled rather than one fixed page of
+          40 (Joe, 2026-10-15: about half of what he saw came from 120 works)
     v1.1  shows the number of works the menu asks for (it waited for a
           ten-work queue to empty); the no-network exit goes through
           Wall.nextPage; WALL_SECONDS_PER_RUN 60 s a work
@@ -173,7 +177,7 @@ window.WALL_SECONDS_PER_RUN = 60;
 const CONFIG = {
   holdMs:      55000,   // one work on the wall - long enough to actually look
   worksPerTurn:    5,   // ~4.6 minutes, in step with the rest of the rotation
-  famousBias:    0.5,   // half the draws come from the boosted front pages
+  famousBias:   0.25,   // a quarter of the draws come from the highlights (half until 2026-10-15)
   /* AIC's image server enforces a size ALLOWLIST - the old best-fit box
      request (!2400,2400) began answering 403 for every work (measured
      2026-08-28, 8/8 sampled: the gallery sat black on the wall and
@@ -200,8 +204,14 @@ let stats={fetched:0, skipped:0, wikiHits:0, errors:0};
    Two draws with different depths. The API's default ranking puts the
    museum's own boosted highlights on the first pages, so a shallow page IS
    a page of famous works; a deep page is the honest breadth of a 62,000-
-   work collection - Japanese prints, Greek pots, photographs. Half and
-   half, shuffled, is "great works, randomly". */
+   work collection - Japanese prints, Greek pots, photographs. A quarter
+   and three quarters, shuffled, is "great works, randomly".
+   CHECKED 2026-10-15 (Joe had seen some works many times): the draw was
+   random and nothing is cached - the API answers no-cache and the page keeps
+   no list - but the highlights are a FIXED 120 (the ranking never changes),
+   they were half of every visit, and about 7% of the word draws land on
+   them too, so about half of all works shown came from 120. Now a quarter,
+   from all 120 shuffled together. */
 /* THE 1,000-RESULT WALL, learned the hard way: the search endpoint refuses
    (403) any page beyond a thousand results, so "pick a random page out of
    1,550" - the obvious way to sample 62,000 works - is not available. The
@@ -227,11 +237,13 @@ async function buildQueue(){
     const r=await fetch(`${API}/${FORCED_ID}?fields=${FIELDS}`);
     if(r.ok) return [(await r.json()).data];
   }
-  const shallow=1+Math.floor(Math.random()*3);              // the icons
   const word=SEEDS[Math.floor(Math.random()*SEEDS.length)]; // the variety
   const wordPage=1+Math.floor(Math.random()*8);             // within the cap
-  stats.draw={shallow, word, wordPage};                     // for the card behind the up key (about.js)
-  const [a,b]=await Promise.all([fetchPage(shallow), fetchPage(wordPage, word)]);
+  stats.draw={word, wordPage};                              // for the card behind the up key (about.js)
+  /* the highlights: all three front pages, 120 works, mixed (Joe, 2026-10-15)
+     - one random page of 40 always brought the same neighbours together */
+  const [a1,a2,a3,b]=await Promise.all([fetchPage(1), fetchPage(2), fetchPage(3), fetchPage(wordPage, word)]);
+  const a=a1.concat(a2,a3);
   stats.fetched=a.length+b.length;
   /* Only works that actually have an image; a label with no painting is a
      wall with a hole in it. */

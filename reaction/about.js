@@ -35,7 +35,8 @@
    meter id); Photographs never names anyone.
 
    CHANGED
-     v2.9  Reading: the attribution's time comes from the page (15 s after the last line).
+     v2.9  Artworks: a quarter from the 120 highlights.
+           Reading: the attribution's time comes from the page (15 s after the last line).
            The Race: during the race the card explains the board and the words for
            what each rider is doing (the trait card stands with the cards)
      v2.8  The Race: one steady speed of 4-8x, and passing on the singletrack at a risk

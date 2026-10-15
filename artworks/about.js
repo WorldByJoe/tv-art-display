@@ -35,7 +35,8 @@
    meter id); Photographs never names anyone.
 
    CHANGED
-     v2.9  Reading: the attribution's time comes from the page (15 s after the last line).
+     v2.9  Artworks: a quarter from the 120 highlights.
+           Reading: the attribution's time comes from the page (15 s after the last line).
            The Race: during the race the card explains the board and the words for
            what each rider is doing (the trait card stands with the cards)
      v2.8  The Race: one steady speed of 4-8x, and passing on the singletrack at a risk
@@ -78,7 +79,7 @@
   /* ===== artworks.html ===== */
   ABOUT['index.html'] = {
     what: 'Works from the Art Institute of Chicago’s open collection of public-domain '
-        + 'art, fetched live. Half come from the museum’s own highlights and half from a '
+        + 'art, fetched live. A quarter come from the museum’s 120 highlights and the rest from a '
         + 'search on one random word, so a visit mixes famous pictures with the depths of '
         + 'the collection. Each work is shown whole, never cropped, beside the museum’s '
         + 'label and, where one exists, a Wikipedia note on the artist.',
@@ -88,8 +89,7 @@
       A('Medium', () => current.medium_display),
       A('Style', () => current.style_title),
       A('Museum record', () => 'No. ' + current.id),
-      A('Drawn from', () => 'highlights page ' + stats.draw.shallow + ', and “'
-          + stats.draw.word + '” page ' + stats.draw.wordPage),
+      A('Drawn from', () => 'the 120 highlights, and “' + stats.draw.word + '” page ' + stats.draw.wordPage),
       A('Each work held', () => n(CONFIG.holdMs / 1000, 0) + ' s'),
       A('Images refused', () => stats.skipped || null),
       A('Works this visit', () => shown + ' of ' + Wall.repeats(CONFIG.worksPerTurn)),
