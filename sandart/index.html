@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<!--
+  sandart.html · v1.1 · 2026-10-28
+
+  A moving sand picture: just flipped, four sands pour from the top of a thin
+  glass frame of water and build layered mountains on the bottom. Steps 2 and 3
+  of the build (Joe, 2026-10-24): black, rust, white and pale sand, each with
+  its own grain size, density and shape, and a deposit that keeps its layers.
+  The air rises as bubbles and gathers as a row of small bubbles under the
+  upper sand, which drains through the gaps between them like an hourglass.
+  The physics is all in sand_engine.js, run in a worker; this page draws it.
+
+  DRAWING: no grain exists in the model. Each pixel inside packed sand (the
+  upper sand, the deposit) is one grain whose sand is drawn at random from the
+  local mix of its layer (both are drawn from their 0.3 mm rows, not the 1.2 mm
+  grid), with the draw fixed by a hash of its position so nothing flickers. Sand in the water is drawn as the light it blocks: grains of size d
+  at fraction phi in a gap h cover 1 - exp(-1.5 phi h / d) of the view, so the
+  fine pale sand makes a haze out of little sand. Those pixels re-draw every
+  frame, since a falling grain crosses many pixels per frame. Air is drawn from
+  a coverage map at twice the grid's resolution, its outline softened over
+  1.3 mm so edges and finger tips are round, as surface tension makes them. It
+  is translucent: the backdrop shows through lighter and greyer than through
+  water, darker toward the edge where the curved surface bends light away, with
+  a thin bright line inside a dark one at the surface (Joe, 2026-10-25).
+
+  URL  ?seed= ?nx=&ny= (grid) ?rs= (render scale) ?speed= ?hud ?gap= ?nu=
+
+  CHANGED
+    v1.1  a picture may run 3 hours of its own time (engine v4.2-4.3 drains near the real
+          frame's pace: 46-77 min a picture, the real one 78; the old 1 hour cap cut them short)
+    v1.0  the upper sand drawn from its own rows (engine v4.0: it rests on the air sheet
+          and drains from below, its layers moving down with it); a picture is not over
+          while sand is left on the sheet
+    v0.9  packed sand's edges granular rather than stepped on the grid
+    v0.8  each picture starts as the last one ended, turned over (the engine does the flip)
+    v0.7  a picture also ends when under 0.4% of its sand moves in 60 s of its own time
+    v0.6  air translucent (the backdrop shows through, lighter and greyer than through
+          water, darker toward the edge) and its outline rounded over 1.3 mm
+-->
+<html><head><meta charset="utf-8"><title>Sand Picture</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b0c; overflow: hidden; }
+  canvas { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; display: block; }
+  #hud { position: absolute; left: 24px; bottom: 20px; font: 26px/1.3 ui-monospace, Menlo, monospace; color: #9aa; white-space: pre; display: none; }
+</style>
+<!-- wall.js in the HEAD, as on every page here: the remote's arrows and up key,
+     the solo that holds this page, and Wall.stallSecs for the watchdog. -->
+<script src="wall.js"></script>
+</head>
+<body>
+<canvas id="c"></canvas><div id="hud"></div>
+<script src="sand_engine.js"></script>
+<script>
+'use strict';
+const CONFIG = { nextPage: '' /* standalone: nowhere to hand on to; start again */ };   // nav.js's arrows hand on to the ring
+const Q = new URLSearchParams(location.search);
+const num = (k, d) => Q.has(k) ? Number(Q.get(k)) : d;
+const RS = num('rs', 1), SPEED = num('speed', 1), HUD = Q.has('hud');
+let seed = num('seed', (Math.random() * 1e9) | 0);
+const opts = () => {
+  const o = { seed };
+  for (const k of ['nx', 'ny', 'gap', 'nu']) if (Q.has(k)) o[k === 'nx' ? 'NX' : k === 'ny' ? 'NY' : k] = num(k);
+  if (o.NX && !o.NY) o.NY = Math.round(o.NX * 192 / 336 / 4) * 4;
+  return o;
+};
+// colours by sand, in SandEngine.SANDS order: black, rust, white, pale
+const COLS = [[0.075, 0.07, 0.065], [0.60, 0.25, 0.12], [0.93, 0.92, 0.89], [0.85, 0.75, 0.56]];
+
+// The model runs in a worker on its own core, built from the engine's source.
+// When the machine cannot keep up, the picture runs slow rather than skipping
+// (Joe, 2026-10-24: "These things are supposed to be slow").
+const WORKER = SandEngine.source + `
+let S = null, t0 = 0, speed = 1, spent = 0, nSteps = 0, gen = 0;
+onmessage = e => { const m = e.data;   // the next picture starts as this one ended, turned over
+  S = SandEngine.create(Object.assign({}, m.opts, m.carry && S ? { prev: S } : {})); speed = m.speed; gen = m.gen;
+  t0 = performance.now(); spent = nSteps = 0; run(gen); };
+function run(g) {
+  if (g !== gen) return;
+  const a = performance.now(), target = (a - t0) / 1000 * speed;
+  if (target - S.t > 0.25) t0 = a - (S.t + 0.25) / speed * 1000;
+  let n = 0;
+  while (S.t < target - 1e-6 && performance.now() - a < 40) { SandEngine.step(S, target - S.t); n++; }
+  spent += performance.now() - a; nSteps += n;
+  const N = S.NX * S.NY, phi = new Float32Array(N * 4), hb = new Float32Array(S.BX);
+  for (let q = 0; q < S.K; q++) { const p = S.ph[q]; for (let k = 0; k < N; k++) phi[k * 4 + q] = S.up[k] ? 0 : p[k]; }
+  for (let b = 0; b < S.BX; b++) hb[b] = S.hbs[b] / S.dx;
+  let w = 0; for (let k = 0; k < N; k++) w += S.phi[k];
+  const bed = SandEngine.takeDirtyBed(S), air = SandEngine.airTexture(S), ub = SandEngine.takeUpper(S);
+  const tr = [phi.buffer, hb.buffer, air.data.buffer, ub.data.buffer, ub.hb.buffer];
+  if (bed) tr.push(bed.data.buffer);
+  postMessage({ gen, phi, hb, bed, air, ub, NX: S.NX, NY: S.NY, BX: S.BX, NZ: S.NZ, W: S.P.W, gap: S.P.gap,
+    d: S.P.sands.map(s => s.d), t: S.t, steps: S.steps, msStep: nSteps ? spent / nSteps : 0,
+    inWater: w * S.dx * S.dx / S.mass0.reduce((x, y) => x + y), upper: SandEngine.upperLeft(S) }, tr);
+  setTimeout(() => run(g), n ? 0 : 8);
+}`;
+const worker = new Worker(URL.createObjectURL(new Blob([WORKER], { type: 'text/javascript' })));
+let M = null, gen = 0, bedSize = null, ubSize = null;     // the latest picture from the worker
+const SAND = window.SAND = { t: 0, fps: 0, msStep: 0, ratio: 1, frames: 0 };   // for probes; set before any drawing
+worker.onmessage = e => {
+  if (e.data.gen !== gen) return;
+  M = e.data; Object.assign(SAND, { t: M.t, msStep: M.msStep, steps: M.steps, inWater: M.inWater });
+  if (gl) { uploadBed(M); uploadUpper(M); }
+};
+function start(carry) { M = null; bedSize = null; ubSize = null; gen++; worker.postMessage({ opts: opts(), speed: SPEED, gen, carry: !!carry }); }
+
+// ---- WebGL --------------------------------------------------------------
+const cv = document.getElementById('c');
+const gl = cv.getContext('webgl2', { antialias: false, alpha: false });
+function size() { cv.width = Math.round(innerWidth * RS); cv.height = Math.round(innerHeight * RS); }
+size(); addEventListener('resize', size);
+
+const VS = `#version 300 es
+in vec2 p; out vec2 q; void main(){ q = p * 0.5 + 0.5; gl_Position = vec4(p, 0., 1.); }`;
+const FS = `#version 300 es
+precision highp float;
+in vec2 q; out vec4 o;
+uniform sampler2D phiT, bedH, bedC, airT, ubC, ubH;
+uniform float js, nzU, bxU, zsub;   // the upper sand: the sheet's row (grid squares), its ring of rows, sub-columns, rows per square
+uniform vec2 res, grid;     // canvas px; grid squares
+uniform float aspect, W, frame;
+uniform vec4 kap;           // 1.5 h / d for each sand
+uniform vec3 col0, col1, col2, col3;
+uniform vec2 airR;          // the softening radius of the air's outline, in uv units
+uint pcg(uint v){ uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+float hash(vec2 p, uint salt){ uvec2 u = uvec2(ivec2(p) + 65536); return float(pcg(u.x ^ pcg(u.y ^ pcg(salt)))) / 4294967295.; }
+// one grain's colour, its sand drawn from the shares w with the number r
+vec3 grain(vec4 w, float r, float g){
+  float s = w.x + w.y + w.z + w.w; if (s <= 0.) return col0;
+  r *= s; vec3 c = r < w.x ? col0 : r < w.x + w.y ? col1 : r < w.x + w.y + w.z ? col2 : col3;
+  return c * (0.80 + 0.36 * g);
+}
+void main(){
+  // fit the frame (aspect = width/height of the sand cell) inside the screen
+  vec2 px = q * res;
+  float sw = res.x, sh = res.x / aspect;
+  if (sh > res.y) { sh = res.y; sw = sh * aspect; }
+  float m = 0.025 * sh;                         // border
+  vec2 lo = 0.5 * (res - vec2(sw, sh)) + m, hi = lo + vec2(sw, sh) - 2. * m;
+  vec2 uv = (px - lo) / (hi - lo);
+  if (any(lessThan(uv, vec2(0))) || any(greaterThan(uv, vec2(1)))) {
+    vec2 e = max(lo - px, px - hi); float d = max(e.x, e.y);
+    float f = d < m ? 0.10 + 0.03 * smoothstep(0., m, d) : 0.04;
+    o = vec4(vec3(f), 1.); return;
+  }
+  float mmPerPx = W * 1000. / (hi.x - lo.x);
+  // the water: a dusk-blue backdrop, darker above, like a sky over the mountains
+  vec3 water = mix(vec3(0.66, 0.71, 0.74), vec3(0.40, 0.48, 0.57), smoothstep(0., 1., uv.y));
+  vec2 c = uv - 0.5; water *= 1. - 0.25 * dot(c, c);
+  // grains at about 0.2 mm, each with a fixed shade and a fixed draw
+  vec2 gcell = floor(px * mmPerPx / 0.2);
+  float g = hash(gcell, 0u), r = hash(gcell, 1u);
+  // the deposit: height per sub-column, linear between them; its layers
+  float hb = texture(bedH, vec2(uv.x, 0.5)).r;                  // grid squares
+  float edge = (hb - uv.y * grid.y) * (hi.y - lo.y) / grid.y;   // px below the surface
+  if (edge > 0.5) { o = vec4(grain(texture(bedC, uv), r, g), 1.); return; }
+  // the upper sand, resting on the sheet: per sub-column its thickness (grid squares,
+  // linear between sub-columns for a smooth top) and its base (rows); its layers sit at
+  // ring row (base + height above the sheet) mod nzU
+  float ysq = uv.y * grid.y;
+  if (ysq >= js) {
+    float bx = uv.x * bxU - 0.5; int b0 = int(clamp(floor(bx), 0., bxU - 1.)), b1 = min(b0 + 1, int(bxU) - 1);
+    float th = mix(texelFetch(ubH, ivec2(b0, 0), 0).r, texelFetch(ubH, ivec2(b1, 0), 0).r, clamp(bx - floor(bx), 0., 1.));
+    float ue = (js + th - ysq) * (hi.y - lo.y) / grid.y;          // px below its top
+    if (ue > -0.5) {
+      int bs = int(clamp(floor(uv.x * bxU), 0., bxU - 1.));
+      vec2 hb2 = texelFetch(ubH, ivec2(bs, 0), 0).rg;
+      float rc = hb2.g + min((ysq - js) * zsub, hb2.r * zsub - 0.5);
+      vec4 w = texelFetch(ubC, ivec2(bs, int(mod(floor(rc), nzU))), 0);
+      if (ue > 0.5 || hash(gcell, 3u) < ue + 0.5) { o = vec4(grain(w, r, g), 1.); return; }
+    }
+  }
+  vec4 f = texture(phiT, uv);
+  float phi = f.x + f.y + f.z + f.w;
+  // packed sand: the hanging layer, a jam. Its edge is granular, not a grid
+  // step: each pixel there is a grain with the chance the local fill gives it
+  // (a hard cutoff drew the 1.2 mm grid as stair steps along every block)
+  if (hash(gcell, 2u) < smoothstep(0.30, 0.52, phi)) { o = vec4(grain(f, r, g), 1.); return; }
+  f = max(vec4(0.), f - 0.0005);                                 // ignore rounding residue in clear water
+  // sand in the water: the light it blocks, and a grain where a re-drawn number falls under it
+  vec4 tau = kap * f; float T = tau.x + tau.y + tau.z + tau.w, cover = 1. - exp(-T);
+  vec3 avg = T > 0. ? (tau.x * col0 + tau.y * col1 + tau.z * col2 + tau.w * col3) / T : water;
+  vec3 colr = mix(water, avg, 0.45 * cover);
+  float h1 = hash(gcell, uint(frame) * 2u + 7u);
+  if (h1 < cover) colr = grain(tau, hash(gcell, uint(frame) * 2u + 8u), g);
+  // AIR, where there is any near: its outline softened over airR (surface
+  // tension rounds a bubble's edge at about that scale in a frame this thin),
+  // averaging only over squares that are not packed sand, so the air still
+  // meets the sand it touches.
+  if (textureLod(airT, uv, 2.5).r > 0.002) {
+    float sa = 0., sw = 0.;
+    for (int k = 0; k < 13; k++) {
+      float ang = float(k) * 1.0472 + (k > 6 ? 0.5236 : 0.), rad = k == 0 ? 0. : k > 6 ? 1. : 0.5;
+      float w = k == 0 ? 1. : k > 6 ? 0.5 : 0.8;
+      vec2 t = texture(airT, uv + airR * rad * vec2(cos(ang), sin(ang))).rg;
+      if (t.g < 0.5) { sa += w * t.r; sw += w; }
+    }
+    float A = sw > 0. ? sa / sw : 0., aw = max(fwidth(A), 0.004);
+    // seen through air the backdrop is lighter and greyer than through water;
+    // toward the edge the curved surface bends light away (darker), with a thin
+    // bright line just inside it and a dark line at the surface itself
+    vec3 thru = mix(water, vec3(0.94, 0.96, 0.98), 0.32) + 0.04;
+    vec3 airc = mix(water * 0.55, thru, smoothstep(0.5, 0.95, A));
+    airc += 0.22 * exp(-pow((A - 0.6) / 0.045, 2.));
+    colr = mix(colr, airc, smoothstep(0.5 - aw, 0.5 + aw, A));
+    colr = mix(colr, vec3(0.06, 0.07, 0.08), 0.75 * (1. - smoothstep(0., 1.5 * aw, abs(A - 0.5))));
+  }
+  if (edge > -0.5) colr = mix(colr, grain(texture(bedC, uv), r, g), edge + 0.5);
+  o = vec4(colr, 1.);
+}`;
+let prog, U, phiTex, bedHTex, bedCTex, airTex, ubCTex, ubHTex;
+if (gl) {
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const tex = unit => {
+    const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  };
+  phiTex = tex(0); bedHTex = tex(1); bedCTex = tex(2); airTex = tex(3);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  const near = t => { gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST); return t; };
+  ubCTex = near(tex(4)); ubHTex = near(tex(5));                   // read texel by texel (a ring; 32-bit floats)
+  U = n => gl.getUniformLocation(prog, n);
+  gl.uniform1i(U('phiT'), 0); gl.uniform1i(U('bedH'), 1); gl.uniform1i(U('bedC'), 2); gl.uniform1i(U('airT'), 3);
+  gl.uniform1i(U('ubC'), 4); gl.uniform1i(U('ubH'), 5);
+  COLS.forEach((c, i) => gl.uniform3f(U('col' + i), c[0], c[1], c[2]));
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+}
+// The deposit's layers change only where sand lands or slides: upload just those rows.
+function uploadBed(m) {
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, bedCTex);
+  if (bedSize !== m.BX + 'x' + m.NZ) {
+    bedSize = m.BX + 'x' + m.NZ;
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, m.BX, m.NZ, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(m.BX * m.NZ * 4));
+  }
+  if (m.bed) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, m.bed.r0, m.BX, m.bed.r1 - m.bed.r0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, m.bed.data);
+}
+// The upper sand's rows change where sand slides on its top (its draining only moves its
+// base): upload just the rows the worker says changed, in runs.
+function uploadUpper(m) {
+  const u = m.ub; if (!u) return;
+  gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, ubCTex);
+  if (ubSize !== m.BX + 'x' + u.NZ) {
+    ubSize = m.BX + 'x' + u.NZ;
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, m.BX, u.NZ, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(m.BX * u.NZ * 4));
+  }
+  const R = u.rows, row = m.BX * 4;
+  for (let n = 0; n < R.length;) {
+    let e = n; while (e + 1 < R.length && R[e + 1] === R[e] + 1) e++;
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, R[n], m.BX, e - n + 1, gl.RGBA, gl.UNSIGNED_BYTE, u.data.subarray(n * row, (e + 1) * row));
+    n = e + 1;
+  }
+}
+let shown = null;
+function upload() {
+  if (!M || M === shown) return; shown = M;
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, phiTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, M.NX, M.NY, 0, gl.RGBA, gl.FLOAT, M.phi);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, bedHTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, M.BX, 1, 0, gl.RED, gl.FLOAT, M.hb);
+  gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, ubHTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, M.BX, 1, 0, gl.RG, gl.FLOAT, M.ub.hb);
+  gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, airTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, M.air.AX, M.air.AY, 0, gl.RG, gl.UNSIGNED_BYTE, M.air.data);
+  gl.generateMipmap(gl.TEXTURE_2D);                 // the shader's cheap "any air near?" test
+}
+
+// ---- loop -----------------------------------------------------------------
+const hud = document.getElementById('hud'); if (HUD) hud.style.display = 'block';
+let frame = 0, fpsT = performance.now(), fpsN = 0, tPrev = 0, doneAt = 0;
+function tick(tnow) {
+  requestAnimationFrame(tick);
+  if (!M || !gl) return;
+  upload();
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.uniform2f(U('res'), cv.width, cv.height); gl.uniform2f(U('grid'), M.NX, M.NY);
+  gl.uniform1f(U('aspect'), M.NX / M.NY); gl.uniform1f(U('W'), M.W); gl.uniform1f(U('frame'), frame++);
+  gl.uniform1f(U('js'), M.ub.js); gl.uniform1f(U('nzU'), M.ub.NZ); gl.uniform1f(U('bxU'), M.BX); gl.uniform1f(U('zsub'), M.NZ / M.NY);
+  const k = M.d.map(d => 1.5 * M.gap / d); gl.uniform4f(U('kap'), k[0], k[1], k[2], k[3]);
+  const Rmm = 1.3; gl.uniform2f(U('airR'), Rmm / (M.W * 1000), Rmm / (M.W * 1000) * (M.NX / M.NY));
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  fpsN++;
+  if (tnow - fpsT > 1000) {
+    SAND.fps = fpsN * 1000 / (tnow - fpsT); SAND.ratio = (M.t - tPrev) / ((tnow - fpsT) / 1000);
+    tPrev = M.t; fpsT = tnow; fpsN = 0; SAND.frames = frame;
+    if (HUD) hud.textContent = `t ${M.t.toFixed(1)} s   ${SAND.fps.toFixed(0)} fps   ${M.msStep.toFixed(2)} ms/step   model at ${SAND.ratio.toFixed(2)}x real time\nin water ${(100 * M.inWater).toFixed(0)}%   seed ${seed}`;
+    // finished when the sand is down, or when under 0.5% is left on the sheet (a scrap
+    // against a side wall can lie there for half an hour) and less than 0.4% has moved
+    // in 60 s of the picture's own time (a ridge can stand still for minutes before it
+    // drops); and a picture never holds the wall past 3 hours of its own time
+    if (!SAND.mark || Math.abs(M.inWater - SAND.mark.w) > 0.004) SAND.mark = { w: M.inWater, t: M.t };
+    if ((M.inWater < 0.002 || (M.t - SAND.mark.t > 60 && M.upper < 0.005) || M.t > 10800) && !doneAt) doneAt = tnow;
+    if (doneAt && tnow - doneAt > 20000) { seed = (seed * 7919 + 13) >>> 0; doneAt = 0; tPrev = 0; SAND.mark = null; start(true); }
+  }
+}
+start();
+requestAnimationFrame(tick);
+</script>
+<script src="nav.js"></script>
+</body></html>

@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   wall.js · v2.7 · 2026-10-11
+   wall.js · v2.10 · 2026-10-24
    the wall's shared language layer.
 
    WHY THIS FILE EXISTS. Every page used to invent its own caption band, its
@@ -39,17 +39,16 @@
 ---------------------------------------------------------------------------
 
    CHANGED
+     v2.10 sandart.html joins the ring as 'Sand Picture', switched OFF: four sands in a
+           thin frame of water, held as the main display by a solo while it is built
+     v2.9  a solo hold records its start and stallSecs() asks for the whole hold:
+           asking for the time left let the watchdog cut every hold off halfway
+     v2.8  descent2.html joins the ring as 'Fastest Line 2.0', after The Fastest Line:
+           the same riders and physics on a trail laid into a Strata landscape, in WebGL
      v2.7  snowflake.html joins the ring as 'Snowflakes', after Kite Flying: one
            snow crystal at a time grown from vapour, then let fall
      v2.6  kite.html joins the ring as 'Kite Flying', after Spinning Mirrors: a
            person flying a kite in a gusty field, the kite and line from physics
-     v2.5  mirrors.html joins the ring as 'Spinning Mirrors', after Ripples: 160 x 90
-           servos turning mirrors on 45-degree shafts, waves of speed passing over
-     v2.4  couch.html joins the ring as 'Couch Analyst', after Game Day: postseason
-           baseball (the baseball chat's page), on the wall only while a game is on
-     v2.3  a page opened by its folder (every GitHub piece: .../ripples/) is
-           index.html, not the mosaic - the arrows sent published pieces to a
-           ring file that is not there, and the card showed 'Mosaic Wall'
 */
 (function (global) {
   'use strict';
@@ -534,6 +533,10 @@
        appears on the setup screen. */
     { file:'tree_growth.html',   name:'Sugar Maple',      kind:'runs', unit:'runs',       def:1,  loop:'inside' },
     { file:'descent.html',       name:'The Fastest Line', kind:'runs', unit:'descents',   def:1,  loop:'reload' },
+    /* The same riders and physics on a trail laid into an eroded Strata world,
+       drawn in WebGL, after a flight over the course (Joe, 2026-10-19: keep the
+       original, and give 2.0 its own stop). */
+    { file:'descent2.html',      name:'Fastest Line 2.0', kind:'runs', unit:'descents',   def:1,  loop:'reload' },
     { file:'reading.html',       name:'Reading',          kind:'runs', unit:'passages',   def:1,  loop:'reload' },
     { file:'artworks.html',      name:'Open Gallery',     kind:'runs', unit:'works',      def:5,  loop:'inside' },
     { file:'voyage.html',        name:'The Voyage',       kind:'runs', unit:'tours',      def:1,  loop:'reload' },
@@ -564,6 +567,12 @@
        the ring only because soloNow() refuses a file that is not, and it
        starts OFF so the rotation never wanders onto it by itself. */
     { file:'noise_live.html',    name:'Noise Floor Live', kind:'time', unit:'minutes',    def:15, loop:'time', off:true },
+    /* A sand picture: four sands in a thin frame of water, just flipped (Joe,
+       2026-10-24: "This can be the main display until we decide to switch
+       away from it"). Held by a solo, which needs a ring entry; it starts OFF
+       so the rotation never wanders onto it by itself. Each picture takes
+       the Pi 20-30 minutes, and the page starts the next one itself. */
+    { file:'sandart.html',       name:'Sand Picture',     kind:'time', unit:'minutes',    def:30, loop:'time', off:true },
     { file:'strata.html',        name:'Strata',           kind:'runs', unit:'landscapes', def:1,  loop:'reload' },
     { file:'race.html',          name:'The Race',         kind:'runs', unit:'races',      def:1,  loop:'reload' },
     { file:'flowers.html',       name:'Flowering',        kind:'runs', unit:'flowers',    def:2,  loop:'inside' },
@@ -727,7 +736,7 @@
   function startSolo(file, minutes) {
     const o = wallOpts();
     saveOpts({ shuffle: o.shuffle,
-               solo: { file: file, until: Date.now() + (minutes || 60) * 60000 } });
+               solo: { file: file, since: Date.now(), until: Date.now() + (minutes || 60) * 60000 } });
   }
   function clearSolo() { const o = wallOpts(); saveOpts({ shuffle: o.shuffle, solo: null }); }
   function soloNow() {
@@ -806,12 +815,18 @@
     if (i < 0) return 0;                       /* not a stop: no opinion */
     const spec = RING[i], s = settings()[me];
     /* Under a solo hour the page reloads itself, so the URL never changes and
-       the watchdog would otherwise chop the hour in the middle. Ask for what
-       is left of it. A piece being soloed is deliberately exempt from the
-       switched-off test below: the viewer chose it just now. */
+       the watchdog would otherwise chop the hour in the middle. Ask for the
+       WHOLE hold, from its start: the watchdog measures time on this URL from
+       when it first saw it, and the time LEFT shrinks while that grows, so
+       asking for what was left cut every hold off halfway (Fastest Line 2.0,
+       held 08:12-09:30, restarted at 08:54 on 2026-10-20). A hold set before
+       its start was recorded asks for twice what is left, which is the same
+       halfway point it already had. A piece being soloed is deliberately
+       exempt from the switched-off test below: the viewer chose it just now. */
     const solo = soloNow();
     if (solo && solo.file === me) {
-      return Math.min(STALL_CAP, Math.max(60, Math.round((solo.until - Date.now()) / 1000)));
+      const whole = solo.since ? solo.until - solo.since : 2 * (solo.until - Date.now());
+      return Math.min(STALL_CAP, Math.max(60, Math.round(whole / 1000)));
     }
     if (!s || !s.on) return 0;
     let secs;

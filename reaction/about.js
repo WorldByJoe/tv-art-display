@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v2.9 · 2026-10-15
+   about.js · v3.0 · 2026-10-20
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,6 +35,7 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v3.0  Fastest Line 2.0 (descent2.html): its card
      v2.9  Artworks: a quarter from the 120 highlights.
            Reading: the attribution's time comes from the page (15 s after the last line).
            The Race: during the race the card explains the board and the words for
@@ -42,7 +43,6 @@
      v2.8  The Race: one steady speed of 4-8x, and passing on the singletrack at a risk
      v2.7  The Race: once the riders are on, the card explains the engine, the
            trade-offs of fibre type and every trait (the land card before that)
-     v2.6  The Race: one lap laid round the map, two-track share, distance in place of laps
      v2.5  Snowflakes: three settings (kind, light, cloud strip), altitude, rime, the mitten
 */
 (function (global) {
