@@ -1,5 +1,5 @@
 /* ==========================================================================
-  sand_engine.js · v4.5 · 2026-10-28
+  sand_engine.js · v4.6 · 2026-10-29
 
   A moving sand picture: several sands and water between two panes of glass a
   few mm apart, just after the frame has been flipped. Pure JavaScript, no DOM,
@@ -134,6 +134,9 @@
   UNITS: SI throughout. Grid squares are dx = W / NX metres.
 
   CHANGED
+    v4.6  randomSands: a new frame's four sands, each a random mineral (density, angle of
+          repose) and a grain size from one of four bands, fine to coarse (Joe: "randomize
+          the colors and mineral properties of the sand grains"); SANDS stays the default
     v4.5  turning the frame over folds the upper sand's layers into smooth waves and swirls,
           a different amount each picture (v4.4 started with the last deposit's straight
           chevrons; Joe: "too regular"; the time-lapse starts with bent, marbled layers)
@@ -149,11 +152,6 @@
           when full (v4.1: 64 avalanches a second, 0.8 mm2 each); the holes drain at the Darcy
           rate of the grains over them (v4.1 drained 6x faster than the real frame's 78 min);
           sinking speeds by Ferguson & Church; sand crowded past 0.3 on the bed jams into it
-    v4.1  the deposit grows in WHOLE-FACE AVALANCHES: landing sand lodges up to 4 deg steeper,
-          a full face fails, settles to its angle and lays its load as one layer, peak to toe,
-          fines under coarse (v4.0 slid each grain to where there was room for its angle: a
-          mixed stream sorted into rust cones in white columns, 3-27% of the stripes steeper
-          than 50 deg; real pictures 0-1.2%, sand_tests/texture.py)
 ========================================================================== */
 (function factory(root) {
 'use strict';
@@ -183,6 +181,23 @@ const SANDS = [
   { name: 'white', rho: 2650, d: 0.15e-3, repose: 32 },   // rounded
   { name: 'pale',  rho: 2650, d: 0.10e-3, repose: 31 },   // fine and round: the last to land, the haze
 ];
+// Minerals a new frame's sands can be (randomSands): density, kg/m^3, and the angle of
+// repose under water of its grains alone, degrees. Crushed grains interlock and stand
+// steeper than rounded river grains; all stay inside the 30-35 deg natural sands lie at.
+const MINERALS = [
+  { name: 'river quartz',   rho: 2650, repose: 31 },   // rounded by the river
+  { name: 'crushed quartz', rho: 2650, repose: 34 },
+  { name: 'crushed glass',  rho: 2500, repose: 34 },
+  { name: 'feldspar',       rho: 2560, repose: 33 },
+  { name: 'marble',         rho: 2710, repose: 34 },   // crushed calcite
+  { name: 'basalt',         rho: 3000, repose: 35 },   // crushed
+];
+// Grain sizes, m: each frame takes one sand from each band, fine to coarse, so every frame
+// has a fine sand that hangs as a haze and a coarse one that falls first. Water seeps into
+// a mix as the square of its grain size averaged as 1/d (Kozeny-Carman), and the bands
+// hold that average to 0.136-0.177 mm (SANDS: 0.156), so a frame drains at 0.75-1.3x the
+// default's pace instead of anything from a fifth to double.
+const SIZE_BANDS = [[0.09e-3, 0.12e-3], [0.13e-3, 0.17e-3], [0.17e-3, 0.21e-3], [0.21e-3, 0.27e-3]];
 const DEF = {
   W: 0.40,              // frame width inside the border, m
   NX: 336, NY: 192,     // grid; both must halve cleanly for the multigrid
@@ -294,6 +309,20 @@ const DEF = {
   vcycles: 1,           // multigrid cycles per step, warm-started from the last
 };
 
+// A new frame's four sands, from its own seed: the options to pass to create. Each sand is
+// a random mineral with its angle jittered by up to 0.5 deg, and a size from its own band in
+// a shuffled order (the sands' order is the page's colours). The mix's angle of repose, which
+// the rolling rules use, is the four sands' mean, as DEF's 33 is SANDS' mean.
+function randomSands(seed) {
+  const rnd = mulberry(seed * 31 + 17), d = SIZE_BANDS.map(([a, b]) => a + (b - a) * rnd());
+  for (let i = d.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [d[i], d[j]] = [d[j], d[i]]; }
+  const sands = d.map(dq => {
+    const m = MINERALS[Math.floor(rnd() * MINERALS.length)];
+    return { name: m.name, rho: m.rho, d: dq, repose: m.repose + (rnd() - 0.5) };
+  });
+  const repose = sands.reduce((a, q) => a + q.repose, 0) / sands.length;
+  return { sands, repose, reposeMax: repose + DEF.reposeMax - DEF.repose };
+}
 function mulberry(seed) {
   let a = seed >>> 0;
   return function () {
@@ -2023,7 +2052,7 @@ function takeUpper(S) {
 
 // The engine's own source, so a page opened from file:// can start it in a
 // worker from a Blob (Chromium blocks file:// worker scripts).
-const SandEngine = { DEF, SANDS, create, step, advance, mass, masses, takeDirtyBed, takeUpper, upperLeft, airTexture, airTotal,
+const SandEngine = { DEF, SANDS, MINERALS, randomSands, create, step, advance, mass, masses, takeDirtyBed, takeUpper, upperLeft, airTexture, airTotal,
   _bed: { bedAdd: (S, b, a) => bedAdd(S, S.bed, b, a), land: (S, b, a) => land(S, S.bed, b, a), relax: (S, n, p) => relax(S, S.bed, n, p), pass: S => bedPass(S) },   // tests of the deposit's own rules
   source: '(' + factory.toString() + ')(self);\n' };
 if (typeof module !== 'undefined' && module.exports) module.exports = SandEngine;

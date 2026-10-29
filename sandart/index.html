@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  sandart.html · v1.2 · 2026-10-28
+  sandart.html · v1.3 · 2026-10-29
 
   A moving sand picture: just flipped, four sands pour from the top of a thin
   glass frame of water and build layered mountains on the bottom. Steps 2 and 3
@@ -23,9 +23,19 @@
   water, darker toward the edge where the curved surface bends light away, with
   a thin bright line inside a dark one at the surface (Joe, 2026-10-25).
 
-  URL  ?seed= ?nx=&ny= (grid) ?rs= (render scale) ?speed= ?hud ?gap= ?nu=
+  A NEW FRAME each time the page loads (Joe, 2026-10-29): four sands of random mineral
+  and grain size (SandEngine.randomSands), coloured from the Mosaic Maker's palette, and a
+  new colour behind the water. A frame keeps its sands from picture to picture, as a real
+  frame does.
+
+  URL  ?frame= (repeat a frame's sands and colours) ?classic (black, rust, white and pale
+       on dusk blue, the sands the engine was tuned with) ?seed= ?nx=&ny= (grid)
+       ?rs= (render scale) ?speed= ?hud ?gap= ?nu=
 
   CHANGED
+    v1.3  a new frame each load: random sands, coloured from the Mosaic Maker's palette, and
+          the water's backdrop colour (Joe: "draw from the color palette of the mosaic tile
+          generator, including changing the background color of the scene behind the water")
     v1.2  engine v4.4: the upper sand sags into Vs over each hole; the worker also sends the
           rows that sag (the page uploads them like any other changed rows)
     v1.1  a picture may run 3 hours of its own time (engine v4.2-4.4 drains near the real
@@ -34,7 +44,6 @@
           and drains from below, its layers moving down with it); a picture is not over
           while sand is left on the sheet
     v0.9  packed sand's edges granular rather than stepped on the grid
-    v0.8  each picture starts as the last one ended, turned over (the engine does the flip)
 -->
 <html><head><meta charset="utf-8"><title>Sand Picture</title>
 <style>
@@ -57,13 +66,70 @@ const num = (k, d) => Q.has(k) ? Number(Q.get(k)) : d;
 const RS = num('rs', 1), SPEED = num('speed', 1), HUD = Q.has('hud');
 let seed = num('seed', (Math.random() * 1e9) | 0);
 const opts = () => {
-  const o = { seed };
+  const o = Object.assign({ seed }, SANDOPTS);
   for (const k of ['nx', 'ny', 'gap', 'nu']) if (Q.has(k)) o[k === 'nx' ? 'NX' : k === 'ny' ? 'NY' : k] = num(k);
   if (o.NX && !o.NY) o.NY = Math.round(o.NX * 192 / 336 / 4) * 4;
   return o;
 };
-// colours by sand, in SandEngine.SANDS order: black, rust, white, pale
-const COLS = [[0.075, 0.07, 0.065], [0.60, 0.25, 0.12], [0.93, 0.92, 0.89], [0.85, 0.75, 0.56]];
+// ---- the frame: its sands and colours ------------------------------------
+// The Mosaic Maker's palette (mosaic_maker.html, sampled from the tile painting Joe liked),
+// HSL by group, with how often a tile there takes each group. A frame draws its four sands
+// and then its water from five different groups, the weights square-rooted so the rarer
+// accents (teal, red, charcoal) still turn up; 'red' is the painting's ember.
+const PAL = {
+  cream:    { w: 16,  c: [[44, 40, 88], [46, 32, 92], [48, 50, 79]] },
+  yellow:   { w: 9.5, c: [[47, 55, 68], [44, 58, 58], [40, 55, 50]] },
+  ochre:    { w: 6,   c: [[33, 55, 46], [27, 55, 40]] },
+  red:      { w: 4.5, c: [[19, 62, 48], [13, 63, 38], [22, 64, 54]] },
+  teal:     { w: 4,   c: [[183, 26, 52], [190, 30, 40], [178, 30, 63]] },
+  olive:    { w: 2.5, c: [[55, 25, 50], [85, 14, 52]] },
+  brown:    { w: 2.8, c: [[28, 32, 32], [26, 33, 22]] },
+  charcoal: { w: 2.2, c: [[30, 20, 14], [24, 12, 8]] },
+};
+const hslRGB = ([h, s, l]) => { s /= 100; l /= 100; const a = s * Math.min(l, 1 - l), k = n => (n + h / 30) % 12;
+  return [0, 8, 4].map(n => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))); };
+const okLab = c => {   // perceptual distance: OKLab (Ottosson 2020) from sRGB
+  const [r, g, b] = c.map(v => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b),
+        m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b),
+        s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+          0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s]; };
+// Five colours, four sands and the water, redrawn until the layers will read: the sands
+// span at least 0.35 in lightness (a light sand and a dark one), every two sands differ by
+// at least 0.08 in OKLab, and the water by 0.12 from each sand, so the haze and the
+// mountains stand off it. Each colour is jittered a little, as the mosaic's tiles are; the
+// water is kept at 20% lightness or more, or a charcoal backdrop merges with the black border.
+function frameColours(fs) {
+  let a = (fs * 2654435761) >>> 0;
+  const rnd = () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+  for (let tries = 0; tries < 500; tries++) {
+    const left = Object.keys(PAL), pick = [];
+    for (let k = 0; k < 5; k++) {
+      let x = rnd() * left.reduce((t, g) => t + Math.sqrt(PAL[g].w), 0), g = left[left.length - 1];
+      for (const h of left) if ((x -= Math.sqrt(PAL[h].w)) <= 0) { g = h; break; }
+      left.splice(left.indexOf(g), 1);
+      const m = PAL[g].c[Math.floor(rnd() * PAL[g].c.length)];
+      pick.push({ name: g, rgb: hslRGB([m[0] + (rnd() - 0.5) * 6, clamp(m[1] + (rnd() - 0.5) * 14, 5, 75), clamp(m[2] + (rnd() - 0.5) * 12, k < 4 ? 4 : 20, 94)]) });
+    }
+    const lab = pick.map(p => okLab(p.rgb)), L = lab.slice(0, 4).map(c => c[0]), d = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+    let ok = Math.max(...L) - Math.min(...L) >= 0.35;
+    for (let i = 0; i < 4 && ok; i++) for (let j = i + 1; j < 5; j++) if (d(lab[i], lab[j]) < (j === 4 ? 0.12 : 0.08)) ok = false;
+    if (ok) return pick;
+  }
+  return null;
+}
+const CLASSIC = Q.has('classic'), FRAME = num('frame', (Math.random() * 1e9) | 0);
+const FCOL = CLASSIC ? null : frameColours(FRAME);
+const SANDOPTS = FCOL ? SandEngine.randomSands(FRAME) : {};
+// colours by sand, in the order of the engine's sands; the water's backdrop, below and above
+const COLS = FCOL ? FCOL.slice(0, 4).map(p => p.rgb)
+  : [[0.075, 0.07, 0.065], [0.60, 0.25, 0.12], [0.93, 0.92, 0.89], [0.85, 0.75, 0.56]];
+const WLO = FCOL ? FCOL[4].rgb : [0.66, 0.71, 0.74], WHI = FCOL ? FCOL[4].rgb.map(v => 0.68 * v) : [0.40, 0.48, 0.57];
+// what the info card shows of this frame (about.js)
+window.SANDFRAME = { frame: FCOL ? FRAME : null, water: FCOL ? FCOL[4].name : 'dusk blue',
+  sands: (SANDOPTS.sands || SandEngine.SANDS).map((q, k) => ({ colour: FCOL ? FCOL[k].name : q.name, mineral: FCOL ? q.name : '', d: q.d })) };
 
 // The model runs in a worker on its own core, built from the engine's source.
 // When the machine cannot keep up, the picture runs slow rather than skipping
@@ -88,7 +154,7 @@ function run(g) {
   const tr = [phi.buffer, hb.buffer, air.data.buffer, ub.data.buffer, ub.hb.buffer];
   if (bed) tr.push(bed.data.buffer);
   postMessage({ gen, phi, hb, bed, air, ub, NX: S.NX, NY: S.NY, BX: S.BX, NZ: S.NZ, W: S.P.W, gap: S.P.gap,
-    d: S.P.sands.map(s => s.d), t: S.t, steps: S.steps, msStep: nSteps ? spent / nSteps : 0,
+    d: S.P.sands.map(s => s.d), w0: Array.from(S.w0), t: S.t, steps: S.steps, msStep: nSteps ? spent / nSteps : 0,
     inWater: w * S.dx * S.dx / S.mass0.reduce((x, y) => x + y), upper: SandEngine.upperLeft(S) }, tr);
   setTimeout(() => run(g), n ? 0 : 8);
 }`;
@@ -119,6 +185,7 @@ uniform vec2 res, grid;     // canvas px; grid squares
 uniform float aspect, W, frame;
 uniform vec4 kap;           // 1.5 h / d for each sand
 uniform vec3 col0, col1, col2, col3;
+uniform vec3 wLo, wHi;      // the backdrop seen through the water, at the bottom and the top
 uniform vec2 airR;          // the softening radius of the air's outline, in uv units
 uint pcg(uint v){ uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 float hash(vec2 p, uint salt){ uvec2 u = uvec2(ivec2(p) + 65536); return float(pcg(u.x ^ pcg(u.y ^ pcg(salt)))) / 4294967295.; }
@@ -142,8 +209,8 @@ void main(){
     o = vec4(vec3(f), 1.); return;
   }
   float mmPerPx = W * 1000. / (hi.x - lo.x);
-  // the water: a dusk-blue backdrop, darker above, like a sky over the mountains
-  vec3 water = mix(vec3(0.66, 0.71, 0.74), vec3(0.40, 0.48, 0.57), smoothstep(0., 1., uv.y));
+  // the water: the frame's backdrop, darker above, like a sky over the mountains
+  vec3 water = mix(wLo, wHi, smoothstep(0., 1., uv.y));
   vec2 c = uv - 0.5; water *= 1. - 0.25 * dot(c, c);
   // grains at about 0.2 mm, each with a fixed shade and a fixed draw
   vec2 gcell = floor(px * mmPerPx / 0.2);
@@ -230,6 +297,7 @@ if (gl) {
   gl.uniform1i(U('phiT'), 0); gl.uniform1i(U('bedH'), 1); gl.uniform1i(U('bedC'), 2); gl.uniform1i(U('airT'), 3);
   gl.uniform1i(U('ubC'), 4); gl.uniform1i(U('ubH'), 5);
   COLS.forEach((c, i) => gl.uniform3f(U('col' + i), c[0], c[1], c[2]));
+  gl.uniform3f(U('wLo'), WLO[0], WLO[1], WLO[2]); gl.uniform3f(U('wHi'), WHI[0], WHI[1], WHI[2]);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 }
 // The deposit's layers change only where sand lands or slides: upload just those rows.
