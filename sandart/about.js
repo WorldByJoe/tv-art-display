@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   about.js · v3.0 · 2026-10-20
+   about.js · v3.1 · 2026-10-29
    what each piece on the wall is, and what was drawn for this run of it.
 
    Joe, 2026-10-03: "when the remote pushes the up button, it brings up an
@@ -35,6 +35,7 @@
    meter id); Photographs never names anyone.
 
    CHANGED
+     v3.1  Sand Picture (sandart.html): its card, the physics in plain words
      v3.0  Fastest Line 2.0 (descent2.html): its card
      v2.9  Artworks: a quarter from the 120 highlights.
            Reading: the attribution's time comes from the page (15 s after the last line).
@@ -43,7 +44,6 @@
      v2.8  The Race: one steady speed of 4-8x, and passing on the singletrack at a risk
      v2.7  The Race: once the riders are on, the card explains the engine, the
            trade-offs of fibre type and every trait (the land card before that)
-     v2.5  Snowflakes: three settings (kind, light, cloud strip), altitude, rime, the mitten
 */
 (function (global) {
   'use strict';
@@ -76,5 +76,20 @@
     return t.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
-
+  /* ===== sandart.html ===== */
+  /* The model runs in a worker; the page keeps its latest message as M (t, the
+     picture's own time in s; upper, the share of all the sand still on top;
+     inWater, the share not yet landed, which counts the upper sand too) and
+     window.SAND for probes (fps, ratio = model seconds per real second). */
+  ABOUT['index.html'] = {
+    what: "Four sands, water and a little air between two panes of glass 1.2 mm apart, just after the frame is turned over. The upper sand rests on a row of small air bubbles, which can hold it because friction on the glass carries the sand\u2019s weight: the pressure on them stops growing after about 3 mm of sand. Sand drains through the gaps only as fast as water seeps up into it to take its place, seven times slower through fine sand than coarse, and the grains beside the falling ones step into the room they leave, so the layers sag into Vs. A lone grain sinks at 5 to 23 mm/s, by its size and density; crowded grains sink slower, because the water they push aside must flow back up between them, so each stream sorts as it falls. On the mountains, sand lodges up to 4\u00b0 steeper than it rests until the face slides, and each slide lays one thin layer, fine grains under coarse: the stripes. Turning the frame over folds the old mountains into the waves at the top. Near the end the bubble row lets go one bubble every few seconds, a rule copied from a real frame.",
+    params: () => [
+      A('Picture time', () => M && n(M.t / 60) + ' min of about 78'),
+      A('Sand still on top', () => M && pct(M.upper)),
+      A('Sand falling', () => M && pct(Math.max(0, M.inWater - M.upper), 1)),
+      A('Sand landed', () => M && pct(1 - M.inWater)),
+      A('Model speed', () => SAND.ratio ? n(SAND.ratio, 2) + '\u00d7 real time' : null),
+      A('Seed', () => seed),
+    ],
+  };
 })(window);
