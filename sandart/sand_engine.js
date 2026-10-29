@@ -1,5 +1,5 @@
 /* ==========================================================================
-  sand_engine.js · v4.4 · 2026-10-28
+  sand_engine.js · v4.5 · 2026-10-28
 
   A moving sand picture: several sands and water between two panes of glass a
   few mm apart, just after the frame has been flipped. Pure JavaScript, no DOM,
@@ -44,8 +44,9 @@
               sands in proportion to w0_k ph_k.
     start     a frame is turned over to start, so each picture begins as the
               last one ended, rotated 180 degrees: its layered mountains become
-              the UPPER SAND (Joe, 2026-10-25). Sand still in the water or on
-              the sheet is first settled straight down onto that deposit. With
+              the UPPER SAND (Joe, 2026-10-25), its layers folded by the turn
+              (foldUpper). Sand still in the water or on the sheet is first
+              settled straight down onto that deposit. With
               no last picture, one is made by the same deposit rules: a series
               of pours from a few streams, each mostly one sand, landing with a
               spread-out footprint and settling by the same avalanches.
@@ -133,6 +134,9 @@
   UNITS: SI throughout. Grid squares are dx = W / NX metres.
 
   CHANGED
+    v4.5  turning the frame over folds the upper sand's layers into smooth waves and swirls,
+          a different amount each picture (v4.4 started with the last deposit's straight
+          chevrons; Joe: "too regular"; the time-lapse starts with bent, marbled layers)
     v4.4  the sand over a hole sinks in a zone that widens upward (kinematic model), so its
           layers sag into Us and Vs with their tip at the hole; v4.3 sank a column the hole's
           width as one block, its layers cut by sharp vertical steps (Joe: "my intuition is
@@ -150,12 +154,6 @@
           fines under coarse (v4.0 slid each grain to where there was room for its angle: a
           mixed stream sorted into rust cones in white columns, 3-27% of the stripes steeper
           than 50 deg; real pictures 0-1.2%, sand_tests/texture.py)
-    v4.0  THE AIR SHEET: the upper sand rests on a raft of small lenses at one level and
-          drains through holes at the raft's weakest joints like an hourglass (V funnels at
-          its top, sharp ridges, ~10 thin steady streams); worn ridges drop whole and the
-          raft unzips. The upper sand is a stack of rows that moves down as it drains
-          (layers never smear); landing sand runs off. Removed: the hanging sand's force
-          field, bubbles through the sand, seepage
 ========================================================================== */
 (function factory(root) {
 'use strict';
@@ -213,6 +211,9 @@ const DEF = {
   bubbleDrive: 0.05,    // how hard a rising bubble stirs the water (1 = its full buoyancy)
   sheetQ: 0.5,          // the sheet forms this far up the underside's heights (0 lowest, 1 highest): at 0.5
                         // 7-10% falls at the flip (0.75: 18-29%, a thick flat layer of cloud on the floor)
+  foldAmp: 30e-3,       // m: how far, on average, the turn-over drags the upper sand's layers along
+                        // (foldUpper; each picture draws 0.5-1.5x this: 15 mm bends them, 45 mm marbles them)
+  foldModes: 5,         // ... in this many random rolls
   tFlat: 3e-3,          // m: a raft bubble wider than this flattens into a lens this thick
   fullAt: 0.95,         // the raft is full (packed edge to edge) once its lenses span this share of the width
   gHole: 2e-3,          // m: a hole between lenses of a full raft (a thin stream's width)
@@ -1306,7 +1307,53 @@ function flipToUpper(S) {
     }
   }
   S.hbs.fill(0); C.fill(0); S.bed.mob.fill(0); S.dirty[0] = 0; S.dirty[1] = S.NZ - 1;
-  U.cd.fill(1); rasterUpper(S);
+  foldUpper(S); U.cd.fill(1); rasterUpper(S);
+}
+// The turn itself folds the layers: while the frame is on its side the packed sand
+// slumps along the glass, so the old mountains come out bent into smooth waves and
+// arches, not straight chevrons (the time-lapse just after the flip). Made as a few
+// random rolls of a flow that neither squeezes the sand nor crosses the sheet, the
+// top or the sides (streamfunction sum a sin(m pi x / W) sin(n pi z / T)), run until
+// it has moved sand up to 0.5-1.5 foldAmp: each row takes the shares of the row the
+// flow brought there, so no sand is made or lost and the layers stay sharp. (Joe,
+// 2026-10-28: the start was "too regular", straight chevrons.)
+function foldUpper(S) {
+  const P = S.P, U = S.ub, BX = S.BX, dz = S.dz, wb = S.dx / P.BSUB, W = P.W, T = S.NY * S.dx - S.zs;
+  if (!(P.foldAmp > 0) || T <= 0) return;
+  const rnd = mulberry(P.seed * 13 + 5), amp = P.foldAmp * (0.5 + rnd()), md = [];
+  for (let j = 0; j < P.foldModes; j++) {
+    const m = 2 + Math.floor(rnd() * 12), n = rnd() < 0.7 ? 1 : 2;
+    md.push([m * Math.PI / W, n * Math.PI / T, (2 * rnd() - 1) / m]);
+  }
+  // the flow on a 1 mm lattice, scaled so the fastest sand moves at 1
+  const g = 1e-3, GX = Math.ceil(W / g) + 1, GZ = Math.ceil(T / g) + 1, vu = new Float64Array(GX * GZ), vw = new Float64Array(GX * GZ);
+  let vmax = 0;
+  for (let jz = 0; jz < GZ; jz++) for (let ix = 0; ix < GX; ix++) {
+    const x = Math.min(W, ix * g), z = Math.min(T, jz * g); let u = 0, w = 0;
+    for (const [kx, kz, a] of md) { u += a * kz * Math.sin(kx * x) * Math.cos(kz * z); w -= a * kx * Math.cos(kx * x) * Math.sin(kz * z); }
+    vu[ix + jz * GX] = u; vw[ix + jz * GX] = w; vmax = Math.max(vmax, Math.hypot(u, w));
+  }
+  if (!(vmax > 0)) return;
+  const at = (x, z, out) => {
+    const fx = Math.min(GX - 1.001, Math.max(0, x / g)), fz = Math.min(GZ - 1.001, Math.max(0, z / g)), i = fx | 0, j = fz | 0, a = fx - i, c = fz - j, k = i + j * GX;
+    out[0] = ((vu[k] * (1 - a) + vu[k + 1] * a) * (1 - c) + (vu[k + GX] * (1 - a) + vu[k + GX + 1] * a) * c) / vmax;
+    out[1] = ((vw[k] * (1 - a) + vw[k + 1] * a) * (1 - c) + (vw[k + GX] * (1 - a) + vw[k + GX + 1] * a) * c) / vmax;
+  };
+  // trace each row back along the flow (midpoint steps) to where its sand came from
+  const C0 = U.C.slice(), C = U.C, NS = 16, ds = amp / NS, v = [0, 0];
+  for (let b = 0; b < BX; b++) {
+    const lo = Math.floor(U.base[b] / dz), hi = Math.ceil(U.h[b] / dz);
+    for (let r = lo; r < hi; r++) {
+      let x = (b + 0.5) * wb, z = Math.min(T, Math.max(0, (r + 0.5) * dz - U.base[b]));
+      for (let s = 0; s < NS; s++) { at(x, z, v); const xm = x - 0.5 * ds * v[0], zm = z - 0.5 * ds * v[1]; at(xm, zm, v); x -= ds * v[0]; z -= ds * v[1]; }
+      const b0 = Math.min(BX - 1, Math.max(0, Math.floor(x / wb)));
+      if (depth(U, b0) <= 0) continue;
+      const r0 = Math.min(Math.ceil(U.h[b0] / dz) - 1, Math.max(Math.floor(U.base[b0] / dz), Math.floor((U.base[b0] + z) / dz)));
+      const o = (b + rowOf(U, r) * BX) * 4, o0 = (b0 + rowOf(U, r0) * BX) * 4;
+      for (let q = 0; q < 4; q++) C[o + q] = C0[o0 + q];
+    }
+  }
+  U.rd.fill(1);
 }
 // The upper sand, drawn into the grid: a square it covers is packed sand (rigid,
 // a wall to the water) holding what the rows there hold. These squares (S.up)
