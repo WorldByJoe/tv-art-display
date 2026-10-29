@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  sandart.html · v1.1 · 2026-10-28
+  sandart.html · v1.2 · 2026-10-28
 
   A moving sand picture: just flipped, four sands pour from the top of a thin
   glass frame of water and build layered mountains on the bottom. Steps 2 and 3
@@ -26,16 +26,15 @@
   URL  ?seed= ?nx=&ny= (grid) ?rs= (render scale) ?speed= ?hud ?gap= ?nu=
 
   CHANGED
-    v1.1  a picture may run 3 hours of its own time (engine v4.2-4.3 drains near the real
+    v1.2  engine v4.4: the upper sand sags into Vs over each hole; the worker also sends the
+          rows that sag (the page uploads them like any other changed rows)
+    v1.1  a picture may run 3 hours of its own time (engine v4.2-4.4 drains near the real
           frame's pace: 46-77 min a picture, the real one 78; the old 1 hour cap cut them short)
     v1.0  the upper sand drawn from its own rows (engine v4.0: it rests on the air sheet
           and drains from below, its layers moving down with it); a picture is not over
           while sand is left on the sheet
     v0.9  packed sand's edges granular rather than stepped on the grid
     v0.8  each picture starts as the last one ended, turned over (the engine does the flip)
-    v0.7  a picture also ends when under 0.4% of its sand moves in 60 s of its own time
-    v0.6  air translucent (the backdrop shows through, lighter and greyer than through
-          water, darker toward the edge) and its outline rounded over 1.3 mm
 -->
 <html><head><meta charset="utf-8"><title>Sand Picture</title>
 <style>
@@ -242,8 +241,9 @@ function uploadBed(m) {
   }
   if (m.bed) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, m.bed.r0, m.BX, m.bed.r1 - m.bed.r0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, m.bed.data);
 }
-// The upper sand's rows change where sand slides on its top (its draining only moves its
-// base): upload just the rows the worker says changed, in runs.
+// The upper sand's rows change where sand slides on its top and where its sand sags toward
+// a hole (draining at the hole only moves its base): upload just the rows the worker says
+// changed, in runs.
 function uploadUpper(m) {
   const u = m.ub; if (!u) return;
   gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, ubCTex);

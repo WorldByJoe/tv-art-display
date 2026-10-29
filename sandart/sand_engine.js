@@ -1,5 +1,5 @@
 /* ==========================================================================
-  sand_engine.js · v4.3 · 2026-10-28
+  sand_engine.js · v4.4 · 2026-10-28
 
   A moving sand picture: several sands and water between two panes of glass a
   few mm apart, just after the frame has been flipped. Pure JavaScript, no DOM,
@@ -67,11 +67,14 @@
               through the hole and the packed grains (Darcy), so a hole passes
               pi r v_D over the arch of grains spanning it (r ~ its width g),
               v_D = k phi (rho_s - rho_f) g / mu, k by Kozeny-Carman from the
-              grains at the hole (fine sand drains 7x slower than coarse),
-              drawn from the sand right over the hole, which sinks as a column
-              (beside it, at the sheet, the sand is a stagnant corner, as in a
-              silo); the drained sand falls into the water under the hole as a
-              stream. Its top surface slides at each sand's own angle (see
+              grains at the hole (fine sand drains 7x slower than coarse). The
+              sand that moves widens upward, as in a flat-bottomed silo (the
+              kinematic model, Nedderman & Tuzun 1979): grains beside the falling
+              ones step into the room they leave, so at height z over a hole the
+              moving sand is a bell about sqrt(2 bKin z) wide, the layers sag
+              into Us and Vs whose tip is the hole, and beside the hole, at the
+              sheet, the sand stays put. The drained sand falls into the water
+              under the hole as a stream. Its top surface slides at each sand's own angle (see
               deposit), so a V funnel opens over every hole and ridges stand
               between them. Grains creep off the ridges' steep faces into the
               holes (creepV), so a ridge backs away from its holes keeping its
@@ -130,6 +133,10 @@
   UNITS: SI throughout. Grid squares are dx = W / NX metres.
 
   CHANGED
+    v4.4  the sand over a hole sinks in a zone that widens upward (kinematic model), so its
+          layers sag into Us and Vs with their tip at the hole; v4.3 sank a column the hole's
+          width as one block, its layers cut by sharp vertical steps (Joe: "my intuition is
+          that the depletion should lead to a conic depletion"; the time-lapse agrees)
     v4.3  the panes carry the upper sand's weight, so a lens rises out only through thin cover
           and no longer pulls its neighbours (under 3-6 mm of sand) down with it; the sheet
           unzips once the streams have run down: ridges stand to ~95% of the picture, as in
@@ -149,14 +156,23 @@
           raft unzips. The upper sand is a stack of rows that moves down as it drains
           (layers never smear); landing sand runs off. Removed: the hanging sand's force
           field, bubbles through the sand, seepage
-    v3.1  each sand has its own angle of repose (black 39, rust 36, white 29, pale 26) and
-          fine grains stop steeper on coarse ones (trap): stripes along the faces (Makse
-          1997); no separate rolling; crowded loose sand ringed by air falls (no islands)
 ========================================================================== */
 (function factory(root) {
 'use strict';
 
 const TAB = 2048;
+// The normal distribution's quantiles at (i + 0.5) / QN: the lanes the room under the
+// upper sand climbs along (kinVoid). From its density, summed on a fine grid over +-6.
+const QN = 4096, QUANT = (() => {
+  const n = 24001, x0 = -6, h = 12 / (n - 1), cdf = new Float64Array(n), pdf = x => Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI);
+  for (let i = 1; i < n; i++) { const a = x0 + (i - 1) * h; cdf[i] = cdf[i - 1] + 0.5 * h * (pdf(a) + pdf(a + h)); }
+  const q = new Float64Array(QN);
+  for (let i = 0, j = 0; i < QN; i++) {
+    const u = (i + 0.5) / QN; while (cdf[j + 1] < u) j++;
+    q[i] = x0 + (j + (u - cdf[j]) / (cdf[j + 1] - cdf[j])) * h;
+  }
+  return q;
+})();
 // What moves a grain. Colours are the page's business; the order is shared.
 // repose: the angle (degrees, under water) a pile of that sand alone stands at. Angular,
 // crushed grains interlock and stand steeper than round ones, but natural sands under water
@@ -207,6 +223,12 @@ const DEF = {
                         // (Beverloo's free-fall arch stands about as high as the opening is wide). At 1,
                         // pictures took ~2x the real frame's 78 min; this order-one number is the one
                         // the real frame's time sets
+  bKin: 0.35e-3,        // m: the sand over a hole sinks in a bell sqrt(2 bKin z) wide at height z above it:
+                        // the kinematic model's diffusion length, about two grain diameters (measured in
+                        // thin silos, it grows with height: Choi, Kudrolli & Bazant 2005). v4.3 sank only
+                        // the sand right over the hole, a column the hole's width, as one block
+  kinDt: 0.25,          // s: the room the holes leave climbs in a batch this often (the page re-sends the
+                        // rows that moved)
   creepFloor: 20,       // degrees: faces of the upper sand steeper than this shed grains ...
   creepV: 0.0013e-3,    // m/s: ... at this rate: the water that replaces the drained sand seeps out
                         // through the faces, so creep goes with the drainage (v4.1's 0.008 mm/s went with
@@ -339,6 +361,9 @@ function create(opts) {
   S.bed.avq = []; S.bed.mob = F(BX);
   S.avSeen = new Uint8Array(2 * BX); S.avE = F(BX + 1);
   S.dWin = []; S.dSec = 0; S.dStep = 0; S.dNext = 1; S.dMax = 0; S.unzipT = 0;   // the streams' sand, per second, for the unzip
+  // the room the holes leave, per sub-column, waiting to climb (kinVoid), and how many rows
+  // of it each has sent up (its place in the lanes' order)
+  S.kAcc = F(BX); S.kNext = 0; S.kRow = F(4); S.kN = new Uint32Array(BX);
 
   // The hanging sand: the last picture's deposit, turned over. Anything of it
   // still hanging or in the water settles straight down onto that deposit
@@ -932,8 +957,9 @@ function airTexture(S) {
 // share of each sand: the layers. Two beds: the deposit on the frame's floor
 // (S.bed), and the UPPER SAND resting on the air sheet (S.ub). The upper sand
 // drains from its BOTTOM, so its columns run from base[b] to h[b] (row
-// coordinates, m, that only grow) and row r is kept at r mod NZ: its layers
-// move down exactly as it drains, never smeared.
+// coordinates, m, from 0 at the flip) and row r is kept at r mod NZ: its layers
+// move down exactly as it drains, never smeared (rows move between columns
+// whole: kinVoid).
 function rowOf(B, r) { return B.ring ? r % B.NZ : r; }
 function markBed(S, B, b, r) {
   if (B.dirty) { if (r < B.dirty[0]) B.dirty[0] = r; if (r > B.dirty[1]) B.dirty[1] = r; }
@@ -1440,15 +1466,73 @@ function darcy(S, c) {
   const d = n / a, k = d * d * (1 - phi) ** 3 / (180 * phi * phi);
   return k * phi * (dr / n) * 9.81 / (P.nu * P.rhoF);
 }
+// The sand over a hole does not sink as one block the hole's width: the grains
+// beside the falling ones step into the room they leave, so the sand that moves
+// widens upward and its layers sag into Us and Vs whose tip is the hole (the
+// kinematic model, Nedderman & Tuzun 1979: the sinking speed spreads upward like
+// heat, a bell sqrt(2 bKin z) wide at height z). Each row's worth of room a hole
+// drains from sub-column b climbs along a LANE, x = x_b + a sqrt(2 bKin z), its
+// a a quantile of the normal distribution taken in a stratified order (vdc), so
+// the room from each hole fills the bell evenly and the lanes cross a sideways
+// flow of exactly the kinematic model's (x / 2z per unit height). The drain has
+// already lowered all of b; where the lane crosses into the next sub-column at row
+// k, that sub-column's row k moves into the one the room is in (whose sand above
+// k goes back up a row) and its sand above k drops a row. The room ends at the top
+// of a column, which drops a row. Sand only moves IN toward the hole, so the layers
+// bend without mixing (random steps, the void model, tried first, scattered them
+// into speckle: real grains wander far less than it predicts, Choi, Kudrolli &
+// Bazant 2005), and whole rows move, so they never smear.
+function kinVoid(S, b) {
+  const U = S.ub, BX = S.BX, dz = S.dz, wb = S.dx / S.P.BSUB, row = S.kRow;
+  const a = QUANT[(vdc(S.kN[b]++) * QN) | 0], x0 = (b + 0.5) * wb, s = a * Math.sqrt(2 * S.P.bKin * dz);
+  for (let k = 1, c = b; (k + 2) * dz <= depth(U, c); k++) {
+    const want = Math.min(BX - 1, Math.max(0, Math.floor((x0 + s * Math.sqrt(k + 0.5)) / wb)));
+    while (c !== want) {
+      const n = c < want ? c + 1 : c - 1;
+      if ((rowAt(S, U, n, k) + 1) * dz > U.h[n]) break;          // no full row there: it waits a row
+      rowPull(S, U, n, k, row); rowPush(S, U, c, k, row); c = n;
+    }
+  }
+}
+// n's place in a stratified sequence on (0, 1) (van der Corput, base 2)
+function vdc(n) { let v = 0, f = 0.5; for (n++; n > 0; n >>>= 1, f /= 2) if (n & 1) v += f; return v; }
+// The ring row of sub-column b at k rows above the sheet (unwrapped)
+function rowAt(S, U, b, k) { return Math.floor(U.base[b] / S.dz + k + 0.5); }
+function copyRow(S, U, b, from, to) {
+  const C = U.C, BX = S.BX, a = (b + rowOf(U, from) * BX) * 4, c = (b + rowOf(U, to) * BX) * 4;
+  for (let q = 0; q < S.K; q++) C[c + q] = C[a + q];
+  markBed(S, U, b, to);
+}
+// Take the row k rows up out of sub-column b into out: the sand above it drops a
+// row. In the ring, whichever side has fewer rows is copied: the rows above down a
+// slot, or the rows below up a slot with the base (which leaves them where they were)
+function rowPull(S, U, b, k, out) {
+  const C = U.C, dz = S.dz, r = rowAt(S, U, b, k), lo = Math.floor(U.base[b] / dz), hi = Math.ceil(U.h[b] / dz) - 1;
+  const o = (b + rowOf(U, r) * S.BX) * 4; for (let q = 0; q < S.K; q++) out[q] = C[o + q];
+  if (hi - r <= r - lo) { for (let s = r; s < hi; s++) copyRow(S, U, b, s + 1, s); U.h[b] -= dz; }
+  else { for (let s = r; s > lo; s--) copyRow(S, U, b, s - 1, s); U.base[b] += dz; }
+  markBed(S, U, b, -1);
+}
+// Put a row of shares src into sub-column b, k rows up: the sand from there up
+// rises a row. In the ring, the fewer side is copied, as in rowPull (below: only
+// if the base has a row of room under it, as it has once it has drained a row)
+function rowPush(S, U, b, k, src) {
+  const C = U.C, dz = S.dz, r = rowAt(S, U, b, k), lo = Math.floor(U.base[b] / dz), hi = Math.ceil(U.h[b] / dz) - 1;
+  let at = r;
+  if (r - lo < hi - r + 1 && U.base[b] >= dz) { for (let s = lo; s < r; s++) copyRow(S, U, b, s, s - 1); U.base[b] -= dz; at = r - 1; }
+  else { for (let s = hi; s >= r; s--) copyRow(S, U, b, s, s + 1); U.h[b] += dz; }
+  const o = (b + rowOf(U, at) * S.BX) * 4; for (let q = 0; q < S.K; q++) C[o + q] = src[q];
+  markBed(S, U, b, at);
+}
 // Each step: the HOLES in the sheet (gaps between lenses wider than gJam, where
 // the wet sand meets the water) drain the sand above them from its bottom, like
 // an hourglass, as fast as water can get in to replace it: pi r v_D over the arch of
 // grains spanning it (radius r = arch g/2; darcy), drawn
-// from the sand right over the hole, which sinks as a column (the sand beside it at the
-// sheet is a stagnant corner, as in a silo: drawing on it too thinned the cover of
+// from the bottom of the sand right over the hole; the room it leaves climbs and
+// spreads sideways (kinVoid), so the sand that sinks widens upward and beside the
+// hole, at the sheet, the sand stays put (drawing on it there thinned the cover of
 // the lenses beside every hole until they rose out, and the raft unzipped within a
-// minute); the funnel at the top widens the flow. The drained sand enters the
-// water under the hole as a stream. Once
+// minute). The drained sand enters the water under the hole as a stream. Once
 // the raft is full, holes open at its weakest joints (the packing field's weakest
 // sand there, below sOpen), no two within dHole. The top surface slides at each
 // sand's own angle, so a funnel opens over every hole and the sand between holes
@@ -1499,7 +1583,7 @@ function upperStep(S, dt) {
     for (let b = b0; b <= b1; b++) {
       if (wts[b] <= 0) continue;
       bedDrain(S, U, b, Q * wts[b] / ws, out);
-      for (let q = 0; q < K; q++) sq[q] += out[q] * f;            // as shares of a grid square
+      for (let q = 0; q < K; q++) { sq[q] += out[q] * f; S.kAcc[b] += out[q]; }   // as shares of a grid square
     }
     // into the water under the hole, spread over the grid columns it spans
     const i0 = Math.floor(a / dx), i1 = Math.min(NX - 1, Math.floor((c - 1e-12) / dx));
@@ -1512,6 +1596,10 @@ function upperStep(S, dt) {
   for (let i = 0; i < NX; i++) {
     let any = 0; for (let q = 0; q < K; q++) { sq[q] = drop[i * K + q]; any += sq[q]; S.stats.drain[q] += sq[q] * dx * dx; S.dStep += sq[q]; }
     if (any > 0) dropSand(S, i, S.js - 1, sq);
+  }
+  if (S.t >= S.kNext) {                       // the room the holes left climbs, a row at a time
+    S.kNext = S.t + P.kinDt;
+    for (let b = 0; b < BX; b++) while (S.kAcc[b] >= S.dz) { S.kAcc[b] -= S.dz; kinVoid(S, b); }
   }
   relax(S, U, 2, S.steps);
   creepUpper(S, U, dt);
